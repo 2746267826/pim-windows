@@ -21,7 +21,7 @@ on:
       extension_repo:
         required: false
         type: string
-        default: '2746267826/tracker-web'
+        default: ''
       extension_ref:
         required: false
         type: string
@@ -55,7 +55,7 @@ on:
       extension_repo:
         description: 'Browser extension source repository'
         required: false
-        default: '2746267826/tracker-web'
+        default: ''
       extension_ref:
         description: 'Browser extension ref (branch or tag)'
         required: false
@@ -91,13 +91,20 @@ jobs:
             bash "$GITHUB_WORKSPACE/scripts/ci/resolve-version.sh"
           fi
 
-      # 浏览器插件源码在独立 fork 仓库，按 dispatch payload / 默认值检出。
-      - name: Checkout browser extension source
+      # 插件源码已随仓库拆分迁入本仓 browser-extension/（原 fork 仓 tracker-web）。
+      # 只有显式指定 extension_repo 时才从外部仓检出，用于兼容仍未迁入的 fork。
+      - name: Checkout browser extension source (external)
+        if: inputs.extension_repo != ''
         uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.extension_repo || '2746267826/tracker-web' }}
+          repository: ${{ inputs.extension_repo }}
           ref: ${{ inputs.extension_ref || 'master' }}
           path: .browser-extension-src
+
+      - name: Use in-repo browser extension source
+        if: inputs.extension_repo == ''
+        shell: bash
+        run: ln -sfn "$GITHUB_WORKSPACE/browser-extension" "$GITHUB_WORKSPACE/.browser-extension-src"
 
       - uses: actions/setup-node@v4
         with:

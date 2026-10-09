@@ -21,7 +21,7 @@ on:
       extension_repo:
         required: false
         type: string
-        default: '2746267826/tracker-web'
+        default: ''
       extension_ref:
         required: false
         type: string
@@ -55,7 +55,7 @@ on:
       extension_repo:
         description: 'Browser extension source repository'
         required: false
-        default: '2746267826/tracker-web'
+        default: ''
       extension_ref:
         description: 'Browser extension ref (branch or tag)'
         required: false
@@ -176,13 +176,19 @@ jobs:
           }
           if (-not (Test-Path "publish/fix-keystats-session.ps1")) { throw "fix-keystats-session.ps1 not in publish" }
 
-      # URL 级插件（2746267826/tracker-web，PIM Browser Watcher）
-      - name: Checkout URL-level extension source
+      # URL 级插件（原 fork 仓 tracker-web，PIM Browser Watcher）已迁入本仓 browser-extension/。
+      - name: Checkout URL-level extension source (external)
+        if: inputs.extension_repo != ''
         uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.extension_repo || '2746267826/tracker-web' }}
+          repository: ${{ inputs.extension_repo }}
           ref: ${{ inputs.extension_ref || 'master' }}
           path: .extension-url
+
+      - name: Use in-repo URL-level extension source
+        if: inputs.extension_repo == ''
+        shell: bash
+        run: ln -sfn "$GITHUB_WORKSPACE/browser-extension" "$GITHUB_WORKSPACE/.extension-url"
 
       # 站点级插件（2746267826/time-tracker-4-browser，Time Tracker PIM fork）
       - name: Checkout site-level extension source

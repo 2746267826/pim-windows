@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      force_all:
+        description: Force all builds
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      version_code: ${{ steps.ver.outputs.version_code }}
+      artifact_slug: ${{ steps.ver.outputs.artifact_slug }}
+      assembly_version: ${{ steps.ver.outputs.assembly_version }}
+      git_sha_short: ${{ steps.ver.outputs.git_sha_short }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: ver
+        uses: ./.github/actions/resolve-version
+        with:
+          pr_number: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}
+
+  build-windows:
+    needs: [resolve-version]
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      version: ${{ needs.resolve-version.outputs.version }}
+      version_code: ${{ needs.resolve-version.outputs.version_code }}
+      artifact_slug: ${{ needs.resolve-version.outputs.artifact_slug }}
+      assembly_version: ${{ needs.resolve-version.outputs.assembly_version }}
+      git_sha_short: ${{ needs.resolve-version.outputs.git_sha_short }}
+      # 空值 = 使用本仓 browser-extension/（原 fork 仓 tracker-web 已迁入）
+      extension_repo: ''
+      extension_ref: ''
+
+  build-shell-windows:
+    needs: [resolve-version]
+    uses: ./.github/workflows/build-shell-windows.yml
+    with:
+      version: ${{ needs.resolve-version.outputs.version }}
+      version_code: ${{ needs.resolve-version.outputs.version_code }}
+      artifact_slug: ${{ needs.resolve-version.outputs.artifact_slug }}
+      assembly_version: ${{ needs.resolve-version.outputs.assembly_version }}
+      git_sha_short: ${{ needs.resolve-version.outputs.git_sha_short }}
+
+  build-browser-extension:
+    needs: [resolve-version]
+    uses: ./.github/workflows/build-browser-extension.yml
+    with:
+      version: ${{ needs.resolve-version.outputs.version }}
+      version_code: ${{ needs.resolve-version.outputs.version_code }}
+      artifact_slug: ${{ needs.resolve-version.outputs.artifact_slug }}
+      assembly_version: ${{ needs.resolve-version.outputs.assembly_version }}
+      git_sha_short: ${{ needs.resolve-version.outputs.git_sha_short }}
+      extension_repo: ''
+      extension_ref: ''
+      extension_kind: url
+      extension_browser: chrome
+
+  build-browser-extension-firefox:
+    needs: [resolve-version]
+    uses: ./.github/workflows/build-browser-extension.yml
+    with:
+      version: ${{ needs.resolve-version.outputs.version }}
+      version_code: ${{ needs.resolve-version.outputs.version_code }}
+      artifact_slug: ${{ needs.resolve-version.outputs.artifact_slug }}
+      assembly_version: ${{ needs.resolve-version.outputs.assembly_version }}
+      git_sha_short: ${{ needs.resolve-version.outputs.git_sha_short }}
+      extension_repo: ''
+      extension_ref: ''
+      extension_kind: url
+      extension_browser: firefox
+
+  # 汇总门禁：任一子任务失败即整体失败，避免"看起来绿了"。
+  gate:
+    name: CI Gate
+    needs: [resolve-version, build-windows, build-shell-windows, build-browser-extension, build-browser-extension-firefox]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate required jobs
+        env:
+          R_RESOLVE: ${{ needs.resolve-version.result }}
+          R_WINDOWS: ${{ needs.build-windows.result }}
+          R_SHELL: ${{ needs.build-shell-windows.result }}
+          R_EXT_CHROME: ${{ needs.build-browser-extension.result }}
+          R_EXT_FIREFOX: ${{ needs.build-browser-extension-firefox.result }}
+        run: |
+          set -uo pipefail
+          fail=0
+          check () {
+            local label="$1" result="$2"
+            if [ "$result" = "success" ]; then
+              echo "✅ $label — success"
+            else
+              echo "❌ $label — ${result:-<missing>}"
+              fail=1
+            fi
+          }
+          check "resolve-version" "$R_RESOLVE"
+          check "build-windows" "$R_WINDOWS"
+          check "build-shell-windows" "$R_SHELL"
+          check "build-browser-extension" "$R_EXT_CHROME"
+          check "build-browser-extension-firefox" "$R_EXT_FIREFOX"
+
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "::error::CI Gate 未通过：存在失败或未产生结果的必需 job。"
+            exit 1
+          fi
+          echo ""
+          echo "CI Gate 通过：所有必需 job 均成功。"
