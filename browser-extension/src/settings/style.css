@@ -1,0 +1,40 @@
+body {
+  font-family:
+    'Segoe UI', 'Microsoft YaHei', 'Lucida Grande', Tahoma, sans-serif;
+  color: #202124;
+}
+
+h1 {
+  font-size: 1.2em;
+}
+
+form div {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 0.5em;
+  flex-wrap: wrap;
+}
+
+form small {
+  color: #5f6368;
+  flex-basis: 100%;
+  margin-left: 0.2em;
+}
+
+form label {
+  min-width: 8.5em;
+  text-align: right;
+}
+
+input:invalid {
+  border-color: red;
+}
+
+#customBrowser {
+  display: none;
+}
+
+button {
+  cursor: pointer;
+}

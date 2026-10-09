@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <title>PIM 浏览器记录</title>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="./style.css" />
+    <link rel="icon" href="/media/logo/logo-128.png" type="image/png" />
+  </head>
+  <body>
+    <div id="header">
+      <img src="/media/logo/logo-128.png" alt="PIM" />
+      <span id="header-title">PIM 浏览器记录</span>
+    </div>
+
+    <div id="testing-notice">
+      <!-- Filled by JS -->
+    </div>
+
+    <div id="tabs">
+      <button id="tab-status" class="tab active">状态</button>
+      <button id="tab-logs" class="tab">日志</button>
+      <span class="spacer"></span>
+      <button id="check-now-btn" class="mini" title="立即检测与守护进程的连接">
+        立即检测
+      </button>
+      <a id="webui-link" href="#" target="_blank" title="打开 PIM 网页">
+        <span class="button">打开 PIM</span>
+      </a>
+      <a id="settings-btn" href="#" title="设置">
+        <span class="button">⚙ 设置</span>
+      </a>
+    </div>
+
+    <div id="panel-status">
+      <table>
+        <tr>
+          <th align="right">已启用：</th>
+          <td>
+            <input type="checkbox" id="status-enabled-checkbox" />
+          </td>
+        </tr>
+
+        <tr>
+          <th align="right">守护进程：</th>
+          <td id="status-connected-icon">
+            <!-- Filled by JS -->
+          </td>
+        </tr>
+
+        <tr>
+          <th align="right">最近上报：</th>
+          <td id="status-last-sync">
+            <!-- Filled by JS -->
+          </td>
+        </tr>
+
+        <tr>
+          <th align="right">今日心跳：</th>
+          <td>
+            <span id="status-today-count">–</span> 次
+            <span id="status-last-error" class="error-text"></span>
+          </td>
+        </tr>
+
+        <tr>
+          <th align="right">当前页面：</th>
+          <td>
+            <div id="current-title" class="truncate">–</div>
+            <div id="current-url" class="truncate url"></div>
+          </td>
+        </tr>
+
+        <tr>
+          <th align="right">浏览器：</th>
+          <td>
+            <code id="status-browser"><!-- Filled by JS --></code>
+            <code id="status-instance"><!-- Filled by JS --></code>
+          </td>
+        </tr>
+      </table>
+    </div>
+
+    <div id="panel-logs" style="display: none">
+      <ul id="log-list">
+        <!-- Filled by JS -->
+      </ul>
+      <button id="clear-logs-btn" class="mini">清空日志</button>
+    </div>
+
+    <hr />
+
+    <small>
+      <p>
+        数据仅发送到本机 PIM 守护进程。若显示未连接，请先启动 PIM
+        客户端，再点击「立即检测」。
+      </p>
+    </small>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
