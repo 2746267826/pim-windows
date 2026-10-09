@@ -1,0 +1,43 @@
+## .NET
+bin/
+obj/
+build/
+dist/
+publish/*
+!publish/install.ps1
+!publish/install.bat
+!publish/setup-cn.bat
+*.user
+*.suo
+*.sln.docstates
+.vs/
+
+## Browser extension
+node_modules/
+browser-extension/node_modules/
+browser-extension/dist/
+Usersa2746AppDataLocalnpm-cache/
+**/Usersa2746AppDataLocalnpm-cache/
+
+## Local tooling and generated state
+.dotnet-appdata/
+.dotnet-home/
+.dotnet-tools/
+.npm-cache/
+.e2e/
+.worktrees/
+objTestDuration/
+docker-compose.override.yml
+*.log
+
+## Secrets — never commit
+.env
+keys/
+ssl/
+*.jks
+*.keystore
+
+## OS
+.DS_Store
+Thumbs.db
+__pycache__/
