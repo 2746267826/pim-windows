@@ -100,11 +100,20 @@ jobs:
             bash "$GITHUB_WORKSPACE/scripts/ci/resolve-version.sh"
           fi
 
+      # 原步骤引用主仓的 tests/Pim.UnitTests/Pim.UnitTests.csproj；仓库拆分后
+      # Windows 客户端的用例已迁入本仓 tests/ClientWindows/，但测试工程尚未建立
+      # （启用条件见 tests/ClientWindows/README.md）。工程就位后本步骤自动生效。
       - name: Windows companion tests
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
         run: |
-          dotnet test ../../tests/Pim.UnitTests/Pim.UnitTests.csproj `
-            --configuration Release `
-            --filter "FullyQualifiedName~WindowsCompanionShellTests|FullyQualifiedName~WindowsNotificationActionRouterTests|FullyQualifiedName~ApiClientDefaultsTests|FullyQualifiedName~KeyStats|FullyQualifiedName~WindowsStatusCenterTests|FullyQualifiedName~ScheduledTaskService"
+          $proj = Get-ChildItem -Path "$env:GITHUB_WORKSPACE/tests" -Filter *.csproj -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $proj) {
+            Write-Host "::warning::Windows 客户端测试工程尚未建立（tests/ClientWindows/README.md 记录了启用条件），本次跳过伴生测试。"
+            exit 0
+          }
+          dotnet test $proj.FullName --configuration Release
 
       - name: Publish Daemon
         run: |
