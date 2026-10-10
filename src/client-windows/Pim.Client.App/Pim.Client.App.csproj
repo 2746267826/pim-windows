@@ -34,4 +34,16 @@
     <PackageReference Include="Serilog.Sinks.Debug" Version="3.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
   </ItemGroup>
+
+  <!--
+    这些测试原先是被 Compile Link 编进本程序集的（见 BootstrapLog.cs 的注释），
+    因此可以访问 internal 成员。拆为独立测试工程后需要显式开放，
+    否则 BootstrapLog.LogDir / SingleInstanceGuard 等 internal 成员不可见。
+  -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Pim.Client.App.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

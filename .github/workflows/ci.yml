@@ -91,9 +91,39 @@ jobs:
       extension_browser: firefox
 
   # 汇总门禁：任一子任务失败即整体失败，避免"看起来绿了"。
+  # 客户端测试（跨平台部分）：守护程序核心逻辑，跑在 Linux 上。
+  # 这些用例过去只存在于主仓、随拆仓变成无人执行的孤儿，现在接进 CI。
+  test-client-core:
+    needs: [resolve-version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run cross-platform client tests
+        run: dotnet test tests/Pim.Client.Tests/Pim.Client.Tests.csproj --logger "console;verbosity=minimal"
+
+  # 客户端测试（Windows 专属部分）：依赖 WPF / WinForms 组件，只能在 Windows 上跑。
+  test-client-app:
+    needs: [resolve-version]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run Windows-only client tests
+        run: dotnet test tests/Pim.Client.App.Tests/Pim.Client.App.Tests.csproj --logger "console;verbosity=minimal"
+
+
   gate:
     name: CI Gate
-    needs: [resolve-version, build-windows, build-shell-windows, build-browser-extension, build-browser-extension-firefox]
+    needs: [resolve-version, build-windows, build-shell-windows, build-browser-extension, build-browser-extension-firefox, test-client-core, test-client-app]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -104,6 +134,8 @@ jobs:
           R_SHELL: ${{ needs.build-shell-windows.result }}
           R_EXT_CHROME: ${{ needs.build-browser-extension.result }}
           R_EXT_FIREFOX: ${{ needs.build-browser-extension-firefox.result }}
+          R_TEST_CORE: ${{ needs.test-client-core.result }}
+          R_TEST_APP: ${{ needs.test-client-app.result }}
         run: |
           set -uo pipefail
           fail=0
@@ -121,6 +153,8 @@ jobs:
           check "build-shell-windows" "$R_SHELL"
           check "build-browser-extension" "$R_EXT_CHROME"
           check "build-browser-extension-firefox" "$R_EXT_FIREFOX"
+          check "test-client-core" "$R_TEST_CORE"
+          check "test-client-app" "$R_TEST_APP"
 
           if [ "$fail" -ne 0 ]; then
             echo ""
@@ -129,3 +163,70 @@ jobs:
           fi
           echo ""
           echo "CI Gate 通过：所有必需 job 均成功。"
+
+  # 发版：打 tag 时发布客户端/壳/安装器 + version.json。
+  # version.json 是客户端更新检查的数据源，读取用 release 的稳定直链：
+  #   https://github.com/<owner>/<repo>/releases/latest/download/version.json
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [resolve-version, build-windows, build-shell-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+
+      - name: Normalize assets and generate version.json
+        run: |
+          set -euo pipefail
+          V="${{ needs.resolve-version.outputs.version }}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/v$V"
+          mkdir -p out
+          find dl -type f | sed 's/^/  /'
+          cp "$(find dl -name 'pim-windows-v*.zip' | head -n1)" "out/pim-windows-v$V.zip"
+          cp "$(find dl -name 'pim-shell-windows-v*.zip' | head -n1)" "out/pim-shell-windows-v$V.zip"
+          SETUP="$(find dl -name 'PIM-Setup-v*.exe' | head -n1 || true)"
+          if [ -n "$SETUP" ]; then cp "$SETUP" "out/PIM-Setup-v$V.exe"; fi
+          W="pim-windows-v$V.zip"
+          S="pim-shell-windows-v$V.zip"
+          jq -n \
+            --arg v "$V" --arg base "$BASE" --arg w "$W" --arg s "$S" \
+            --arg setup "$( [ -n "$SETUP" ] && echo "PIM-Setup-v$V.exe" || echo "" )" \
+            '{version: $v, releasedAt: (now|todateiso8601),
+              assets: {
+                windows:      {version: $v, url: ($base + "/" + $w)},
+                shellWindows: {version: $v, url: ($base + "/" + $s)}
+              }
+              + (if $setup == "" then {} else {installer: {version: $v, url: ($base + "/" + $setup)}} end)}' \
+            > out/version.json
+          cat out/version.json
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          V="${{ needs.resolve-version.outputs.version }}"
+          gh release create "v$V" out/* \
+            --repo "${{ github.repository }}" \
+            --title "PIM Windows v$V" \
+            --generate-notes
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### 发版 v${{ needs.resolve-version.outputs.version }}"
+            echo ""
+            echo "| 资产 | 说明 |"
+            echo "| --- | --- |"
+            echo "| pim-windows-v${{ needs.resolve-version.outputs.version }}.zip | Windows 守护程序 |"
+            echo "| pim-shell-windows-v${{ needs.resolve-version.outputs.version }}.zip | Windows 壳 |"
+            echo "| PIM-Setup-v${{ needs.resolve-version.outputs.version }}.exe | 安装器（若有） |"
+            echo "| version.json | 更新检查数据源 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+

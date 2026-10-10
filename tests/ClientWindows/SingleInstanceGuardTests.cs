@@ -1,6 +1,7 @@
 using System.Threading;
 using Pim.Client.App.Services;
 using Xunit;
+using System.IO;
 
 namespace Pim.UnitTests.ClientWindows;
 
