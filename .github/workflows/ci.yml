@@ -203,15 +203,18 @@ jobs:
           if [ -n "$SETUP" ]; then cp "$SETUP" "out/PIM-Setup-v$V.exe"; fi
           W="pim-windows-v$V.zip"
           S="pim-shell-windows-v$V.zip"
+          # 注意：jq 里对象构造后的 `+` 必须写在同一个表达式内，写成
+          #   {assets: {...}
+          #    + (...)}
+          # 才合法；把 `+` 放到花括号外面（前一行以 `}` 收尾）会报
+          #   jq: error: syntax error, unexpected '+'
           jq -n \
             --arg v "$V" --arg base "$BASE" --arg w "$W" --arg s "$S" \
             --arg setup "$( [ -n "$SETUP" ] && echo "PIM-Setup-v$V.exe" || echo "" )" \
             '{version: $v, releasedAt: (now|todateiso8601),
-              assets: {
-                windows:      {version: $v, url: ($base + "/" + $w)},
-                shellWindows: {version: $v, url: ($base + "/" + $s)}
-              }
-              + (if $setup == "" then {} else {installer: {version: $v, url: ($base + "/" + $setup)}} end)}' \
+              assets: ({windows:      {version: $v, url: ($base + "/" + $w)},
+                        shellWindows: {version: $v, url: ($base + "/" + $s)}}
+                       + (if $setup == "" then {} else {installer: {version: $v, url: ($base + "/" + $setup)}} end))}' \
             > out/version.json
           cat out/version.json
 
