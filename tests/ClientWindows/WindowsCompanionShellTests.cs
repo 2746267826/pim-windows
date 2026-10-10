@@ -1,4 +1,5 @@
 using Xunit;
+using System.IO;
 
 namespace Pim.UnitTests.ClientWindows;
 

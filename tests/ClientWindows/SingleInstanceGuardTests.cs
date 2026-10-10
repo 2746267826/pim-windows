@@ -36,6 +36,7 @@ public class SingleInstanceGuardTests : IDisposable
         var localName = $"test_local_guard_{id}";
 
         using var existingMutex = new Mutex(true, localName, out var created);
+using System.IO;
         Assert.True(created);
 
         var acquired = SingleInstanceGuard.TryAcquire(globalName, localName);
