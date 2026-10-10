@@ -30,7 +30,7 @@ public sealed class TrackerPageAttributionTests
         public override DateTimeOffset GetUtcNow() => UtcNowValue;
     }
 
-    private const string GithubUrl = "https://github.com/2746267826/pim-platform/issues/272";
+    private const string GithubUrl = "https://github.com/2746267826/pim-api/issues/272";
 
     private static BrowserHeartbeat GithubHeartbeat(string tabTitle = "修复远程缺失日历 · Issue #272")
         => new()

@@ -95,24 +95,3 @@ jobs:
           变更见提交历史。安装：解压后在 chrome://extensions 以「加载已解压的扩展程序」载入。"
           fi
           gh release create "$TAG" artifacts/*.zip --title "$TAG" --notes "$NOTES" --repo "$GITHUB_REPOSITORY"
-
-      - name: Dispatch pim-platform installer build
-        # 跨仓库 repository_dispatch 必须使用 PAT；secret 未配置时跳过并告警，
-        # 不阻塞 fork 自身发版。
-        env:
-          GH_TOKEN: ${{ secrets.PIM_DISPATCH_PAT }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::PIM_DISPATCH_PAT secret is not configured; skipping pim-platform dispatch"
-            exit 0
-          fi
-          NOTES="$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" | sed '/^$/d')"
-          jq -n --arg tag "${GITHUB_REF_NAME}" --arg ver "${{ needs.build.outputs.version }}" --arg notes "$NOTES" \
-            '{event_type: "browser-extension-release", client_payload: {repo: env.GITHUB_REPOSITORY, tag: $tag, version: $ver, release_notes: $notes}}' \
-            > payload.json
-          curl -fsSL -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/2746267826/pim-platform/dispatches \
-            -d @payload.json \
-            && echo "Dispatched pim-platform installer build for ${GITHUB_REF_NAME}"

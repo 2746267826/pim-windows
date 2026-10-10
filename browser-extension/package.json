@@ -6,11 +6,11 @@
     "version": "1.0.0",
     "description": "记录当前浏览的网页，供 PIM「电脑记录」使用 / Track the current tab for PIM PC activity",
     "bugs": {
-        "url": "https://github.com/2746267826/tracker-web/issues"
+        "url": "https://github.com/2746267826/pim-windows/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/2746267826/tracker-web.git"
+        "url": "git+https://github.com/2746267826/pim-windows.git"
     },
     "scripts": {
         "compile": "tsc --noEmit",
