@@ -29,6 +29,8 @@ jobs:
       artifact_slug: ${{ steps.ver.outputs.artifact_slug }}
       assembly_version: ${{ steps.ver.outputs.assembly_version }}
       git_sha_short: ${{ steps.ver.outputs.git_sha_short }}
+      release_tag: ${{ steps.ver.outputs.release_tag }}
+      is_release: ${{ steps.ver.outputs.is_release }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -168,7 +170,14 @@ jobs:
   # version.json 是客户端更新检查的数据源，读取用 release 的稳定直链：
   #   https://github.com/<owner>/<repo>/releases/latest/download/version.json
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 合并到 master 就发版（与 pim-api 一致）。原先写成 tag 触发，但拆仓后
+    # 「每次合并 = 一个版本」是既定口径，tag 由 gh release create 自动创建。
+    # 构建失败时不发版；PR 时 is_release 为 false，自然跳过。
+    if: |
+      always() &&
+      needs.resolve-version.outputs.is_release == 'true' &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     needs: [resolve-version, build-windows, build-shell-windows]
     runs-on: ubuntu-latest
     permissions:
@@ -184,7 +193,8 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ needs.resolve-version.outputs.version }}"
-          BASE="https://github.com/${{ github.repository }}/releases/download/v$V"
+          TAG="${{ needs.resolve-version.outputs.release_tag }}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/$TAG"
           mkdir -p out
           find dl -type f | sed 's/^/  /'
           cp "$(find dl -name 'pim-windows-v*.zip' | head -n1)" "out/pim-windows-v$V.zip"
@@ -211,16 +221,16 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ needs.resolve-version.outputs.version }}"
-          gh release create "v$V" out/* \
+          gh release create "$TAG" out/* \
             --repo "${{ github.repository }}" \
-            --title "PIM Windows v$V" \
+            --title "PIM Windows $TAG" \
             --generate-notes
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "### 发版 v${{ needs.resolve-version.outputs.version }}"
+            echo "### 发版 ${{ needs.resolve-version.outputs.release_tag }}"
             echo ""
             echo "| 资产 | 说明 |"
             echo "| --- | --- |"
