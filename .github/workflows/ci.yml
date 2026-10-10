@@ -203,15 +203,15 @@ jobs:
           if [ -n "$SETUP" ]; then cp "$SETUP" "out/PIM-Setup-v$V.exe"; fi
           W="pim-windows-v$V.zip"
           S="pim-shell-windows-v$V.zip"
+          # 注意：jq 里对象构造后的 `+` 必须写在同一个表达式内；把 `+` 留在花括号
+          # 外面（前一行以 `}` 收尾）会报 `jq: error: syntax error, unexpected '+'`。
           jq -n \
             --arg v "$V" --arg base "$BASE" --arg w "$W" --arg s "$S" \
             --arg setup "$( [ -n "$SETUP" ] && echo "PIM-Setup-v$V.exe" || echo "" )" \
             '{version: $v, releasedAt: (now|todateiso8601),
-              assets: {
-                windows:      {version: $v, url: ($base + "/" + $w)},
-                shellWindows: {version: $v, url: ($base + "/" + $s)}
-              }
-              + (if $setup == "" then {} else {installer: {version: $v, url: ($base + "/" + $setup)}} end)}' \
+              assets: ({windows:      {version: $v, url: ($base + "/" + $w)},
+                        shellWindows: {version: $v, url: ($base + "/" + $s)}}
+                       + (if $setup == "" then {} else {installer: {version: $v, url: ($base + "/" + $setup)}} end))}' \
             > out/version.json
           cat out/version.json
 
@@ -220,7 +220,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # 每个 step 是独立进程：上一步定义的 shell 变量不会带过来，
+          # 这里用到的 TAG 必须在本步重新声明（此前漏了 -> TAG: unbound variable）。
           V="${{ needs.resolve-version.outputs.version }}"
+          TAG="${{ needs.resolve-version.outputs.release_tag }}"
           gh release create "$TAG" out/* \
             --repo "${{ github.repository }}" \
             --title "PIM Windows $TAG" \
