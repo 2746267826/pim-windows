@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Windows 客户端里依赖 WPF / WinForms 程序集（Pim.Client.App）的测试。
+    TFM 必须是 net8.0-windows：这些用例直接 new 出托盘图标、状态中心窗口、
+    单实例守卫等 UI 组件，无法在 Linux 上编译，只能在 Windows runner 上执行。
+
+    跨平台的守护程序核心逻辑测试在 ../Pim.Client.Tests（net8.0）。
+    引用后端程序集（Pim.Core / Pim.Module.PcTracker）的用例暂不纳入，见 ../ClientWindows/README.md。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RootNamespace>Pim.Client.App.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 显式列出用例文件：清单即范围，新增文件时必须显式加入 -->
+    <Compile Include="../ClientWindows/BootstrapLogTests.cs" />
+    <Compile Include="../ClientWindows/DaemonLoggerShutdownTests.cs" />
+    <Compile Include="../ClientWindows/ScheduledTaskServiceTests.cs" />
+    <Compile Include="../ClientWindows/SingleInstanceGuardTests.cs" />
+    <Compile Include="../ClientWindows/TrayIconTests.cs" />
+    <Compile Include="../ClientWindows/WindowsCompanionShellTests.cs" />
+    <Compile Include="../ClientWindows/WindowsDaemonPrimaryPathTests.cs" />
+    <Compile Include="../ClientWindows/WindowsPlannedOfflineWiringTests.cs" />
+    <Compile Include="../ClientWindows/WindowsStatusCenterTests.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/client-windows/Pim.Client.App/Pim.Client.App.csproj" />
+    <ProjectReference Include="../../src/client-windows/Pim.Client.Core/Pim.Client.Core.csproj" />
+    <ProjectReference Include="../../src/client-windows/Pim.Client.Infrastructure/Pim.Client.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

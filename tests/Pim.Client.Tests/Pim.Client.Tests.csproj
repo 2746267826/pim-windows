@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Windows 客户端的跨平台测试（守护程序核心逻辑：状态机、通道、心跳、keystats 等）。
+    刻意保持 net8.0（而非 net8.0-windows），以便在 Linux CI 上也能实际执行 —— 这些用例
+    覆盖的正是最容易回归的逻辑，能在每次 PR 上跑起来比"只在 Windows 上跑"更重要。
+
+    依赖 WPF / WinForms 程序集（Pim.Client.App）的用例在 Pim.Client.App.Tests（net8.0-windows）。
+    引用后端程序集（Pim.Module.PcTracker）的用例暂不纳入，见 tests/ClientWindows/README.md。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RootNamespace>Pim.Client.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 显式列出用例文件：清单即范围，新增文件时必须显式加入（避免"悄悄不被执行"） -->
+    <Compile Include="../ClientWindows/ApiClientDefaultsTests.cs" />
+    <Compile Include="../ClientWindows/AuthServiceTests.cs" />
+    <Compile Include="../ClientWindows/AwBucketSelectionTests.cs" />
+    <Compile Include="../ClientWindows/BrowserBridgeServiceTests.cs" />
+    <Compile Include="../ClientWindows/KeyStatsCollectorUploadGateTests.cs" />
+    <Compile Include="../ClientWindows/KeyStatsFixAdvisorTests.cs" />
+    <Compile Include="../ClientWindows/KeyStatsHealthProbeTests.cs" />
+    <Compile Include="../ClientWindows/KeyStatsLocalStatsClientTests.cs" />
+    <Compile Include="../ClientWindows/KeyStatsOneClickFixServiceTests.cs" />
+    <Compile Include="../ClientWindows/KeyStatsProcessManagerTests.cs" />
+    <Compile Include="../ClientWindows/NativeTrackerTimelineTests.cs" />
+    <Compile Include="../ClientWindows/SiteChannelEndToEndTests.cs" />
+    <Compile Include="../ClientWindows/SiteChannelTests.cs" />
+    <Compile Include="../ClientWindows/TrackerPageAttributionTests.cs" />
+    <Compile Include="../ClientWindows/TrackerStateManagerTests.cs" />
+    <Compile Include="../ClientWindows/WindowsNotificationActionRouterTests.cs" />
+    <Compile Include="../ClientWindows/Wo400TokenRenewalTests.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/client-windows/Pim.Client.Core/Pim.Client.Core.csproj" />
+    <ProjectReference Include="../../src/client-windows/Pim.Client.Infrastructure/Pim.Client.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>
