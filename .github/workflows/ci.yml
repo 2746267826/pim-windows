@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     branches: [master]
+  # 触发修复（stacked gate PR 0 runs）：原先 pull_request 只匹配 base=master，
+  # 而本门禁 PR 的 base 是产品分支（stacked），于是**永远不触发**。
+  # 取消 PR 目标分支过滤 = 所有 PR 目标都触发；push 仍然只限 master，
+  # permissions / gate 必需 job / release 条件全部不变。
   pull_request:
-    branches: [master]
   # 审计 F-22：手动触发只用于演练/排查，不产生发布。原先还声明了 `force_all`
   # 这个输入，但整个工作流从不读取它 —— 已删除（死参数）。
   workflow_dispatch:
