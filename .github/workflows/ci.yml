@@ -131,7 +131,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: 2746267826/pim-web
-          ref: ${{ env.PIM_WEB_PIN_SHA }}
+          ref: 489a9dd6f11ebb045a47ef2a0599bd7c8a102b44
           path: .pim-web
           persist-credentials: false
 
@@ -139,7 +139,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          actual="$(git -C .pim-web rev-parse HEAD)"
+          actual="$(git -C "$GITHUB_WORKSPACE/.pim-web" rev-parse HEAD)"
           echo "pim-web pinned source SHA: $actual"
           if [ "$actual" != "$PIM_WEB_PIN_SHA" ]; then
             echo "::error::pim-web checkout HEAD $actual != pinned $PIM_WEB_PIN_SHA"
@@ -179,7 +179,16 @@ jobs:
       - name: Run Windows-only client tests against the real web dist
         env:
           PIM_WEB_DIST_DIR: ${{ github.workspace }}/.pim-web/client-web/dist
-        run: dotnet test tests/Pim.Client.App.Tests/Pim.Client.App.Tests.csproj --logger "console;verbosity=minimal"
+        run: dotnet test tests/Pim.Client.App.Tests/Pim.Client.App.Tests.csproj --logger "console;verbosity=normal" --logger "trx;LogFileName=client-app.trx" --results-directory TestResults/client-app --diag TestResults/client-app/vstest.log --blame
+
+      - name: Preserve client test diagnostics even on abort
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-client-test-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: TestResults/client-app/
+          if-no-files-found: warn
+          retention-days: 3
 
 
   gate:
