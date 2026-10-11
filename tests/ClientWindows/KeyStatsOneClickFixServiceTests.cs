@@ -419,8 +419,7 @@ public class KeyStatsOneClickFixServiceTests
         bool createExe = true,
         bool createScript = true)
     {
-        var dir = Path.Combine(Path.GetTempPath(), "pim-keystats-fix-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
+        var dir = CreateIsolatedTestDir();
         var exe = Path.Combine(dir, "KeyStats.exe");
         var script = Path.Combine(dir, KeyStatsOneClickFixService.FixScriptFileName);
         if (createExe)
@@ -453,6 +452,41 @@ public class KeyStatsOneClickFixServiceTests
             listProcesses: _ => processes.ToArray());
 
         return (service, exe, script);
+    }
+
+    /// <summary>
+    /// 测试自有隔离目录（round4 · 环境修复）。
+    ///
+    /// 旧写法把固定目录 <c>{TMPDIR}/pim-keystats-fix-tests</c> 当父目录，父目录一旦被
+    /// 别的用户以不可写权限预先创建，<c>Directory.CreateDirectory</c> 就抛
+    /// <see cref="UnauthorizedAccessException"/>：在 <c>TMPDIR=/tmp</c> 的环境下
+    /// 12 条用例会以环境错误失败（Grok round3 M-1 / round4 logs/02）。
+    /// 这里改成「每次调用一个新的、由本测试进程拥有的目录」，首选带进程号的临时目录，
+    /// 不可写时退回测试程序集输出目录。只换目录，不改任何断言。
+    /// </summary>
+    private static string CreateIsolatedTestDir()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(Path.GetTempPath(), $"pim-keystats-fix-tests-{Environment.ProcessId}"),
+            Path.Combine(AppContext.BaseDirectory, "pim-keystats-fix-tests"),
+        };
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var dir = Path.Combine(candidate, Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // 换下一个候选目录；两个都不可写才抛出。
+            }
+        }
+
+        throw new InvalidOperationException("无法创建隔离的 KeyStats 修复测试目录（临时目录与测试输出目录都不可写）");
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler

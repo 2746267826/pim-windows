@@ -526,8 +526,35 @@ public sealed class NativeTrackerService : IDisposable
         }
     }
 
-    public Task DoPollAsync(CancellationToken ct = default)
+    /// <summary>
+    /// 当前待上传积压总数（窗口事件队列 + 站点事件队列）。
+    ///
+    /// 审计 F-04：心跳里的 <c>uploadQueueCount</c> 必须反映这个真实积压，
+    /// 而不是一个常量。这个属性只做**观测**，不改变采集/上传行为；
+    /// 它同时是心跳装配点的取值来源。
+    /// </summary>
+    public int PendingUploadCount => _uploadQueue.Count + _siteUploadQueue.Count;
+
+    /// <summary>
+    /// 把浏览器桥接通道里已到达的站点事件搬进本服务的待上传队列。
+    ///
+    /// 产品路径由 <see cref="SiteUploadLoopAsync"/> 的定时器驱动；这里把“搬进队列”
+    /// 这一步单独暴露出来，让跨平台测试能确定性地构造站点积压（Linux 上跑不了
+    /// Windows 的定时器/网络组合）。它只做入队，不做任何上传或丢弃决定。
+    /// </summary>
+    public int DrainSiteEventsFromBridge()
     {
+        var drained = 0;
+        while (drained < 5000 && _bridge.SiteReader.TryRead(out var ev))
+        {
+            _siteUploadQueue.Enqueue(ev);
+            drained++;
+        }
+
+        return drained;
+    }
+
+    public Task DoPollAsync(CancellationToken ct = default)    {
         try
         {
             var now = _timeProvider.GetUtcNow();
@@ -758,12 +785,7 @@ public sealed class NativeTrackerService : IDisposable
             List<SiteEventDto>? batch = null;
             try
             {
-                var drained = 0;
-                while (drained < 5000 && _bridge.SiteReader.TryRead(out var ev))
-                {
-                    _siteUploadQueue.Enqueue(ev);
-                    drained++;
-                }
+                DrainSiteEventsFromBridge();
                 if (_siteUploadQueue.IsEmpty) continue;
 
                 batch = new List<SiteEventDto>();

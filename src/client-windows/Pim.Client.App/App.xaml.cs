@@ -299,12 +299,6 @@ public partial class App : Application
             var tracker = Services.GetService<NativeTrackerService>();
             var ks = Services.GetRequiredService<KeyStatsCollectorService>();
 
-            var trackerState = tracker is null ? "Unknown"
-                : tracker.LastError is null && tracker.EventsUploaded > 0 ? "Available"
-                : tracker.LastError is null ? "Unknown" : "Unavailable";
-            var ksHealth = ks.LastHealth;
-            var ksState = ksHealth?.DaemonSourceState ?? "Unknown";
-
             var authService = Services.GetRequiredService<AuthService>();
             if (!authService.IsAuthenticated && authService.HasSavedToken)
             {
@@ -320,35 +314,15 @@ public partial class App : Application
                 }
             }
 
-            var lastSuccess = MaxTime(tracker?.EventsUploaded > 0 ? DateTime.UtcNow : null, ks.LastUploadTime?.ToUniversalTime());
-            var lastSuccessUtc = lastSuccess is DateTime dt ? new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Utc), TimeSpan.Zero) : (DateTimeOffset?)null;
-            var lastError = tracker?.LastError ?? ks.LastUploadError;
             var version = typeof(App).Assembly
                 .GetCustomAttributes(false)
                 .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
                 .FirstOrDefault()?.InformationalVersion ?? "0.0.0(unknown)";
 
-            var heartbeat = DaemonHeartbeatReporter.BuildHeartbeat(
-                Environment.MachineName,
-                version,
-                config.ServerUrl,
-                lastSuccessUtc,
-                DateTimeOffset.UtcNow,
-                lastError,
-                tracker is null ? 0 : 0,
-                trackerState,
-                ksState,
-                new
-                {
-                    keyStatsDetailState = ksHealth?.DetailState.ToString(),
-                    keyStatsProcessCount = ksHealth?.ProcessCount,
-                    keyStatsSkipReason = ks.LastSkipReason,
-                    trackerPollCount = tracker?.PollCount ?? 0,
-                    trackerSessionsCreated = tracker?.SessionsCreated ?? 0,
-                    trackerEventsUploaded = tracker?.EventsUploaded ?? 0,
-                    trackerHookActive = tracker?.HookActive ?? false,
-                    trackerBrowserConnected = tracker?.BrowserConnected ?? false
-                });
+            // 心跳请求的装配搬到 Pim.Client.Core.DaemonHeartbeatComposer：
+            // 这里原来是 net8.0-windows 内的组装点，Linux/CI 无法执行该工程，
+            // 导致心跳字段语义长期没有在跑的测试（审计 F-04 / F-10）。搬运本身行为不变。
+            var heartbeat = DaemonHeartbeatComposer.Build(tracker, ks, config.ServerUrl, version);
             await reporter.ReportAsync(heartbeat, ct);
             Logger.Info("Daemon heartbeat reported");
         }
@@ -364,13 +338,6 @@ public partial class App : Application
         {
             app._reportSemaphore.Release();
         }
-    }
-
-    private static DateTime? MaxTime(DateTime? a, DateTime? b)
-    {
-        if (a is null) return b;
-        if (b is null) return a;
-        return a > b ? a : b;
     }
 
     private void TryReportPlannedOffline(string reason, bool wait = false, DateTimeOffset? occurredAt = null)

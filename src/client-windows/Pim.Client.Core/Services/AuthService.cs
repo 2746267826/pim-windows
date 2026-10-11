@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Pim.Client.Core.Models;
+using Pim.Client.Core.Security;
 
 namespace Pim.Client.Core.Services;
 
@@ -11,9 +12,18 @@ public class AuthService
     private readonly string _tokenPath;
     private readonly string _tokenDir;
     private readonly TimeProvider _timeProvider;
+    private readonly Func<bool> _isWindows;
+    private readonly Func<byte[], byte[]> _protectForCurrentUser;
+    private readonly Func<byte[], byte[]> _unprotectForCurrentUser;
     private string? _accessToken;
     private string? _refreshToken;
     private DateTimeOffset _accessTokenExpiry;
+
+    /// <summary>
+    /// 审计 F-11（规格 §6.2）：宿主会话结束时通知当前嵌入 WebView。
+    /// 页面/宿主会话代码只据此发一帧 <c>host.session.ended</c>；事件本身不携带令牌。
+    /// </summary>
+    public event Action<HostSessionEndReason>? LoggedOut;
 
     /// <summary>
     /// 到期前续期的提前量（WO-ISSUES-396-400-20261007 REQ-5 / issue #400）。
@@ -27,9 +37,29 @@ public class AuthService
     private Task<bool>? _refreshInFlight;
 
     public AuthService(ApiClient apiClient, string? tokenPath = null, TimeProvider? timeProvider = null)
+        : this(
+            apiClient,
+            tokenPath,
+            timeProvider,
+            OperatingSystem.IsWindows,
+            ProtectForCurrentWindowsUser,
+            UnprotectForCurrentWindowsUser)
+    {
+    }
+
+    internal AuthService(
+        ApiClient apiClient,
+        string? tokenPath,
+        TimeProvider? timeProvider,
+        Func<bool> isWindows,
+        Func<byte[], byte[]> protectForCurrentUser,
+        Func<byte[], byte[]>? unprotectForCurrentUser = null)
     {
         _apiClient = apiClient;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _isWindows = isWindows;
+        _protectForCurrentUser = protectForCurrentUser;
+        _unprotectForCurrentUser = unprotectForCurrentUser ?? UnprotectForCurrentWindowsUser;
         _tokenPath = tokenPath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PIM", "token.json");
@@ -76,31 +106,13 @@ public class AuthService
         return true;
     }
 
-    public async Task<string?> RegisterAsync(
-        string username, string email, string password, string? displayName)
-    {
-        var result = await _apiClient.PostAsync<ApiResponse<AuthResponse>>("/auth/register",
-            new { username, email, password, displayName });
-
-        if (result is { Code: 0, Data: not null })
-        {
-            ApplyTokens(result.Data);
-            SaveToken();
-            return null;
-        }
-
-        return result is null
-            ? "服务器无响应"
-            : $"错误码 {result.Code}: {result.Message}";
-    }
-
     public async Task<TokenRestoreResult> TryRestoreTokenDetailedAsync()
     {
         try
         {
             if (!File.Exists(_tokenPath)) return TokenRestoreResult.NoSavedToken;
 
-            var data = await LoadPersistedTokenAsync(_tokenPath);
+            var data = await LoadPersistedTokenAsync(_tokenPath, _isWindows, _protectForCurrentUser, _unprotectForCurrentUser);
             if (data is null) return TokenRestoreResult.NoSavedToken;
 
             _accessToken = data.AccessToken;
@@ -156,12 +168,6 @@ public class AuthService
         }
     }
 
-    public async Task<bool> TryRestoreTokenAsync()
-    {
-        var result = await TryRestoreTokenDetailedAsync();
-        return result == TokenRestoreResult.Success;
-    }
-
     private void SaveToken()
     {
         try
@@ -182,15 +188,17 @@ public class AuthService
             var json = JsonSerializer.Serialize(data);
             var bytes = Encoding.UTF8.GetBytes(json);
             byte[] toWrite;
-            if (OperatingSystem.IsWindows())
+            if (_isWindows())
             {
                 try
                 {
-                    toWrite = ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser);
+                    toWrite = _protectForCurrentUser(bytes);
                 }
                 catch
                 {
-                    toWrite = bytes;
+                    // Windows 凭据只允许写 DPAPI CurrentUser 密文。保护失败时保留内存会话，
+                    // 但不创建可被同机其他进程直接读取的明文 token.json。
+                    return;
                 }
             }
             else
@@ -206,24 +214,96 @@ public class AuthService
         }
     }
 
-    private static async Task<PersistedToken?> LoadPersistedTokenAsync(string tokenPath)
+    private static byte[] ProtectForCurrentWindowsUser(byte[] bytes)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        return ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser);
+    }
+
+    private static byte[] UnprotectForCurrentWindowsUser(byte[] bytes)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        return ProtectedData.Unprotect(bytes, null, DataProtectionScope.CurrentUser);
+    }
+
+    private async Task<PersistedToken?> LoadPersistedTokenAsync(
+        string tokenPath,
+        Func<bool> isWindows,
+        Func<byte[], byte[]> protectForCurrentUser,
+        Func<byte[], byte[]> unprotectForCurrentUser)
     {
         var raw = await File.ReadAllBytesAsync(tokenPath);
-        // Try DPAPI unprotect on Windows; fallback to plaintext
-        if (OperatingSystem.IsWindows())
+        if (isWindows())
         {
             try
             {
-                var unprotected = ProtectedData.Unprotect(raw, null, DataProtectionScope.CurrentUser);
+                var unprotected = unprotectForCurrentUser(raw);
                 var json = Encoding.UTF8.GetString(unprotected);
                 var data = JsonSerializer.Deserialize<PersistedToken>(json);
                 if (data is not null) return data;
             }
             catch
             {
-                // Fall through to plaintext attempt (migration / fallback)
+                // Fall through to historical plaintext migration attempt
             }
+
+            try
+            {
+                var json = Encoding.UTF8.GetString(raw);
+                var data = JsonSerializer.Deserialize<PersistedToken>(json);
+                if (data is not null)
+                {
+                    // 历史明文安全迁移：优先保体验的一次性 DPAPI 重新加密再加载；
+                    // 仅在密文写入同目录临时文件、从该文件解密读回并原子替换成功后才恢复会话。
+                    var encryptedBytes = protectForCurrentUser(raw);
+                    if (encryptedBytes.AsSpan().SequenceEqual(raw)) return null;
+
+                    var tokenDirectory = Path.GetDirectoryName(tokenPath) ?? string.Empty;
+                    var tempPath = Path.Combine(
+                        tokenDirectory,
+                        $".{Path.GetFileName(tokenPath)}.{Guid.NewGuid():N}.migration.tmp");
+
+                    try
+                    {
+                        await using (var stream = new FileStream(
+                            tempPath,
+                            FileMode.CreateNew,
+                            FileAccess.Write,
+                            FileShare.None,
+                            bufferSize: 4096,
+                            FileOptions.Asynchronous | FileOptions.WriteThrough))
+                        {
+                            await stream.WriteAsync(encryptedBytes);
+                            await stream.FlushAsync();
+                            stream.Flush(flushToDisk: true);
+                        }
+
+                        var persistedEncryptedBytes = await File.ReadAllBytesAsync(tempPath);
+                        if (!persistedEncryptedBytes.AsSpan().SequenceEqual(encryptedBytes)) return null;
+
+                        var persistedPlaintextBytes = unprotectForCurrentUser(persistedEncryptedBytes);
+                        var persistedData = JsonSerializer.Deserialize<PersistedToken>(
+                            Encoding.UTF8.GetString(persistedPlaintextBytes));
+                        if (persistedData is null || !SamePersistedToken(data, persistedData)) return null;
+
+                        // File.Replace keeps the original destination intact unless the same-volume replacement succeeds.
+                        File.Replace(tempPath, tokenPath, destinationBackupFileName: null);
+                        return persistedData;
+                    }
+                    finally
+                    {
+                        try { File.Delete(tempPath); } catch { }
+                    }
+                }
+            }
+            catch
+            {
+                // 迁移重加密失败或非法数据：fail-closed
+                return null;
+            }
+            return null;
         }
+
         try
         {
             var json = Encoding.UTF8.GetString(raw);
@@ -234,6 +314,14 @@ public class AuthService
             return null;
         }
     }
+
+    private static bool SamePersistedToken(PersistedToken expected, PersistedToken actual)
+        => string.Equals(expected.AccessToken, actual.AccessToken, StringComparison.Ordinal)
+            && string.Equals(expected.RefreshToken, actual.RefreshToken, StringComparison.Ordinal)
+            && expected.ExpiresAt.Equals(actual.ExpiresAt)
+            && string.Equals(expected.UserId, actual.UserId, StringComparison.Ordinal)
+            && string.Equals(expected.Username, actual.Username, StringComparison.Ordinal)
+            && string.Equals(expected.DisplayName, actual.DisplayName, StringComparison.Ordinal);
 
     private void ApplyTokens(AuthResponse data)
     {
@@ -303,7 +391,7 @@ public class AuthService
         }
     }
 
-    public void Logout()
+    public void Logout(HostSessionEndReason reason = HostSessionEndReason.Expired)
     {
         _accessToken = null;
         _refreshToken = null;
@@ -312,6 +400,23 @@ public class AuthService
         CurrentDisplayName = null;
         _apiClient.ClearAccessToken();
         try { File.Delete(_tokenPath); } catch { }
+
+        // 审计 F-11（规格 §6.2）：宿主会话结束必须能通知当前嵌入 WebView。
+        // 事件在令牌已清空之后触发，处理器只发一帧 host.session.ended，不接触令牌。
+        var handlers = LoggedOut;
+        if (handlers is null) return;
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                ((Action<HostSessionEndReason>)handler)(reason);
+            }
+            catch (Exception ex)
+            {
+                // 通知失败不得影响退出本身（例如窗口/Dispatcher 已关闭）。
+                System.Diagnostics.Debug.WriteLine($"[AuthService] LoggedOut handler failed: {ex.Message}");
+            }
+        }
     }
 
     private class PersistedToken

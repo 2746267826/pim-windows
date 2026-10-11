@@ -11,7 +11,7 @@ public sealed class KeyStatsCollectorService : IDisposable
 
     private readonly HttpClient _keyStats;
     private readonly ApiClient _api;
-    private readonly KeyStatsProcessManager _processManager;
+    private readonly Func<int, IReadOnlyList<KeyStatsProcessInfo>> _processSource;
     private readonly CancellationTokenSource _cts = new();
     private static readonly object LockObj = new();
     private DateTime? _lastUploadTime;
@@ -29,15 +29,39 @@ public sealed class KeyStatsCollectorService : IDisposable
     public static bool ShouldUpload(KeyStatsHealthResult health) => health.CanUpload;
 
     public KeyStatsCollectorService(ApiClient api, KeyStatsProcessManager? processManager = null)
+        : this(api, processManager, keyStatsHandlerFactory: null, processSource: null)
+    {
+    }
+
+    /// <summary>
+    /// 测试接缝（审计 F-02 / F-10）：允许注入本地 KeyStats HTTP 传输与进程枚举，
+    /// 从而在 Linux 上驱动<b>与定时器/SyncNowAsync 完全相同</b>的采集→上传路径，
+    /// 捕获生产代码自己发出的 method / 路径 / 请求体。
+    ///
+    /// 生产调用只走上面的公开构造：两个可空参数为 null 时行为与注入前逐字一致
+    /// （真实 <see cref="HttpClientHandler"/> 与 <see cref="KeyStatsProcessManager.ListProcesses"/>）。
+    /// </summary>
+    internal KeyStatsCollectorService(
+        ApiClient api,
+        KeyStatsProcessManager? processManager,
+        Func<HttpMessageHandler>? keyStatsHandlerFactory,
+        Func<int, IReadOnlyList<KeyStatsProcessInfo>>? processSource)
     {
         _api = api;
-        _processManager = processManager ?? new KeyStatsProcessManager();
-        _keyStats = new HttpClient
+        _processSource = processSource ?? (processManager ?? new KeyStatsProcessManager()).ListProcesses;
+        _keyStats = new HttpClient(keyStatsHandlerFactory?.Invoke() ?? new HttpClientHandler())
         {
             BaseAddress = new Uri(KeyStatsBase),
             Timeout = TimeSpan.FromSeconds(5)
         };
     }
+
+    /// <summary>
+    /// 测试接缝：同步执行一次真实的「读取本地统计 → 健康判定 → 上传」流程。
+    /// 与 <see cref="Start"/> / <see cref="SyncNowAsync"/> 调用的是同一个私有方法，
+    /// 路径与请求体由产品代码决定，测试不传入任何端点。
+    /// </summary>
+    internal Task RunCollectionCycleAsync() => CollectAndUploadAsync();
 
     public void Start()
     {
@@ -92,7 +116,7 @@ public sealed class KeyStatsCollectorService : IDisposable
             lock (LockObj) { previous = _previousSnapshot; }
 
             var currentSessionId = Process.GetCurrentProcess().SessionId;
-            var processes = _processManager.ListProcesses(currentSessionId);
+            var processes = _processSource(currentSessionId);
             var health = KeyStatsHealthProbe.Evaluate(
                 processes,
                 currentSessionId,
@@ -133,8 +157,29 @@ public sealed class KeyStatsCollectorService : IDisposable
                 stats.FormattedScrollDistance,
                 stats.AppStats);
 
+            // 审计 F-02：legacy 上传体必须与 contract KeystatsUploadRequest 一致
+            // （additionalProperties=false；字段名是 peakKps/peakCps，没有 formatted*）。
+            // 这里用独立的命名类型，而不是给 KeyStatsSnapshot 加 [JsonIgnore]：
+            // 那个类同时是本地 keyStats /api/stats/ 的**读取**类型，JsonIgnore 会把读入
+            // 一起关掉，使 samples 上传的 formatted* 值静默变 null（行为回退）。
+            var legacy = new KeystatsLegacyUploadPayload(
+                stats.DeviceId,
+                stats.Date,
+                stats.KeyPresses,
+                stats.KeyPressCounts,
+                stats.LeftClicks,
+                stats.RightClicks,
+                stats.MiddleClicks,
+                stats.SideBackClicks,
+                stats.SideForwardClicks,
+                stats.MouseDistance,
+                stats.ScrollDistance,
+                stats.PeakKps,
+                stats.PeakCps,
+                stats.AppStats);
+
             var sampleResult = await TryPostAsync("/pc/keystats/samples", sample);
-            var legacyResult = await TryPostAsync("/pc/keystats/upload", stats);
+            var legacyResult = await TryPostAsync("/pc/keystats/upload", legacy);
             var healthMessage = BuildUploadHealthMessage(sampleResult is not null, legacyResult is not null);
 
             if (sampleResult is not null || legacyResult is not null)
@@ -263,6 +308,35 @@ public sealed class KeyStatsCollectorService : IDisposable
         public int SideForwardClicks { get; set; }
         public double ScrollDistance { get; set; }
     }
+
+    /// <summary>
+    /// legacy 上传体（审计 F-02）：字段集合与 JSON 名严格取自
+    /// <c>contract/openapi.json</c> → <c>KeystatsUploadRequest</c>
+    /// （<c>additionalProperties=false</c>）。
+    ///
+    /// 不含 <c>formattedMouseDistance</c> / <c>formattedScrollDistance</c>（契约未声明），
+    /// peak 字段名是 <c>peakKps</c> / <c>peakCps</c> —— 注意与 samples 的
+    /// <c>peakKPS</c> / <c>peakCPS</c> 不同，两个端点各自有自己的 schema。
+    /// 本地 keyStats 侧的 formatted* 值仍被读取并使用（samples 上传带值）。
+    /// </summary>
+    private sealed record KeystatsLegacyUploadPayload(
+        string DeviceId,
+        string Date,
+        int KeyPresses,
+        Dictionary<string, int>? KeyPressCounts,
+        int LeftClicks,
+        int RightClicks,
+        int MiddleClicks,
+        int SideBackClicks,
+        int SideForwardClicks,
+        double MouseDistance,
+        double ScrollDistance,
+        [property: JsonPropertyName("peakKps")]
+        int PeakKps,
+        [property: JsonPropertyName("peakCps")]
+        int PeakCps,
+        Dictionary<string, KeyStatsAppStats>? AppStats
+    );
 
     private sealed record KeystatsSampleUploadPayload(
         string PimDeviceId,
