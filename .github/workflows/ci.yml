@@ -173,16 +173,68 @@ jobs:
             echo "pim_web_source_sha=$PIM_WEB_PIN_SHA"
             echo "pim_web_dist_dir=$GITHUB_WORKSPACE/.pim-web/client-web/dist"
             echo "pim_web_dist_index_sha256=$DIST_INDEX_SHA256"
+            echo "windows_runner_image=${ImageName:-unknown}"
+            echo "windows_runner_image_version=${ImageVersion:-unknown}"
+            echo "windows_runner_os=${ImageOS:-unknown}"
+            echo "merge_commit_sha=${GITHUB_SHA}"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
+      # runner 明确指定诊断阶段日志目录（落在 always-upload 的产物目录内）。
+      # 目录不可用 → 夹具的 PhaseLog.Open() 直接抛（fail-closed），
+      # 绝不出现「没有阶段证据却被读成通过」。
       - name: Run Windows-only client tests against the real web dist
         env:
           PIM_WEB_DIST_DIR: ${{ github.workspace }}/.pim-web/client-web/dist
+          PIM_PHASE_LOG_DIR: ${{ github.workspace }}/TestResults/client-app/phases
         run: dotnet test tests/Pim.Client.App.Tests/Pim.Client.App.Tests.csproj --logger "console;verbosity=normal" --logger "trx;LogFileName=client-app.trx" --results-directory TestResults/client-app --diag TestResults/client-app/vstest.log --blame
+
+      # 设施准入检查（脱敏）：逐行验证新增阶段日志的固定 schema，并扫描
+      # canary / Authorization / Bearer / cookie / 页面正文。发现泄漏即 FAIL。
+      # 只扫描本次新增的 phases/*.log；既有 console/TRX 里 Assert.Equal 失败时
+      # 本就会显示 canary，不拿它当新增日志的安全证明（两者分开判读）。
+      - name: Verify phase-log facility is on disk, schema-valid and secret-free
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          PHASES="$PIM_PHASE_LOG_DIR"
+          echo "phase dir: $PHASES"
+          echo "runner image: ${ImageName:-unknown} ${ImageOS:-unknown}"
+          ls -la "$PHASES" 2>&1 || echo "phase dir missing"
+          count=$(find "$PHASES" -maxdepth 1 -name '*.log' 2>/dev/null | wc -l)
+          echo "phase log files: $count"
+          if [ "$count" -eq 0 ]; then
+            echo "::error::没有产生任何阶段日志：诊断设施未生效，本轮不能作为定位证据"
+            exit 1
+          fi
+          bad=0
+          for f in "$PHASES"/*.log; do
+            # 固定字段 schema：s=1 pid= f= q= ts= tid= apt= cur= ev= fl= n1= n2= [xt=]
+            if ! grep -Eqv '^s=1 pid=-?[0-9]+ f=[0-9a-f]{8} q=[0-9]+ ts=-?[0-9]+ tid=[0-9]+ apt=[0-3] cur=-?[0-9]+ ev=[0-9]+ fl=-?[0-9]+ n1=-?[0-9]+ n2=-?[0-9]+( xt=[A-Za-z0-9_.+]{0,160})?$' "$f"; then
+              echo "::error::阶段日志行不符合固定 schema：$f"
+              grep -Ev '^s=1 pid=-?[0-9]+ f=[0-9a-f]{8} q=[0-9]+ ts=-?[0-9]+ tid=[0-9]+ apt=[0-3] cur=-?[0-9]+ ev=[0-9]+ fl=-?[0-9]+ n1=-?[0-9]+ n2=-?[0-9]+( xt=[A-Za-z0-9_.+]{0,160})?$' "$f" | head -5
+              bad=1
+            fi
+          done
+          if grep -Eqi 'ACCESS-CANARY|REFRESH-CANARY|Bearer|Authorization|__pimToken|token\.json|127\.0\.0\.1|sessionStorage|localStorage|document\.cookie' "$PHASES"/*.log; then
+            echo "::error::阶段日志疑似包含凭据/页面内容/地址"
+            grep -Ein 'ACCESS-CANARY|REFRESH-CANARY|Bearer|Authorization|__pimToken|token\.json|127\.0\.0\.1|sessionStorage|localStorage|document\.cookie' "$PHASES"/*.log | head -10
+            bad=1
+          fi
+          # 落盘证据：每个文件最后一条 = 进程被杀时仍留在磁盘上的最后标记。
+          for f in "$PHASES"/*.log; do
+            echo "last marker $(basename "$f"): $(tail -n 1 "$f")"
+            echo "lines $(basename "$f"): $(wc -l < "$f")"
+          done
+          if [ "$bad" -ne 0 ]; then
+            echo "::error::阶段日志设施检查未通过"
+            exit 1
+          fi
+          echo "phase-log facility checks passed"
 
       - name: Preserve client test diagnostics even on abort
         if: always()
