@@ -196,37 +196,210 @@ jobs:
       - name: Verify phase-log facility is on disk, schema-valid and secret-free
         if: always()
         shell: bash
+        # I-2：与 Run Windows-only client tests 使用**完全相同**的目录定义。
+        # GitHub Actions 每个 step 是独立进程，上一个 step 的 env 不会继承；
+        # 这里不显式声明就会在 `set -u` 下 unbound variable，所有检查都不执行。
+        env:
+          PIM_PHASE_LOG_DIR: ${{ github.workspace }}/TestResults/client-app/phases
         run: |
           set -uo pipefail
-          PHASES="$PIM_PHASE_LOG_DIR"
+          # I-2：PIM_PHASE_LOG_DIR 必须在**本 step 自身**的 env 里声明。
+          # 之前它只在 test step 上定义，GitHub Actions 每个 step 是独立进程，
+          # 这里在 `set -u` 下读取会直接 unbound variable 中断，
+          # 于是下面所有检查（计数 / schema / 敏感扫描 / 末 marker）**从未执行过**。
+          PHASES="${PIM_PHASE_LOG_DIR:-${GITHUB_WORKSPACE:-}/TestResults/client-app/phases}"
           echo "phase dir: $PHASES"
           echo "runner image: ${ImageName:-unknown} ${ImageOS:-unknown}"
-          ls -la "$PHASES" 2>&1 || echo "phase dir missing"
-          count=$(find "$PHASES" -maxdepth 1 -name '*.log' 2>/dev/null | wc -l)
+
+          # 固定值域：严格来自现有 PhaseEvent enum（tests/ClientWindows/HostSessionWindowsHarnessTests.cs）。
+          # 伪造 ev/apt/fl/cur 一律 FAIL —— 不因为「形状对」就放过伪造的语义值。
+          EV_ALLOWED="1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 40 41 42 43 44 45 60 61 62 63 64 65 66 67 68 69 70 71 80 81 82 83 84 85 86 87 90"
+          APT_ALLOWED="1 2 3"
+          FL_ALLOWED="-1 0 1"
+
+          in_list () {
+            local needle="$1"; shift
+            local item
+            for item in $1; do
+              if [ "$item" = "$needle" ]; then return 0; fi
+            done
+            return 1
+          }
+
+          if [ ! -d "$PHASES" ]; then
+            echo "::error::阶段日志目录不存在：诊断设施未生效，本轮不能作为定位证据"
+            exit 1
+          fi
+
+          # I-1：目录枚举的 find/wc 也必须 fail-closed。
+          # 旧写法 `find ... 2>/dev/null | wc -l` 在 find 读目录失败时会把失败静默丢掉，
+          # 再被 wc 读成「0 个文件」——那是「没扫成功」，不是「没有日志」。
+          # 这里单独捕获状态码并要求输出是纯数字。
+          count=''
+          count_rc=0
+          count=$( { find "$PHASES" -maxdepth 1 -type f -name '*.log' 2>/dev/null | wc -l; } 2>/dev/null ) || count_rc=$?
           echo "phase log files: $count"
+          if [ "$count_rc" -ne 0 ]; then
+            echo "::error::阶段日志目录枚举失败（I/O 错误）：class=io tool=find_or_wc rc=$count_rc"
+            exit 1
+          fi
+          case "$count" in
+            ''|*[!0-9]*)
+              echo "::error::阶段日志文件计数不是合法整数（工具输出异常）：class=tool_output tool=wc"
+              exit 1
+              ;;
+          esac
           if [ "$count" -eq 0 ]; then
             echo "::error::没有产生任何阶段日志：诊断设施未生效，本轮不能作为定位证据"
             exit 1
           fi
+
           bad=0
+          bad_schema=0
+          bad_range=0
+          bad_secret=0
+          bad_io=0
+          empty_files=0
+
           for f in "$PHASES"/*.log; do
-            # 固定字段 schema：s=1 pid= f= q= ts= tid= apt= cur= ev= fl= n1= n2= [xt=]
-            if ! grep -Eqv '^s=1 pid=-?[0-9]+ f=[0-9a-f]{8} q=[0-9]+ ts=-?[0-9]+ tid=[0-9]+ apt=[0-3] cur=-?[0-9]+ ev=[0-9]+ fl=-?[0-9]+ n1=-?[0-9]+ n2=-?[0-9]+( xt=[A-Za-z0-9_.+]{0,160})?$' "$f"; then
-              echo "::error::阶段日志行不符合固定 schema：$f"
-              grep -Ev '^s=1 pid=-?[0-9]+ f=[0-9a-f]{8} q=[0-9]+ ts=-?[0-9]+ tid=[0-9]+ apt=[0-3] cur=-?[0-9]+ ev=[0-9]+ fl=-?[0-9]+ n1=-?[0-9]+ n2=-?[0-9]+( xt=[A-Za-z0-9_.+]{0,160})?$' "$f" | head -5
+            base="$(basename "$f")"
+            file_bad=0
+            if [ ! -r "$f" ]; then
+              # I/O 错误单独归类：不能和「schema 不匹配」混为一谈。
+              echo "::error::阶段日志不可读（I/O 错误）：$base"
               bad=1
+              continue
             fi
+
+            # I-1：行数统计必须单独捕获状态码。
+            # 旧写法 `wc -l < "$f" 2>/dev/null || echo 0` 把 I/O 错误吞成「0 行」，
+            # 而 0 行会被读成「空文件」（或更糟：被当成合法计数继续判下去）。
+            # 这里：状态码非 0 → 明确 I/O 分类并置 bad；输出非整数 → 工具输出异常并置 bad。
+            lines=''
+            lines_rc=0
+            lines=$( { wc -l < "$f"; } 2>/dev/null ) || lines_rc=$?
+            if [ "$lines_rc" -ne 0 ]; then
+              echo "::error::阶段日志行数统计失败（I/O 错误）：$base class=io tool=wc rc=$lines_rc"
+              bad=1
+              bad_io=$((bad_io + 1))
+              continue
+            fi
+            case "$lines" in
+              ''|*[!0-9]*)
+                echo "::error::阶段日志行数不是合法整数（工具输出异常）：$base class=tool_output tool=wc"
+                bad=1
+                bad_io=$((bad_io + 1))
+                continue
+                ;;
+            esac
+            if [ "$lines" -eq 0 ]; then
+              # 空文件必须显式拒绝：否则「零行 = 零违规」会被读成通过。
+              echo "::error::阶段日志为空：$base"
+              bad=1
+              file_bad=1
+              empty_files=$((empty_files + 1))
+              continue
+            fi
+
+            # I-3：方向修正 —— 任何一行不匹配即 FAIL。
+            # 旧写法 `if ! grep -Eqv PATTERN file` 是反的：grep -v 找到非法行时
+            # exit 0，取反而**不**进入失败分支，于是合法日志假失败、非法日志假通过。
+            # 输出只给文件标识 + 行号 + 字段类别，**绝不回显原行**（若将来真的泄漏，
+            # 旧写法会把秘密复制到 console）。
+            lineno=0
+            while IFS= read -r line || [ -n "$line" ]; do
+              lineno=$((lineno + 1))
+              if printf '%s' "$line" | grep -Eq '^s=1 pid=-?[0-9]+ f=[0-9a-f]{8} q=[0-9]+ ts=-?[0-9]+ tid=[0-9]+ apt=[0-3] cur=-?[0-9]+ ev=[0-9]+ fl=-?[0-9]+ n1=-?[0-9]+ n2=-?[0-9]+( xt=[A-Za-z0-9_.+]{0,160})?$'; then
+                :
+              else
+                echo "::error::阶段日志行不符合固定 schema：$base line=$lineno class=shape"
+                bad=1
+                file_bad=1
+                bad_schema=$((bad_schema + 1))
+                continue
+              fi
+
+              get () { printf '%s' "$line" | sed -n "s/.*[[:space:]]$1=\([^[:space:]]*\).*/\1/p"; }
+
+              ev="$(get ev)"
+              if ! in_list "$ev" "$EV_ALLOWED"; then
+                echo "::error::阶段日志 ev 不在允许值域：$base line=$lineno field=ev"
+                bad=1; file_bad=1; bad_range=$((bad_range + 1))
+              fi
+              apt="$(get apt)"
+              if ! in_list "$apt" "$APT_ALLOWED"; then
+                echo "::error::阶段日志 apt 不在允许值域：$base line=$lineno field=apt"
+                bad=1; file_bad=1; bad_range=$((bad_range + 1))
+              fi
+              fl="$(get fl)"
+              if ! in_list "$fl" "$FL_ALLOWED"; then
+                echo "::error::阶段日志 fl 不在允许值域：$base line=$lineno field=fl"
+                bad=1; file_bad=1; bad_range=$((bad_range + 1))
+              fi
+              cur="$(get cur)"
+              if [ "$cur" != "-1" ] && ! in_list "$cur" "$EV_ALLOWED"; then
+                echo "::error::阶段日志 cur 不在允许值域：$base line=$lineno field=cur"
+                bad=1; file_bad=1; bad_range=$((bad_range + 1))
+              fi
+            done < "$f"
+
+            # 敏感扫描：只报告文件标识与命中次数，绝不打印命中行原文。
+            #
+            # I-1：这里必须区分 grep 的三种结局，**旧写法把它们全变成 0**：
+            #   0        = 有命中        → 报告命中数
+            #   1        = 无命中        → 合法，不是错误（`|| echo 0` 在这一步碰巧无害）
+            #   >=2 (含 2) = I/O / 参数 / 其它错误 → **根本没扫成功**，
+            #                            旧写法把它读成「0 命中 = 干净」，
+            #                            于是扫描失败反而被当成通过。
+            hits=''
+            hits_rc=0
+            hits=$(grep -Eic 'ACCESS-CANARY|REFRESH-CANARY|Bearer|Authorization|__pimToken|token\.json|127\.0\.0\.1|sessionStorage|localStorage|document\.cookie' "$f" 2>/dev/null) || hits_rc=$?
+            if [ "$hits_rc" -ge 2 ]; then
+              # I/O 错误单独归类：绝不当成「0 命中」，也绝不回显任何原文。
+              echo "::error::阶段日志敏感扫描失败（I/O 错误）：$base class=io tool=grep rc=$hits_rc"
+              bad=1
+              bad_io=$((bad_io + 1))
+              continue
+            fi
+            case "$hits" in
+              ''|*[!0-9]*)
+                echo "::error::敏感扫描命中数不是合法整数（工具输出异常）：$base class=tool_output tool=grep"
+                bad=1
+                bad_io=$((bad_io + 1))
+                continue
+                ;;
+            esac
+            if [ "$hits" -gt 0 ]; then
+              echo "::error::阶段日志疑似包含凭据/页面内容/地址：$base hits=$hits class=secret"
+              bad=1
+              file_bad=1
+              bad_secret=$((bad_secret + hits))
+            fi
+
+            # I-1：末标记同样必须检查状态码。
+            # 旧写法 `$(tail -n 1 "$f")` 完全不看退出码：tail 读失败时替换结果是空串，
+            # 空串照样打印出去，被读成「这一行就是这样」——读取失败被伪装成正常输出。
+            if [ "$file_bad" -eq 0 ]; then
+              marker=''
+              marker_rc=0
+              marker=$( { tail -n 1 "$f"; } 2>/dev/null ) || marker_rc=$?
+              if [ "$marker_rc" -ne 0 ]; then
+                echo "::error::阶段日志末标记读取失败（I/O 错误）：$base class=io tool=tail rc=$marker_rc"
+                bad=1
+                bad_io=$((bad_io + 1))
+                continue
+              fi
+              # 只在**本文件零违规**时回显：schema 严格且无敏感命中的一行按构造不可能
+              # 携带令牌，但一旦本文件被判违规，再回显原文就等于把泄漏复制到 console。
+              echo "last marker $base: $marker"
+            else
+              echo "last marker $base: <withheld: file has violations>"
+            fi
+            echo "lines $base: $lines"
           done
-          if grep -Eqi 'ACCESS-CANARY|REFRESH-CANARY|Bearer|Authorization|__pimToken|token\.json|127\.0\.0\.1|sessionStorage|localStorage|document\.cookie' "$PHASES"/*.log; then
-            echo "::error::阶段日志疑似包含凭据/页面内容/地址"
-            grep -Ein 'ACCESS-CANARY|REFRESH-CANARY|Bearer|Authorization|__pimToken|token\.json|127\.0\.0\.1|sessionStorage|localStorage|document\.cookie' "$PHASES"/*.log | head -10
-            bad=1
-          fi
-          # 落盘证据：每个文件最后一条 = 进程被杀时仍留在磁盘上的最后标记。
-          for f in "$PHASES"/*.log; do
-            echo "last marker $(basename "$f"): $(tail -n 1 "$f")"
-            echo "lines $(basename "$f"): $(wc -l < "$f")"
-          done
+
+          echo "facility summary: schema=$bad_schema range=$bad_range secret=$bad_secret empty=$empty_files io=$bad_io"
+
           if [ "$bad" -ne 0 ]; then
             echo "::error::阶段日志设施检查未通过"
             exit 1
