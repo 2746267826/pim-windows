@@ -112,17 +112,76 @@ jobs:
         run: dotnet test tests/Pim.Client.Tests/Pim.Client.Tests.csproj --logger "console;verbosity=minimal"
 
   # 客户端测试（Windows 专属部分）：依赖 WPF / WinForms 组件，只能在 Windows 上跑。
+  #
+  # 真实 Web bundle 联调前置（运行期 glue，不是产品逻辑）：
+  # Harness_RealWebView2_LoadsActualWebDistAndEstablishesHostSessionChain 需要真实 web dist，
+  # 缺 dist 时该用例 fail-closed（不 skip、不删断言、不伪造产物）。本 job 因此：
+  #   1) 以**字面 40 位 SHA** pin 检出 pim-web 产品分支 head（不浮动 master、不用 placeholder）；
+  #   2) 核对检出后的 HEAD 必须等于该 40 位 SHA；
+  #   3) 用 pin 住的 lockfile npm ci 并构建真实 dist；
+  #   4) 记录 dist 内容 hash 与来源 SHA；
+  #   5) 把 dist 路径以 PIM_WEB_DIST_DIR 传给 test-client-app。
   test-client-app:
     needs: [resolve-version]
     runs-on: windows-latest
+    env:
+      # pim-web PR#6（产品：typed client / native host session / ICS）真实 head。
+      PIM_WEB_PIN_SHA: 489a9dd6f11ebb045a47ef2a0599bd7c8a102b44
     steps:
       - uses: actions/checkout@v4
+
+      - name: Checkout pinned pim-web (products head, literal 40-char SHA)
+        uses: actions/checkout@v4
+        with:
+          repository: 2746267826/pim-web
+          ref: ${{ env.PIM_WEB_PIN_SHA }}
+          path: .pim-web
+          persist-credentials: false
+
+      - name: Verify checked-out HEAD is exactly the pinned 40-char SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git -C .pim-web rev-parse HEAD)"
+          echo "pim-web pinned source SHA: $actual"
+          if [ "$actual" != "$PIM_WEB_PIN_SHA" ]; then
+            echo "::error::pim-web checkout HEAD $actual != pinned $PIM_WEB_PIN_SHA"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: .pim-web/client-web/package-lock.json
+
+      - name: Install web dependencies from the pinned lockfile
+        working-directory: .pim-web/client-web
+        run: npm ci
+
+      - name: Build the real web dist consumed by the Windows harness
+        working-directory: .pim-web/client-web
+        run: npm run build
+
+      - name: Record dist hash and source SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .pim-web/client-web/dist/index.html
+          DIST_INDEX_SHA256="$(sha256sum .pim-web/client-web/dist/index.html | cut -d' ' -f1)"
+          {
+            echo "pim_web_source_sha=$PIM_WEB_PIN_SHA"
+            echo "pim_web_dist_dir=$GITHUB_WORKSPACE/.pim-web/client-web/dist"
+            echo "pim_web_dist_index_sha256=$DIST_INDEX_SHA256"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: Run Windows-only client tests
+      - name: Run Windows-only client tests against the real web dist
+        env:
+          PIM_WEB_DIST_DIR: ${{ github.workspace }}/.pim-web/client-web/dist
         run: dotnet test tests/Pim.Client.App.Tests/Pim.Client.App.Tests.csproj --logger "console;verbosity=minimal"
 
 
