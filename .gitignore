@@ -20,6 +20,7 @@ Usersa2746AppDataLocalnpm-cache/
 **/Usersa2746AppDataLocalnpm-cache/
 
 ## Local tooling and generated state
+TestResults/
 .dotnet-appdata/
 .dotnet-home/
 .dotnet-tools/
