@@ -86,8 +86,29 @@ public sealed class HostSessionWindowsHarnessTests
         OuterAssertsBefore = 13,
         OriginalAssertsComplete = 14,
 
+        // 最小退出诊断（round6 准入）：PushFrame 返回 → Join 之间是当前最窄可证实窗口。
+        // ThreadJoinBefore = 调用 Thread.Join 之前（写在**测试线程**，语义不变）。
+        // ThreadDelegateReturnBefore = STA 线程委托体 `return` 之前的最后一条，
+        //   写在 PushFrameReturn **之后**（round8 按 I-2 返修：原先误放在 InvokeAsync
+        //   回调的 finally 里，那仍然早于 PushFrame 返回，无法证明委托体末尾）。
+        // 两者都只是固定标记，不改关闭/消息泵语义。
+        ThreadDelegateReturnBefore = 15,
+        ThreadJoinBefore = 16,
+
+        // Dispatcher 关停旁观测（在所属 STA 上订阅，只记不设 Handled，不改关闭语义）。
+        DispatcherShutdownStarted = 17,
+        DispatcherShutdownFinished = 18,
+
+        // Dispatcher.UnhandledException 旁观测：只记安全字段，绝不设 Handled=true。
+        DispatcherUnhandledObserved = 19,
+
         RuntimeQueryBefore = 20,
         RuntimeQueryAfter = 21,
+        // WebView2 版本第 index 段（0..3）。fl=1 已解析，fl=0 非数字 → n2=-1 明确标未知，
+        // 不再把四段压成一个可歧义解码的整数（M-2）。
+        // 注意：既有事件的数值一律保持不变（round6 已落盘的 40 行证据依赖它们），
+        // 新事件只占用此前未使用的号段。
+        RuntimeVersionPart = 31,
         FakeServerCreateBefore = 22,
         FakeServerCreateAfter = 23,
         HostConstructBefore = 24,
@@ -117,6 +138,12 @@ public sealed class HostSessionWindowsHarnessTests
         BodyReturnBefore = 69,
         StaReturned = 70,
 
+        // 脚本轮询退出时的最终布尔与退出类型（M-1）。只记既有布尔，不写 JSON/HTML：
+        //   fl = 条件是否满足（userRendered && onToday）
+        //   n1 = 位图：bit0 userRendered / bit1 onToday / bit2 leaked
+        //   n2 = 退出类型（见 ScriptExitKind）
+        ScriptLoopExit = 71,
+
         WindowCloseBefore = 80,
         WindowCloseAfter = 81,
         WindowCloseCaught = 82,
@@ -129,12 +156,28 @@ public sealed class HostSessionWindowsHarnessTests
         PhaseWriteFailed = 90,
     }
 
+    /// <summary>
+    /// 脚本轮询退出的固定原因分类（写入 ScriptLoopExit 的 n2）。没有自由字符串，
+    /// 没有页面内容，只区分「条件已满足」与「到期仍未满足」两种既有行为。
+    /// </summary>
+    private enum ScriptExitKind
+    {
+        ConditionMet = 0,
+        DeadlineExpired = 1,
+    }
+
+    /// <summary>ScriptLoopExit 的 n1 位图布局（对应脚本已返回的三个既有布尔）。</summary>
+    private const long ScriptFlagUserRendered = 1L << 0;
+
+    private const long ScriptFlagOnToday = 1L << 1;
+    private const long ScriptFlagLeaked = 1L << 2;
+
     private sealed class PhaseLog : IDisposable
     {
         private static readonly Lazy<DirectoryInfo> PhaseDirectory = new(ResolveDirectory, isThreadSafe: true);
 
         private readonly object _gate = new();
-        private readonly StreamWriter _writer;
+        private StreamWriter? _writer;
         private readonly string _fixtureId;
         private readonly int _processId = Environment.ProcessId;
 
@@ -174,23 +217,34 @@ public sealed class HostSessionWindowsHarnessTests
             => WriteCore(ev, ex.GetType().FullName, null, ex.HResult, null);
 
         /// <summary>
-        /// 记录已解析出的 WebView2 运行时数字版本（打包成单个整数；非纯数字 → -1）。
+        /// 记录已解析出的 WebView2 运行时版本：**每段一个固定数值事件**，共 4 段
+        /// （major/minor/build/revision）。fl=1 表示该段已解析，fl=0 表示该段非数字或缺失
+        /// → n2=-1，明确标未知，绝不静默转 0。
         /// 只含数字，不含路径或任何用户数据。
         /// </summary>
         public void WriteRuntimeVersion(string version)
         {
             var parts = version.Split('.');
-            if (parts.Length is < 1 or > 4 || !TryParseDigits(parts[0], out var major))
+            if (parts.Length > 4)
             {
-                Write(PhaseEvent.RuntimeQueryAfter, n1: -1);
-                return;
+                parts = new[] { parts[0], parts[1], parts[2], parts[3], string.Empty };
             }
 
-            long minor = 0, build = 0, revision = 0;
-            if (parts.Length > 1 && !TryParseDigits(parts[1], out minor)) minor = 0;
-            if (parts.Length > 2 && !TryParseDigits(parts[2], out build)) build = 0;
-            if (parts.Length > 3 && !TryParseDigits(parts[3], out revision)) revision = 0;
-            Write(PhaseEvent.RuntimeQueryAfter, n1: major * 1000000L + minor * 10000L + build * 100L + revision);
+            for (var index = 0; index < 4; index++)
+            {
+                if (index < parts.Length && TryParseDigits(parts[index], out var value))
+                {
+                    Write(PhaseEvent.RuntimeVersionPart, flag: true, n1: index, n2: value);
+                }
+                else
+                {
+                    Write(PhaseEvent.RuntimeVersionPart, flag: false, n1: index, n2: -1);
+                }
+            }
+
+            // 仍然保留「运行时版本查询返回」这个边界标记（n1 = 实际分段数），
+            // 让既有阶段链的形状不变；四段数值由上面的分分量事件单独给出。
+            Write(PhaseEvent.RuntimeQueryAfter, n1: parts.Length);
         }
 
         /// <summary>
@@ -208,14 +262,40 @@ public sealed class HostSessionWindowsHarnessTests
             }
         }
 
+        /// <summary>
+        /// 把**最终关闭**与健康断言整合到非回调测试边界（I-4）。
+        ///
+        /// 原来的 <see cref="EnsureHealthy"/> 在原断言后调用，而 <c>using var</c> 的
+        /// <see cref="Dispose"/> 在它之后才执行；末尾的 Flush/Dispose 失败只会被
+        /// catch 掉置位，于是「最终关闭失败」可能被读成通过。
+        ///
+        /// 这里在测试边界（非 WebView2 回调栈）先显式关闭并重新检查健康，再返回；
+        /// 关闭后 <see cref="Dispose"/> 保持幂等，<c>using</c> 语义与原 cleanup 顺序不变。
+        /// </summary>
+        public void CloseAndEnsureHealthy()
+        {
+            CloseCore();
+
+            lock (_gate)
+            {
+                if (_writeFailed)
+                {
+                    throw new Xunit.Sdk.XunitException(
+                        "诊断阶段日志最终关闭（Flush/Dispose）失败：阶段证据不完整，不能据此判定通过。");
+                }
+            }
+        }
+
         private void WriteCore(PhaseEvent ev, string? typeName, bool? flag, long? n1, long? n2)
         {
-            var line = BuildLine(ev, typeName, flag, n1, n2);
-
+            // 取 q、读 cur、拼行、写入、flush 全部在同一把 writer 锁内完成（M-3）：
+            // 锁外构造会让一个线程先取到 q 再被阻塞，另一个线程先落盘，
+            // 于是磁盘上的 q 出现倒序、cur 变成陈旧值。
             lock (_gate)
             {
                 try
                 {
+                    var line = BuildLine(ev, typeName, flag, n1, n2);
                     _writer.Write(line);
                     _writer.Write('\n');
                     _writer.Flush();
@@ -223,8 +303,8 @@ public sealed class HostSessionWindowsHarnessTests
                 catch (Exception)
                 {
                     // 故意不在这里抛：这些 Write 可能发生在 WebView2 回调栈上，
-                    // 抛出会引入原本不存在的崩溃路径。改为置位，由 EnsureHealthy
-                    // 在夹具边界把「诊断设施失败」明确报成 FAIL。
+                    // 抛出会引入原本不存在的崩溃路径。改为置位，由 EnsureHealthy /
+                    // CloseAndEnsureHealthy 在夹具边界把「诊断设施失败」明确报成 FAIL。
                     _writeFailed = true;
                     return;
                 }
@@ -269,8 +349,23 @@ public sealed class HostSessionWindowsHarnessTests
 
         public void Dispose()
         {
+            CloseCore();
+        }
+
+        /// <summary>
+        /// 关闭 writer（幂等）。失败只置位不抛：Dispose 可能由 <c>using</c> 在异常展开时
+        /// 调用，也可能在 WebView2 回调栈上；真正的判定由
+        /// <see cref="CloseAndEnsureHealthy"/> 在非回调测试边界做。
+        /// </summary>
+        private void CloseCore()
+        {
             lock (_gate)
             {
+                if (_writer is null)
+                {
+                    return;
+                }
+
                 try
                 {
                     _writer.Flush();
@@ -279,6 +374,10 @@ public sealed class HostSessionWindowsHarnessTests
                 catch (Exception)
                 {
                     _writeFailed = true;
+                }
+                finally
+                {
+                    _writer = null;
                 }
             }
         }
@@ -471,7 +570,9 @@ public sealed class HostSessionWindowsHarnessTests
         Assert.Null(outcome.ExtAuth);
 
         phase.Write(PhaseEvent.OriginalAssertsComplete);
-        phase.EnsureHealthy();
+        // 非回调测试边界：先把诊断日志最终关闭，再判定设施健康（I-4）。
+        // 原断言的判定优先级不变 —— 这一行在所有原 Assert 之后才执行。
+        phase.CloseAndEnsureHealthy();
     }
 
     [Fact]
@@ -558,6 +659,16 @@ public sealed class HostSessionWindowsHarnessTests
             var userRendered = pageCheck.RootElement.GetProperty("userRendered").GetBoolean();
             var onToday = pageCheck.RootElement.GetProperty("onToday").GetBoolean();
 
+            // M-1：把轮询退出时的既有布尔与退出原因记成固定位图/枚举，让
+            // 「成功靠近 deadline」与「条件始终未满足」可区分。只写布尔和位图，
+            // 不写 JSON/HTML/页面正文，不改脚本、等待或任何原 Assert。
+            var conditionMet = userRendered && onToday;
+            var scriptBitmap = (userRendered ? ScriptFlagUserRendered : 0L)
+                | (onToday ? ScriptFlagOnToday : 0L)
+                | (leaked ? ScriptFlagLeaked : 0L);
+            var exitKind = conditionMet ? ScriptExitKind.ConditionMet : ScriptExitKind.DeadlineExpired;
+            phase.Write(PhaseEvent.ScriptLoopExit, flag: conditionMet, n1: scriptBitmap, n2: (long)exitKind);
+
             // 注意：`using var fixture` 的 Dispose 在这个 return 之后才发生，
             // 所以 body-return-before 不代表清理已完成（两者必须能分开判读）。
             phase.Write(PhaseEvent.BodyReturnBefore);
@@ -579,7 +690,9 @@ public sealed class HostSessionWindowsHarnessTests
         Assert.False(tokenLeakedInStorage, "真实页面在 sessionStorage/localStorage/window.__pimToken 中泄露了访问令牌");
 
         phase.Write(PhaseEvent.OriginalAssertsComplete);
-        phase.EnsureHealthy();
+        // 非回调测试边界：先把诊断日志最终关闭，再判定设施健康（I-4）。
+        // 原断言的判定优先级不变 —— 这一行在所有原 Assert 之后才执行。
+        phase.CloseAndEnsureHealthy();
     }
 
     [Fact]
@@ -655,7 +768,9 @@ public sealed class HostSessionWindowsHarnessTests
             result.AfterCancelRefresh.GetProperty("reason").GetString());
 
         phase.Write(PhaseEvent.OriginalAssertsComplete);
-        phase.EnsureHealthy();
+        // 非回调测试边界：先把诊断日志最终关闭，再判定设施健康（I-4）。
+        // 原断言的判定优先级不变 —— 这一行在所有原 Assert 之后才执行。
+        phase.CloseAndEnsureHealthy();
     }
 
     [Fact]
@@ -698,7 +813,9 @@ public sealed class HostSessionWindowsHarnessTests
         Assert.True(report.Page.GetProperty("handshakeMatches").GetBoolean());
 
         phase.Write(PhaseEvent.OriginalAssertsComplete);
-        phase.EnsureHealthy();
+        // 非回调测试边界：先把诊断日志最终关闭，再判定设施健康（I-4）。
+        // 原断言的判定优先级不变 —— 这一行在所有原 Assert 之后才执行。
+        phase.CloseAndEnsureHealthy();
     }
 
     [Fact]
@@ -939,6 +1056,21 @@ public sealed class HostSessionWindowsHarnessTests
             phase.Write(PhaseEvent.ThreadStart);
             var dispatcher = Dispatcher.CurrentDispatcher;
             phase.Write(PhaseEvent.DispatcherCreated);
+
+            // 最小退出诊断（round6 准入）：在所属 STA 上旁观测 Dispatcher 的关停开始/结束，
+            // 以及未处理异常的安全最小字段。全部只读、绝不设 Handled、绝不吞异常、
+            // 不改关闭顺序或消息泵语义 —— handler 退出后原有崩溃行为完全不变。
+            dispatcher.ShutdownStarted += (_, _) =>
+                phase.Write(PhaseEvent.DispatcherShutdownStarted);
+            dispatcher.ShutdownFinished += (_, _) =>
+                phase.Write(PhaseEvent.DispatcherShutdownFinished);
+            dispatcher.UnhandledException += (_, args) =>
+            {
+                // 只记类型名与 HResult；绝不碰 Message/ToString/Data/InnerException，
+                // 绝不设置 args.Handled（保持未处理异常的原有语义）。
+                phase.WriteException(PhaseEvent.DispatcherUnhandledObserved, args.Exception);
+            };
+
             var frame = new DispatcherFrame();
             _ = dispatcher.InvokeAsync(async () =>
             {
@@ -965,6 +1097,22 @@ public sealed class HostSessionWindowsHarnessTests
             });
             Dispatcher.PushFrame(frame);
             phase.Write(PhaseEvent.PushFrameReturn);
+            // I-2（round8 返修）：**本标记已移到 STA 线程委托体的真实末尾。**
+            //
+            // 旧位置在 `InvokeAsync` 回调的 `finally` 里，即「回调即将返回」处 ——
+            // 那个点仍然早于 `Dispatcher.PushFrame(frame)` 返回，写出来的值不足以证明
+            // 「STA 委托在 PushFrame 返回之后才结束」，更不足以覆盖 STA 线程末尾。
+            //
+            // 现在它写在 `PushFrameReturn` 之后、STA 线程委托体 `return` 之前的**最后一条**，
+            // 于是它在磁盘上的位置同时证明两件事（顺序）：
+            //   ShutdownRequestAfter（回调内）→ PushFrameReturn → ThreadDelegateReturnBefore
+            // 即「消息泵已返回、委托体尚未返回」，把 round6 给出的最窄窗口进一步夹到
+            // `PushFrameReturn` 与本标记之间。
+            //
+            // 只新增一条固定标记：不改 PushFrame、shutdown、Join 或 cleanup 的任何顺序语义，
+            // 不提前关闭、不截断测试、不跳过断言；委托体返回后没有任何动作，
+            // 因此本标记仍是 STA 线程上最后一次落盘尝试。
+            phase.Write(PhaseEvent.ThreadDelegateReturnBefore);
         })
         {
             IsBackground = true,
@@ -972,6 +1120,10 @@ public sealed class HostSessionWindowsHarnessTests
         };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
+
+        // Join 之前的固定标记：与上一个已落盘的 PushFrameReturn 一起，把当前最窄
+        // 可证实窗口（PushFrame 返回之后、Join 记录之前）夹住。
+        phase.Write(PhaseEvent.ThreadJoinBefore);
 
         if (!thread.Join(timeoutMs))
         {
