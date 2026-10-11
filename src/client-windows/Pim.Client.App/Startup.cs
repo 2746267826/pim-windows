@@ -31,9 +31,7 @@ public static class Startup
         services.AddSingleton<KeyStatsCollectorService>();
         services.AddSingleton<DaemonHeartbeatReporter>();
         services.AddSingleton<PlannedOfflineReporter>();
-        services.AddSingleton<Pim.Client.Core.Services.NotificationActionRouter>();
         services.AddSingleton<EndpointCollectionBoundaryService>();
-        services.AddSingleton<NotificationActionRouter>();
         services.AddSingleton<TrayIcon>();
 
         return services.BuildServiceProvider();

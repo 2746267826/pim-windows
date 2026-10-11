@@ -171,7 +171,14 @@ public sealed class SiteEventDto
     [JsonPropertyName("endMs")] public long? EndMs { get; set; }
     [JsonPropertyName("durationMs")] public long? DurationMs { get; set; }
     [JsonPropertyName("date")] public string? Date { get; set; }
-    [JsonPropertyName("at")] public long? At { get; set; }
+
+    /// <summary>
+    /// 站点级事件的本地时间戳（毫秒）。归一化时在本地保留，供本机诊断/排序使用，
+    /// 但**不上送**：契约 <c>SiteEventUploadDto</c> 是 <c>additionalProperties:false</c>
+    /// 且没有 <c>at</c> 属性（审计 F-01），因此这里只做本地时间保留，
+    /// 序列化时被 <see cref="JsonIgnoreAttribute"/> 排除，不会出现在 /pc/browser-tt/upload 的请求体里。
+    /// </summary>
+    [JsonIgnore] public long? At { get; set; }
 }
 
 public sealed class SiteEventsRequest

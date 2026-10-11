@@ -1,14 +1,22 @@
+using System;
+using System.Text.Json;
 using Pim.Client.Core;
 using Pim.Client.Core.Services;
-using Pim.Core.Operations;
-using System.Text.Json;
 using Xunit;
-
-using ApiDaemonHeartbeatRequest = Pim.Core.Operations.DaemonHeartbeatRequest;
 
 namespace Pim.UnitTests.ClientWindows;
 
-public class DaemonHeartbeatReporterTests
+/// <summary>
+/// 审计整改 round5 · REQ-COM-02 / REQ-COM-06（F-10）：从**不被编译的孤儿文件**
+/// <c>DaemonHeartbeatReporterTests.cs</c> 迁移出来的 4 条**只依赖客户端类型**的用例
+/// （BuildHeartbeat 的默认值/状态字段/statusDetails → StatusJson 内容）。
+///
+/// 第 5 条 <c>ClientHeartbeatJson_DeserializesIntoApiRequestContract</c> 需要后端程序集
+/// <c>Pim.Core.Operations.DaemonHeartbeatRequest</c>，**不可移植**；其归属与真实验证条件
+/// 见 <c>tests/ClientWindows/BACKEND-OWNED-CASES.md</c>（保持 NOT-VERIFIED）。
+/// 心跳请求体的字段/类型契约由 <c>ContractWireShapeTests</c> 的真实现场字节用例覆盖。
+/// </summary>
+public sealed class DaemonHeartbeatReporterClientTests
 {
     [Fact]
     public void BuildHeartbeat_UsesIpv4LoopbackDefaultServerUrl()
@@ -86,30 +94,5 @@ public class DaemonHeartbeatReporterTests
         Assert.Equal("ApiOkButStaleZero", status.RootElement.GetProperty("keyStatsDetailState").GetString());
         Assert.Equal(2, status.RootElement.GetProperty("keyStatsProcessCount").GetInt32());
         Assert.Equal("stale-zero", status.RootElement.GetProperty("keyStatsSkipReason").GetString());
-    }
-
-    [Fact]
-    public void ClientHeartbeatJson_DeserializesIntoApiRequestContract()
-    {
-        var heartbeat = DaemonHeartbeatReporter.BuildHeartbeat(
-            "device-1",
-            "1.0.0",
-            ClientDefaults.DefaultServerUrl,
-            DateTimeOffset.Parse("2026-05-24T00:00:00Z"),
-            DateTimeOffset.Parse("2026-05-24T00:01:00Z"),
-            null,
-            uploadQueueCount: 1,
-            activityWatchState: "Available",
-            keyStatsState: "Unavailable");
-        var json = JsonSerializer.Serialize(heartbeat, new JsonSerializerOptions(JsonSerializerDefaults.Web));
-
-        var request = JsonSerializer.Deserialize<ApiDaemonHeartbeatRequest>(
-            json,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web));
-
-        Assert.NotNull(request);
-        Assert.Equal(DaemonSourceState.Available, request.ActivityWatchState);
-        Assert.Equal(DaemonSourceState.Unavailable, request.KeyStatsState);
-        Assert.Equal(1, request.UploadQueueCount);
     }
 }
