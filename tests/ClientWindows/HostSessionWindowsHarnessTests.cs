@@ -631,10 +631,26 @@ public sealed class HostSessionWindowsHarnessTests
                         const localHas = JSON.stringify(localStorage).indexOf(needle) >= 0;
                         const cookieHas = document.cookie.indexOf(needle) >= 0;
                         const pimTokenHas = (typeof window.__pimToken !== 'undefined') && String(window.__pimToken).indexOf(needle) >= 0;
+                        // 最低用户入口设施（Round 10）：读取实际 WebView2 innerWidth 并与真实抽屉交互
+                        const width = window.innerWidth;
+                        const onToday = location.pathname === '/today';
+                        let userRendered = document.body.innerText.indexOf('Tester') >= 0;
+
+                        // 若处于移动/紧凑断点且尚未展现用户名，点击真实“打开导航”Drawer 按钮并等待抽屉展开
+                        const drawerBtn = document.querySelector('button[aria-label="打开导航"]');
+                        if (!userRendered && onToday && drawerBtn) {
+                            drawerBtn.click();
+                        }
+
+                        userRendered = document.body.innerText.indexOf('Tester') >= 0;
+
                         return {
+                            innerWidth: width,
+                            drawerBtnFound: Boolean(drawerBtn),
+                            drawerOpened: Boolean(document.querySelector('.pim-drawer-left, [data-state="open"]')),
                             leaked: html.indexOf(needle) >= 0 || sessionHas || localHas || cookieHas || pimTokenHas,
-                            userRendered: document.body.innerText.indexOf('Tester') >= 0,
-                            onToday: location.pathname === '/today'
+                            userRendered: userRendered,
+                            onToday: onToday
                         };
                     })()
                 """);
@@ -1432,6 +1448,20 @@ public sealed class HostSessionWindowsHarnessTests
             else if (path == "/api/v1/auth/me")
             {
                 payload = """{"code":0,"message":"ok","data":{"id":"u-1","username":"tester","displayName":"Tester","role":"user"}}""";
+                contentType = "application/json";
+                status = 200;
+            }
+            else if (context.Request.HttpMethod == "GET" &&
+                     (path == "/api/v1/calendar/calendars" || path == "/api/v1/calendar/task-books"))
+            {
+                payload = """{"code":0,"message":"ok","data":[]}""";
+                contentType = "application/json";
+                status = 200;
+            }
+            else if (context.Request.HttpMethod == "GET" && path == "/api/v1/today/sections")
+            {
+                // Synthetic empty registry for host-session fixture; not real Today data acceptance.
+                payload = """{"code":0,"message":"ok","data":{"date":"2026-10-11","pcBusinessDate":"2026-10-11","generatedAt":"2026-10-11T00:00:00Z","sections":[]}}""";
                 contentType = "application/json";
                 status = 200;
             }
