@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -48,17 +49,367 @@ public sealed class HostSessionWindowsHarnessTests
     private const string PageNonce = "nonce_12chars";
     private const string PageReadyRequestId = "req-ready-1";
 
+    // ---------------------------------------------------------------------
+    // 诊断阶段日志（仅诊断设施，不改变任何断言、等待时长、清理顺序或 WebView2 配置）。
+    //
+    // 目的：Windows runner 上 testhost FailFast 时能定位崩溃窗口（初始化 / 导航 /
+    // 脚本等待 / 清理）。设计约束（来自 round5 只读诊断）：
+    //
+    //   1. 固定字段 + 固定枚举数值，没有任意字符串入口，也不公开 Log(string payload)。
+    //   2. 不写令牌 / Authorization / cookie / 页面正文 / 请求体 / URL / 用户目录路径 /
+    //      DPAPI 内容；不读 Source，不碰 CurrentUICulture，不格式化异常对象。
+    //   3. 每条同步 Write + Flush，FailFast 杀掉进程也留得住最后一条（逐条落盘，
+    //      不依赖 xUnit 缓冲的 ITestOutputHelper）。
+    //   4. 目录不可用 → Open 直接抛（fail-closed），绝不静默「没有日志就当通过」。
+    //   5. 中途写失败 → 记 PhaseWriteFailed 并置位，由 EnsureHealthy 显式 FAIL；
+    //      这样 WebView2 回调栈里不会多出新崩溃路径，也不会把诊断错误当成功。
+    //
+    // 行格式（全部为固定键，无值域拼接）：
+    //   s=1 pid=<int> f=<8hex> q=<seq> ts=<Stopwatch ticks> tid=<int> apt=<0|1|2|3>
+    //   cur=<上一阶段数值> ev=<本阶段数值> fl=<0|1|-> n1=<int|-> n2=<int|-> [xt=<异常类型名>]
+    // ---------------------------------------------------------------------
+
+    private enum PhaseEvent
+    {
+        ThreadStart = 1,
+        DispatcherCreated = 2,
+        BodyEnter = 3,
+        BodyReturn = 4,
+        BodyException = 5,
+        FrameStopBefore = 6,
+        FrameStopAfter = 7,
+        ShutdownRequestBefore = 8,
+        ShutdownRequestAfter = 9,
+        PushFrameReturn = 10,
+        ThreadJoined = 11,
+        ThreadJoinTimeout = 12,
+        OuterAssertsBefore = 13,
+        OriginalAssertsComplete = 14,
+
+        RuntimeQueryBefore = 20,
+        RuntimeQueryAfter = 21,
+        FakeServerCreateBefore = 22,
+        FakeServerCreateAfter = 23,
+        HostConstructBefore = 24,
+        HostConstructAfter = 25,
+        WindowShowBefore = 26,
+        WindowShowAfter = 27,
+        HostInitBefore = 28,
+        HostInitAfter = 29,
+        FixtureReturn = 30,
+
+        CoreInitSucceeded = 40,
+        CoreInitFailed = 41,
+        NavigationStarting = 42,
+        NavigationSucceeded = 43,
+        NavigationFailed = 44,
+        WebProcessFailed = 45,
+
+        LoginBefore = 60,
+        LoginAfter = 61,
+        NavigateBefore = 62,
+        NavigateAfter = 63,
+        AuthMeWaitBefore = 64,
+        AuthMeWaitAfter = 65,
+        ScriptFirstBefore = 66,
+        ScriptFirstAfter = 67,
+        ScriptLoopEnd = 68,
+        BodyReturnBefore = 69,
+        StaReturned = 70,
+
+        WindowCloseBefore = 80,
+        WindowCloseAfter = 81,
+        WindowCloseCaught = 82,
+        ApiDisposeBefore = 83,
+        ApiDisposeAfter = 84,
+        ExternalDisposeBefore = 85,
+        ExternalDisposeAfter = 86,
+        DisposeReturn = 87,
+
+        PhaseWriteFailed = 90,
+    }
+
+    private sealed class PhaseLog : IDisposable
+    {
+        private static readonly Lazy<DirectoryInfo> PhaseDirectory = new(ResolveDirectory, isThreadSafe: true);
+
+        private readonly object _gate = new();
+        private readonly StreamWriter _writer;
+        private readonly string _fixtureId;
+        private readonly int _processId = Environment.ProcessId;
+
+        private long _sequence;
+        private int _previous = -1;
+        private bool _writeFailed;
+
+        private PhaseLog(string fixtureId, StreamWriter writer)
+        {
+            _fixtureId = fixtureId;
+            _writer = writer;
+        }
+
+        /// <summary>
+        /// 为一个夹具打开独立阶段日志文件（不同夹具不混写）。
+        /// 目录无法确定或无法创建 → 直接抛（fail-closed）：宁可让用例显式 FAIL，
+        /// 也不能出现「没有阶段证据却被读成通过」。
+        /// </summary>
+        public static PhaseLog Open()
+        {
+            var id = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var path = Path.Combine(PhaseDirectory.Value.FullName, id + ".log");
+            var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+            return new PhaseLog(id, new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = false });
+        }
+
+        /// <summary>记录一个固定阶段标记。</summary>
+        public void Write(PhaseEvent ev, bool? flag = null, long? n1 = null, long? n2 = null)
+            => WriteCore(ev, null, flag, n1, n2);
+
+        /// <summary>
+        /// 记录异常的安全最小字段：仅 <c>ex.GetType().FullName</c>（框架/应用类型名）
+        /// 与 <c>ex.HResult</c>。绝不调用 ToString / Message / Data / InnerException，
+        /// 绝不改变原 catch、rethrow 或 failure 保存语义。
+        /// </summary>
+        public void WriteException(PhaseEvent ev, Exception ex)
+            => WriteCore(ev, ex.GetType().FullName, null, ex.HResult, null);
+
+        /// <summary>
+        /// 记录已解析出的 WebView2 运行时数字版本（打包成单个整数；非纯数字 → -1）。
+        /// 只含数字，不含路径或任何用户数据。
+        /// </summary>
+        public void WriteRuntimeVersion(string version)
+        {
+            var parts = version.Split('.');
+            if (parts.Length is < 1 or > 4 || !TryParseDigits(parts[0], out var major))
+            {
+                Write(PhaseEvent.RuntimeQueryAfter, n1: -1);
+                return;
+            }
+
+            long minor = 0, build = 0, revision = 0;
+            if (parts.Length > 1 && !TryParseDigits(parts[1], out minor)) minor = 0;
+            if (parts.Length > 2 && !TryParseDigits(parts[2], out build)) build = 0;
+            if (parts.Length > 3 && !TryParseDigits(parts[3], out revision)) revision = 0;
+            Write(PhaseEvent.RuntimeQueryAfter, n1: major * 1000000L + minor * 10000L + build * 100L + revision);
+        }
+
+        /// <summary>
+        /// 阶段证据不完整时显式 FAIL。放在原断言之后调用：原断言的判定优先级不变。
+        /// </summary>
+        public void EnsureHealthy()
+        {
+            lock (_gate)
+            {
+                if (_writeFailed)
+                {
+                    throw new Xunit.Sdk.XunitException(
+                        "诊断阶段日志写入失败：阶段证据不完整，不能据此判定通过。");
+                }
+            }
+        }
+
+        private void WriteCore(PhaseEvent ev, string? typeName, bool? flag, long? n1, long? n2)
+        {
+            var line = BuildLine(ev, typeName, flag, n1, n2);
+
+            lock (_gate)
+            {
+                try
+                {
+                    _writer.Write(line);
+                    _writer.Write('\n');
+                    _writer.Flush();
+                }
+                catch (Exception)
+                {
+                    // 故意不在这里抛：这些 Write 可能发生在 WebView2 回调栈上，
+                    // 抛出会引入原本不存在的崩溃路径。改为置位，由 EnsureHealthy
+                    // 在夹具边界把「诊断设施失败」明确报成 FAIL。
+                    _writeFailed = true;
+                    return;
+                }
+
+                _previous = (int)ev;
+            }
+        }
+
+        private string BuildLine(PhaseEvent ev, string? typeName, bool? flag, long? n1, long? n2)
+        {
+            var sb = new StringBuilder(192);
+            sb.Append("s=1 pid=");
+            AppendInt(sb, _processId);
+            sb.Append(" f=");
+            sb.Append(_fixtureId);
+            sb.Append(" q=");
+            AppendInt(sb, Interlocked.Increment(ref _sequence));
+            sb.Append(" ts=");
+            AppendInt(sb, Stopwatch.GetTimestamp());
+            sb.Append(" tid=");
+            AppendInt(sb, Environment.CurrentManagedThreadId);
+            sb.Append(" apt=");
+            AppendInt(sb, ApartmentCode());
+            sb.Append(" cur=");
+            AppendInt(sb, _previous);
+            sb.Append(" ev=");
+            AppendInt(sb, (int)ev);
+            sb.Append(" fl=");
+            AppendInt(sb, flag is null ? -1 : flag.Value ? 1 : 0);
+            sb.Append(" n1=");
+            AppendInt(sb, n1 ?? -1);
+            sb.Append(" n2=");
+            AppendInt(sb, n2 ?? -1);
+            if (typeName is not null)
+            {
+                sb.Append(" xt=");
+                AppendTypeName(sb, typeName);
+            }
+
+            return sb.ToString();
+        }
+
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                try
+                {
+                    _writer.Flush();
+                    _writer.Dispose();
+                }
+                catch (Exception)
+                {
+                    _writeFailed = true;
+                }
+            }
+        }
+
+        private static int ApartmentCode()
+            => Thread.CurrentThread.GetApartmentState() switch
+            {
+                ApartmentState.STA => 1,
+                ApartmentState.MTA => 2,
+                _ => 3,
+            };
+
+        /// <summary>按位写出十进制整数：不经过 int.ToString()/string.Format，绕开任何区域性格式化。</summary>
+        private static void AppendInt(StringBuilder sb, long value)
+        {
+            if (value < 0)
+            {
+                sb.Append('-');
+                WriteDigits(sb, unchecked((ulong)(-(value + 1))) + 1UL);
+                return;
+            }
+
+            WriteDigits(sb, (ulong)value);
+        }
+
+        private static void WriteDigits(StringBuilder sb, ulong magnitude)
+        {
+            Span<char> buffer = stackalloc char[20];
+            var index = buffer.Length;
+            do
+            {
+                buffer[--index] = (char)('0' + (int)(magnitude % 10UL));
+                magnitude /= 10UL;
+            }
+            while (magnitude != 0UL);
+
+            for (var i = index; i < buffer.Length; i++)
+            {
+                sb.Append(buffer[i]);
+            }
+        }
+
+        /// <summary>类型名只保留标识符字符并截断，避免任何自由文本进入日志。</summary>
+        private static void AppendTypeName(StringBuilder sb, string name)
+        {
+            var limit = name.Length > 160 ? 160 : name.Length;
+            for (var i = 0; i < limit; i++)
+            {
+                var c = name[i];
+                sb.Append((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                    || c == '.' || c == '_' || c == '+'
+                    ? c
+                    : '_');
+            }
+        }
+
+        private static bool TryParseDigits(string text, out long value)
+        {
+            value = 0;
+            if (text.Length == 0 || text.Length > 9)
+            {
+                return false;
+            }
+
+            foreach (var c in text)
+            {
+                if (c < '0' || c > '9')
+                {
+                    value = 0;
+                    return false;
+                }
+
+                value = (value * 10) + (c - '0');
+            }
+
+            return true;
+        }
+
+        private static DirectoryInfo ResolveDirectory()
+        {
+            var configured = Environment.GetEnvironmentVariable("PIM_PHASE_LOG_DIR");
+            if (!string.IsNullOrWhiteSpace(configured))
+            {
+                return Directory.CreateDirectory(configured);
+            }
+
+            var root = FindRepositoryRoot();
+            if (root is not null)
+            {
+                return Directory.CreateDirectory(Path.Combine(root.FullName, "TestResults", "client-app", "phases"));
+            }
+
+            throw new Xunit.Sdk.XunitException(
+                "无法确定诊断阶段日志目录：请在 runner 上把 PIM_PHASE_LOG_DIR 指向 TestResults/client-app/phases。");
+        }
+
+        private static DirectoryInfo? FindRepositoryRoot()
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir is not null)
+            {
+                if (Directory.Exists(Path.Combine(dir.FullName, ".github", "workflows"))
+                    && Directory.Exists(Path.Combine(dir.FullName, "tests", "ClientWindows")))
+                {
+                    return dir;
+                }
+
+                dir = dir.Parent;
+            }
+
+            return null;
+        }
+    }
+
     [Fact]
     public void Harness_RealWebView2_KeepsTokensOutOfThePageAndScopesBearerToTrustedApiRequests()
     {
-        var outcome = Sta(async () =>
+        using var phase = PhaseLog.Open();
+        var outcome = Sta(phase, async () =>
         {
-            using var fixture = await HostFixture.CreateAsync(ProbePage);
-            if (!await fixture.Auth.LoginAsync("harness", "secret"))
+            using var fixture = await HostFixture.CreateAsync(phase, ProbePage);
+            phase.Write(PhaseEvent.LoginBefore);
+            var loggedIn = await fixture.Auth.LoginAsync("harness", "secret");
+            phase.Write(PhaseEvent.LoginAfter, flag: loggedIn);
+            if (!loggedIn)
             {
                 throw new Xunit.Sdk.XunitException("Fake login failed before the authenticated WebView2 probe");
             }
+            phase.Write(PhaseEvent.NavigateBefore);
             await fixture.NavigateAsync("/today");
+            phase.Write(PhaseEvent.NavigateAfter);
 
             var body = await fixture.Api.WaitForBodyAsync("/api/report", TimeSpan.FromSeconds(90));
             var report = JsonDocument.Parse(body).RootElement.Clone();
@@ -79,6 +430,8 @@ public sealed class HostSessionWindowsHarnessTests
         });
 
         var report = outcome.Report;
+
+        phase.Write(PhaseEvent.OuterAssertsBefore);
 
         // 标记：常量脚本真的在文档创建前装上了。
         Assert.Equal("pim-host-windows", report.GetProperty("markerProduct").GetString());
@@ -116,6 +469,9 @@ public sealed class HostSessionWindowsHarnessTests
 
         Assert.True(outcome.ExtObserved, "Fake External 未观测到 /api/v1/ping");
         Assert.Null(outcome.ExtAuth);
+
+        phase.Write(PhaseEvent.OriginalAssertsComplete);
+        phase.EnsureHealthy();
     }
 
     [Fact]
@@ -129,26 +485,41 @@ public sealed class HostSessionWindowsHarnessTests
                 "等待 root 后续确定 pim-web PR head pinned sha 并将 web dist 产物传入 runner。");
         }
 
-        var (authMeSeen, authMeAuth, userJsonMatch, tokenLeakedInStorage) = Sta(async () =>
+        using var phase = PhaseLog.Open();
+        var (authMeSeen, authMeAuth, userJsonMatch, tokenLeakedInStorage) = Sta(phase, async () =>
         {
-            using var fixture = await HostFixture.CreateAsync(pageTemplate: null, webDistDir: distDir);
-            if (!await fixture.Auth.LoginAsync("harness", "secret"))
+            using var fixture = await HostFixture.CreateAsync(phase, pageTemplate: null, webDistDir: distDir);
+            phase.Write(PhaseEvent.LoginBefore);
+            var loggedIn = await fixture.Auth.LoginAsync("harness", "secret");
+            phase.Write(PhaseEvent.LoginAfter, flag: loggedIn);
+            if (!loggedIn)
             {
                 throw new Xunit.Sdk.XunitException("Fake login failed before the real web-dist probe");
             }
+            phase.Write(PhaseEvent.NavigateBefore);
             await fixture.NavigateAsync("/today");
+            phase.Write(PhaseEvent.NavigateAfter);
 
             // 等待页面启动并请求 /api/v1/auth/me
+            phase.Write(PhaseEvent.AuthMeWaitBefore);
             var authMeReq = await fixture.Api.WaitForRequestAsync("/api/v1/auth/me", TimeSpan.FromSeconds(60));
             var authMeSeen = authMeReq is not null;
             var authMeAuth = authMeReq?.Authorization;
+            phase.Write(PhaseEvent.AuthMeWaitAfter, flag: authMeSeen);
 
             // 检查 WebView2 脚本环境：验证无凭据泄露至 JS 可见存储
             var core = fixture.Host.View.CoreWebView2!;
             string? pageCheckJson = null;
             var pageDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+            var iteration = 0;
             while (DateTime.UtcNow < pageDeadline)
             {
+                if (iteration == 0)
+                {
+                    phase.Write(PhaseEvent.ScriptFirstBefore);
+                }
+
+                iteration++;
                 pageCheckJson = await core.ExecuteScriptAsync("""
                     (function() {
                         const cPfx = 'ACCESS-';
@@ -166,6 +537,11 @@ public sealed class HostSessionWindowsHarnessTests
                         };
                     })()
                 """);
+                if (iteration == 1)
+                {
+                    phase.Write(PhaseEvent.ScriptFirstAfter);
+                }
+
                 using var sample = JsonDocument.Parse(pageCheckJson);
                 if (sample.RootElement.GetProperty("userRendered").GetBoolean()
                     && sample.RootElement.GetProperty("onToday").GetBoolean())
@@ -175,11 +551,16 @@ public sealed class HostSessionWindowsHarnessTests
                 await Task.Delay(100);
             }
 
+            phase.Write(PhaseEvent.ScriptLoopEnd, n1: iteration);
             Assert.NotNull(pageCheckJson);
             using var pageCheck = JsonDocument.Parse(pageCheckJson);
             var leaked = pageCheck.RootElement.GetProperty("leaked").GetBoolean();
             var userRendered = pageCheck.RootElement.GetProperty("userRendered").GetBoolean();
             var onToday = pageCheck.RootElement.GetProperty("onToday").GetBoolean();
+
+            // 注意：`using var fixture` 的 Dispose 在这个 return 之后才发生，
+            // 所以 body-return-before 不代表清理已完成（两者必须能分开判读）。
+            phase.Write(PhaseEvent.BodyReturnBefore);
 
             return (
                 AuthMeSeen: authMeSeen,
@@ -189,19 +570,28 @@ public sealed class HostSessionWindowsHarnessTests
             );
         });
 
+        phase.Write(PhaseEvent.StaReturned);
+        phase.Write(PhaseEvent.OuterAssertsBefore);
+
         Assert.True(authMeSeen, "真实 Webbundle 加载后未观测到 GET /api/v1/auth/me 请求");
         Assert.Equal("Bearer " + CanaryAccessToken, authMeAuth);
         Assert.True(userJsonMatch, "Fake API 用户数据未对齐");
         Assert.False(tokenLeakedInStorage, "真实页面在 sessionStorage/localStorage/window.__pimToken 中泄露了访问令牌");
+
+        phase.Write(PhaseEvent.OriginalAssertsComplete);
+        phase.EnsureHealthy();
     }
 
     [Fact]
     public void Harness_RealWebView2_AppliesNavigationAndNewWindowPolicy()
     {
-        var result = Sta(async () =>
+        using var phase = PhaseLog.Open();
+        var result = Sta(phase, async () =>
         {
-            using var fixture = await HostFixture.CreateAsync(ProbePage);
+            using var fixture = await HostFixture.CreateAsync(phase, ProbePage);
+            phase.Write(PhaseEvent.NavigateBefore);
             await fixture.NavigateAsync("/today");
+            phase.Write(PhaseEvent.NavigateAfter);
             await fixture.Api.WaitForBodyAsync("/api/report", TimeSpan.FromSeconds(90));
 
             var core = fixture.Host.View.CoreWebView2!;
@@ -241,6 +631,9 @@ public sealed class HostSessionWindowsHarnessTests
                 JsonDocument.Parse(afterCancelRefresh).RootElement.Clone());
         });
 
+        phase.Write(PhaseEvent.StaReturned);
+        phase.Write(PhaseEvent.OuterAssertsBefore);
+
         // 外部顶层导航被取消：文档没有离开受信任 origin，URL 交给系统浏览器。
         Assert.StartsWith(result.StartSource, result.SourceAfterCancel, StringComparison.Ordinal);
         Assert.True(result.ExternalOpened, "外部 http(s) 顶层导航没有交给系统浏览器");
@@ -260,15 +653,21 @@ public sealed class HostSessionWindowsHarnessTests
         Assert.Equal(
             HostSessionProtocol.RefreshReasons.Unauthenticated,
             result.AfterCancelRefresh.GetProperty("reason").GetString());
+
+        phase.Write(PhaseEvent.OriginalAssertsComplete);
+        phase.EnsureHealthy();
     }
 
     [Fact]
     public void Harness_RealWebView2_EndsTheSessionForBothHostLogoutAndPageLogout()
     {
-        var report = Sta(async () =>
+        using var phase = PhaseLog.Open();
+        var report = Sta(phase, async () =>
         {
-            using var fixture = await HostFixture.CreateAsync(EndedPage);
+            using var fixture = await HostFixture.CreateAsync(phase, EndedPage);
+            phase.Write(PhaseEvent.NavigateBefore);
             await fixture.NavigateAsync("/today");
+            phase.Write(PhaseEvent.NavigateAfter);
             // 等页面建立起代次（拿到 host.state），否则 ended 的 handshakeId 无从配对。
             await fixture.Api.WaitForBodyAsync("/api/report-ready", TimeSpan.FromSeconds(90));
 
@@ -287,6 +686,9 @@ public sealed class HostSessionWindowsHarnessTests
                 Page: JsonDocument.Parse(pageEnded).RootElement.Clone());
         });
 
+        phase.Write(PhaseEvent.StaReturned);
+        phase.Write(PhaseEvent.OuterAssertsBefore);
+
         Assert.Equal(HostSessionProtocol.EndedReasons.Expired, report.Host.GetProperty("reason").GetString());
         Assert.True(report.Host.GetProperty("handshakeMatches").GetBoolean());
         Assert.False(report.Host.GetProperty("hasRequestId").GetBoolean());
@@ -294,6 +696,9 @@ public sealed class HostSessionWindowsHarnessTests
         Assert.Equal(HostSessionProtocol.EndedReasons.Logout, report.Page.GetProperty("reason").GetString());
         Assert.Equal("req-logout-1", report.Page.GetProperty("requestId").GetString());
         Assert.True(report.Page.GetProperty("handshakeMatches").GetBoolean());
+
+        phase.Write(PhaseEvent.OriginalAssertsComplete);
+        phase.EnsureHealthy();
     }
 
     [Fact]
@@ -524,32 +929,42 @@ public sealed class HostSessionWindowsHarnessTests
     // ---------------------------------------------------------------------
 
     /// <summary>在专用 STA 线程上跑完整个异步体（WPF/WebView2 要求 STA + 有消息泵）。</summary>
-    private static T Sta<T>(Func<Task<T>> body, int timeoutMs = 300_000)
+    private static T Sta<T>(PhaseLog phase, Func<Task<T>> body, int timeoutMs = 300_000)
     {
         T result = default!;
         Exception? failure = null;
 
         var thread = new Thread(() =>
         {
+            phase.Write(PhaseEvent.ThreadStart);
             var dispatcher = Dispatcher.CurrentDispatcher;
+            phase.Write(PhaseEvent.DispatcherCreated);
             var frame = new DispatcherFrame();
             _ = dispatcher.InvokeAsync(async () =>
             {
+                phase.Write(PhaseEvent.BodyEnter);
                 try
                 {
                     result = await body();
+                    phase.Write(PhaseEvent.BodyReturn);
                 }
                 catch (Exception ex)
                 {
+                    phase.WriteException(PhaseEvent.BodyException, ex);
                     failure = ex;
                 }
                 finally
                 {
+                    phase.Write(PhaseEvent.FrameStopBefore);
                     frame.Continue = false;
+                    phase.Write(PhaseEvent.FrameStopAfter);
+                    phase.Write(PhaseEvent.ShutdownRequestBefore);
                     dispatcher.BeginInvokeShutdown(DispatcherPriority.Background);
+                    phase.Write(PhaseEvent.ShutdownRequestAfter);
                 }
             });
             Dispatcher.PushFrame(frame);
+            phase.Write(PhaseEvent.PushFrameReturn);
         })
         {
             IsBackground = true,
@@ -560,8 +975,11 @@ public sealed class HostSessionWindowsHarnessTests
 
         if (!thread.Join(timeoutMs))
         {
+            phase.Write(PhaseEvent.ThreadJoinTimeout);
             throw new TimeoutException($"WebView2 夹具超过 {timeoutMs} ms 没有结束（真实运行时行为，需在 Windows runner 上看）。");
         }
+
+        phase.Write(PhaseEvent.ThreadJoined);
 
         if (failure is not null)
         {
@@ -574,6 +992,7 @@ public sealed class HostSessionWindowsHarnessTests
     private sealed class HostFixture : IDisposable
     {
         private HostFixture(
+            PhaseLog phase,
             FakeApiServer api,
             FakeApiServer external,
             Window window,
@@ -583,6 +1002,7 @@ public sealed class HostSessionWindowsHarnessTests
             List<string> externalOpens,
             string runtimeVersion)
         {
+            Phase = phase;
             Api = api;
             External = external;
             Window = window;
@@ -592,6 +1012,8 @@ public sealed class HostSessionWindowsHarnessTests
             ExternalOpens = externalOpens;
             RuntimeVersion = runtimeVersion;
         }
+
+        public PhaseLog Phase { get; }
 
         public FakeApiServer Api { get; }
 
@@ -610,17 +1032,21 @@ public sealed class HostSessionWindowsHarnessTests
 
         public string RuntimeVersion { get; }
 
-        public static async Task<HostFixture> CreateAsync(string? pageTemplate, string? webDistDir = null)
+        public static async Task<HostFixture> CreateAsync(PhaseLog phase, string? pageTemplate, string? webDistDir = null)
         {
             // WebView2 运行时（Edge WebView2 Runtime / Evergreen）必须存在；缺失时给出具体错误，
             // 而不是静默跳过（永久 skip 会让这条通道失去验收）。
+            phase.Write(PhaseEvent.RuntimeQueryBefore);
             var runtimeVersion = CoreWebView2Environment.GetAvailableBrowserVersionString();
+            phase.WriteRuntimeVersion(runtimeVersion);
 
             var externalOpens = new List<string>();
+            phase.Write(PhaseEvent.FakeServerCreateBefore);
             var api = new FakeApiServer(pageTemplate, webDistDir);
             var external = new FakeApiServer(pageTemplate, webDistDir);
             api.ExternalOriginForPage = external.Origin;
             external.ExternalOriginForPage = external.Origin;
+            phase.Write(PhaseEvent.FakeServerCreateAfter);
 
             var userDataFolder = Path.Combine(Path.GetTempPath(), "pim-f11-webview2-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(userDataFolder);
@@ -629,6 +1055,7 @@ public sealed class HostSessionWindowsHarnessTests
             apiClient.SetBaseUrl(api.Origin);
             var auth = new AuthService(apiClient, Path.Combine(userDataFolder, "token.json"));
 
+            phase.Write(PhaseEvent.HostConstructBefore);
             var host = new EmbeddedWebViewHost(apiClient, auth, url => externalOpens.Add(url));
             host.View.CreationProperties = new CoreWebView2CreationProperties
             {
@@ -636,6 +1063,43 @@ public sealed class HostSessionWindowsHarnessTests
                 // runner 上可能没有可用 GPU：用软件渲染，避免初始化失败被误读成产品缺陷。
                 AdditionalBrowserArguments = "--disable-gpu",
             };
+
+            // 只读诊断旁观测：在 window.Show 之前订阅公开事件，只记录固定枚举 + 布尔/数字。
+            // 不写 URI / Reason / frame 信息 / message body，不改 Cancel / Handled、
+            // 不改导航、不改 Core 配置。handler 是同步的、只写日志，没有 async void 逃逸。
+            host.View.CoreWebView2InitializationCompleted += (_, args) =>
+            {
+                var isSuccess = args.IsSuccess;
+                phase.Write(
+                    isSuccess ? PhaseEvent.CoreInitSucceeded : PhaseEvent.CoreInitFailed,
+                    flag: isSuccess);
+                if (!isSuccess)
+                {
+                    return;
+                }
+
+                // InitCompletedArgs 在本 SDK 版本上没有 CoreWebView2 属性，从控件取。
+                var core = host.View.CoreWebView2;
+                if (core is null)
+                {
+                    return;
+                }
+
+                core.NavigationStarting += (_, nav) =>
+                    phase.Write(PhaseEvent.NavigationStarting, n1: unchecked((long)nav.NavigationId));
+
+                core.NavigationCompleted += (_, nav) =>
+                    phase.Write(
+                        nav.IsSuccess ? PhaseEvent.NavigationSucceeded : PhaseEvent.NavigationFailed,
+                        flag: nav.IsSuccess,
+                        n1: unchecked((long)nav.NavigationId),
+                        n2: (long)nav.WebErrorStatus);
+
+                core.ProcessFailed += (_, fail) =>
+                    phase.Write(PhaseEvent.WebProcessFailed, n1: (long)fail.ProcessFailedKind);
+            };
+
+            phase.Write(PhaseEvent.HostConstructAfter);
 
             var window = new Window
             {
@@ -648,11 +1112,16 @@ public sealed class HostSessionWindowsHarnessTests
                 WindowStyle = WindowStyle.None,
                 Content = host.View,
             };
+            phase.Write(PhaseEvent.WindowShowBefore);
             window.Show();
+            phase.Write(PhaseEvent.WindowShowAfter);
 
+            phase.Write(PhaseEvent.HostInitBefore);
             await host.InitializeAsync();
+            phase.Write(PhaseEvent.HostInitAfter);
 
-            return new HostFixture(api, external, window, host, apiClient, auth, externalOpens, runtimeVersion);
+            phase.Write(PhaseEvent.FixtureReturn);
+            return new HostFixture(phase, api, external, window, host, apiClient, auth, externalOpens, runtimeVersion);
         }
 
         public Task NavigateAsync(string route) => Host.NavigateAsync(route);
@@ -683,9 +1152,28 @@ public sealed class HostSessionWindowsHarnessTests
 
         public void Dispose()
         {
-            try { Window.Close(); } catch { }
+            // 清理顺序与原实现完全一致；这里只在其边界旁加固定阶段标记。
+            Phase.Write(PhaseEvent.WindowCloseBefore);
+            try
+            {
+                Window.Close();
+                Phase.Write(PhaseEvent.WindowCloseAfter);
+            }
+            catch (Exception ex)
+            {
+                // 保留原 catch 语义（仍然吞掉 Window.Close 的异常），只补安全最小字段。
+                Phase.WriteException(PhaseEvent.WindowCloseCaught, ex);
+            }
+
+            Phase.Write(PhaseEvent.ApiDisposeBefore);
             Api.Dispose();
+            Phase.Write(PhaseEvent.ApiDisposeAfter);
+
+            Phase.Write(PhaseEvent.ExternalDisposeBefore);
             External.Dispose();
+            Phase.Write(PhaseEvent.ExternalDisposeAfter);
+
+            Phase.Write(PhaseEvent.DisposeReturn);
         }
     }
 
