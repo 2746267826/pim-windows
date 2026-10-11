@@ -16,9 +16,9 @@ if not exist "%WPF_PROJ%" (
 )
 
 REM 检查服务端是否在运行
-curl -s http://localhost:5000/health >nul 2>&1
+curl -s http://localhost:5858/health >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [警告] 服务端 http://localhost:5000 好像没有运行
+    echo [警告] 服务端 http://localhost:5858 好像没有运行
     echo         建议先运行 scripts\start-server.bat 启动服务端
     echo.
 )
@@ -57,7 +57,7 @@ start "PIM WPF Client" dotnet run --project "%WPF_PROJ%" -c !CONFIG! --no-build
 echo.
 echo ============================================
 echo   WPF 客户端已启动！
-echo   连接地址: http://localhost:5000/api/v1
+echo   连接地址: http://localhost:5858/api/v1
 echo ============================================
 echo.
 

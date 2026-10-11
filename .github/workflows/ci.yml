@@ -5,13 +5,13 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # 审计 F-22：手动触发只用于演练/排查，不产生发布。原先还声明了 `force_all`
+  # 这个输入，但整个工作流从不读取它 —— 已删除（死参数）。
   workflow_dispatch:
-    inputs:
-      force_all:
-        description: Force all builds
-        required: false
-        default: true
-        type: boolean
+  # 审计 F-12：CodeQL 静态扫描随根 workflow 一起跑，并保留每周一次的完整扫描。
+  # schedule 事件下 is_release=false（resolve-version 只认 push 到 master），不会误发版。
+  schedule:
+    - cron: '25 4 * * 3'
 
 permissions:
   contents: read
@@ -123,9 +123,142 @@ jobs:
         run: dotnet test tests/Pim.Client.App.Tests/Pim.Client.App.Tests.csproj --logger "console;verbosity=minimal"
 
 
+  # 发版纯逻辑（资产归一化 + version.json）在 PR 上就跑一次：
+  # 审计 F-06 —— 这段逻辑以前内联在 release job 里，PR 上恒为 skipped，
+  # 抽成脚本后可以在没有发布权限的情况下真实执行与测试。
+  release-assets:
+    needs: [resolve-version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test release asset logic
+        run: bash scripts/ci/test-release-assets.sh
+
+  # 审计 F-12：浏览器插件的 Prettier 检查必须挂在**根** workflow 的 pull_request 上。
+  # 原先它写在 browser-extension/.github/workflows/lint.yml —— 嵌套目录 GitHub 永不执行，
+  # 等于没有任何风格门禁（该文件已删除，逻辑迁到这里）。
+  browser-extension-lint:
+    needs: [resolve-version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: browser-extension/package-lock.json
+
+      - name: Install browser extension dependencies
+        working-directory: browser-extension
+        run: npm ci
+
+      # 真实执行：browser-extension 下出现任何 Prettier 违规都会让这一步非 0
+      # （已在本地用一处真实违规验证过退出码 1）。
+      - name: Prettier check
+        working-directory: browser-extension
+        run: npx prettier --check .
+
+  # 审计 F-12：CodeQL 从嵌套目录迁入根 workflow，PR 与 push 都分析。
+  # fork PR 拿不到 security-events: write，所以 analyze 的 upload 在 fork 上是 never，
+  # 同仓 PR 与 master 是 always。不跳过整个 job，也不改用会给 fork 写权限的 target 触发。
+  # 是否已成为 GitHub 上的 required check 由 ruleset 决定，本仓不修改 ruleset。
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
+          upload: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'never' || 'always' }}
+
+  # 审计 REQ-COM-03 / AC-COM-03：契约快照相对权威 pim-api 的新鲜度。
+  # 需要网络（公有 raw.githubusercontent.com），不需要凭据；不手改 JSON 契约。
+  contract-freshness:
+    needs: [resolve-version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check contract snapshot freshness
+        run: bash scripts/ci/check-contract-freshness.sh
+
+  # 本仓自己的 CI 守卫与故障对照：守卫本身也必须进 gate，否则“CI 门禁”只是文档。
+  # F-11 的产品实现落地后这里**不再有任何 --exclude**：11 项检查全部直接跑，
+  # 包括 webview-token-policy（round7 删除了 round3…round6 的临时隔离）。
+  ci-scripts:
+    needs: [resolve-version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Audit guards
+        run: node scripts/ci/check-audit-guards.mjs
+
+      - name: Audit guard fault contrast
+        run: node scripts/ci/test-audit-guards.mjs
+
+      - name: CI script unit tests
+        run: node --test scripts/ci/test-*.mjs
+
+      - name: Release logic is not self-certifying
+        run: bash scripts/ci/check-release-logic-tested.sh
+
+      - name: Resolve version behavior tests
+        run: bash scripts/ci/test-resolve-version.sh
+
+      - name: Contract freshness behavior tests
+        run: bash scripts/ci/test-contract-freshness.sh
+
+  # 审计 F-12 / AC-COM-05：job 在全部 event 上运行。
+  # pull_request 校验真实标题、四段正文和分支名。
+  # push / schedule / workflow_dispatch 没有 PR body，步骤自身 exit 0。
+  # 结果必须是 success 才放行 gate 和 release，不靠 job skip。
+  # 不回写历史 PR，不改 ruleset。
+  pr-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check PR title, body sections and branch name
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: node scripts/ci/check-pr-metadata.mjs
+
   gate:
     name: CI Gate
-    needs: [resolve-version, build-windows, build-shell-windows, build-browser-extension, build-browser-extension-firefox, test-client-core, test-client-app]
+    needs: [resolve-version, build-windows, build-shell-windows, build-browser-extension, build-browser-extension-firefox, test-client-core, test-client-app, release-assets, browser-extension-lint, contract-freshness, ci-scripts, pr-metadata, codeql]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -138,6 +271,12 @@ jobs:
           R_EXT_FIREFOX: ${{ needs.build-browser-extension-firefox.result }}
           R_TEST_CORE: ${{ needs.test-client-core.result }}
           R_TEST_APP: ${{ needs.test-client-app.result }}
+          R_RELEASE_ASSETS: ${{ needs.release-assets.result }}
+          R_EXT_LINT: ${{ needs.browser-extension-lint.result }}
+          R_CONTRACT: ${{ needs.contract-freshness.result }}
+          R_CI_SCRIPTS: ${{ needs.ci-scripts.result }}
+          R_PR_METADATA: ${{ needs.pr-metadata.result }}
+          R_CODEQL: ${{ needs.codeql.result }}
         run: |
           set -uo pipefail
           fail=0
@@ -157,6 +296,12 @@ jobs:
           check "build-browser-extension-firefox" "$R_EXT_FIREFOX"
           check "test-client-core" "$R_TEST_CORE"
           check "test-client-app" "$R_TEST_APP"
+          check "release-assets" "$R_RELEASE_ASSETS"
+          check "browser-extension-lint" "$R_EXT_LINT"
+          check "contract-freshness" "$R_CONTRACT"
+          check "ci-scripts" "$R_CI_SCRIPTS"
+          check "pr-metadata" "$R_PR_METADATA"
+          check "codeql" "$R_CODEQL"
 
           if [ "$fail" -ne 0 ]; then
             echo ""
@@ -172,13 +317,16 @@ jobs:
   release:
     # 合并到 master 就发版（与 pim-api 一致）。原先写成 tag 触发，但拆仓后
     # 「每次合并 = 一个版本」是既定口径，tag 由 gh release create 自动创建。
-    # 构建失败时不发版；PR 时 is_release 为 false，自然跳过。
+    # 审计 F-05：release 必须依赖**全部**必需 job 与聚合门禁 gate，
+    # 并且 failure / skipped / cancelled 任一结果都不得发版。
+    # （is_release 已收紧为「push 到 master」，见 scripts/ci/resolve-version.sh。）
     if: |
       always() &&
       needs.resolve-version.outputs.is_release == 'true' &&
       !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'skipped') &&
       !contains(needs.*.result, 'cancelled')
-    needs: [resolve-version, build-windows, build-shell-windows]
+    needs: [resolve-version, build-windows, build-shell-windows, build-browser-extension, build-browser-extension-firefox, test-client-core, test-client-app, release-assets, browser-extension-lint, contract-freshness, ci-scripts, codeql, pr-metadata, gate]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -191,28 +339,14 @@ jobs:
 
       - name: Normalize assets and generate version.json
         run: |
-          set -euo pipefail
-          V="${{ needs.resolve-version.outputs.version }}"
-          TAG="${{ needs.resolve-version.outputs.release_tag }}"
-          BASE="https://github.com/${{ github.repository }}/releases/download/$TAG"
-          mkdir -p out
-          find dl -type f | sed 's/^/  /'
-          cp "$(find dl -name 'pim-windows-v*.zip' | head -n1)" "out/pim-windows-v$V.zip"
-          cp "$(find dl -name 'pim-shell-windows-v*.zip' | head -n1)" "out/pim-shell-windows-v$V.zip"
-          SETUP="$(find dl -name 'PIM-Setup-v*.exe' | head -n1 || true)"
-          if [ -n "$SETUP" ]; then cp "$SETUP" "out/PIM-Setup-v$V.exe"; fi
-          W="pim-windows-v$V.zip"
-          S="pim-shell-windows-v$V.zip"
-          # 注意：jq 里对象构造后的 `+` 必须写在同一个表达式内；把 `+` 留在花括号
-          # 外面（前一行以 `}` 收尾）会报 `jq: error: syntax error, unexpected '+'`。
-          jq -n \
-            --arg v "$V" --arg base "$BASE" --arg w "$W" --arg s "$S" \
-            --arg setup "$( [ -n "$SETUP" ] && echo "PIM-Setup-v$V.exe" || echo "" )" \
-            '{version: $v, releasedAt: (now|todateiso8601),
-              assets: ({windows:      {version: $v, url: ($base + "/" + $w)},
-                        shellWindows: {version: $v, url: ($base + "/" + $s)}}
-                       + (if $setup == "" then {} else {installer: {version: $v, url: ($base + "/" + $setup)}} end))}' \
-            > out/version.json
+          bash scripts/ci/build-release-assets.sh \
+            --version "${{ needs.resolve-version.outputs.version }}" \
+            --tag "${{ needs.resolve-version.outputs.release_tag }}" \
+            --repository "${{ github.repository }}" \
+            --dist dl \
+            --out out \
+            --allow-missing-installer
+          echo "--- version.json ---"
           cat out/version.json
 
       - name: Publish release

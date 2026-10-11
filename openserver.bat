@@ -60,8 +60,8 @@ if %errorlevel% equ 0 (
     echo ============================================
     echo   服务端已全部启动！
     echo.
-    echo   API:      http://localhost:5000
-    echo   健康检查: http://localhost:5000/health
+    echo   API:      http://localhost:5858
+    echo   健康检查: http://localhost:5858/health
     echo   Nginx:    http://localhost
     echo ============================================
     echo.

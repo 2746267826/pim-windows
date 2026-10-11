@@ -22,6 +22,9 @@
     <ProjectReference Include="..\Pim.Shell.App\Pim.Shell.App.csproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <!-- 契约用例的共用读取/求值器（与 tests/Pim.Client.Tests、tests/Pim.Client.App.Tests 同一份源文件）。 -->
+    <Compile Include="..\..\..\tests\ClientWindows\ContractSchema.cs" Link="ContractSchema.cs" />
+    <Compile Include="..\..\..\tests\ClientWindows\ShellHealthContractWireTests.cs" Link="ShellHealthContractWireTests.cs" />
     <Compile Include="..\..\client-windows\Pim.Client.Core\Services\UpdateChecker.cs" Link="UpdateChecker.cs" />
     <Compile Include="..\Pim.Shell.App\ServerAddress.cs" Link="ServerAddress.cs" />
     <Compile Include="..\Pim.Shell.App\ShellBridge.cs" Link="ShellBridge.cs" />

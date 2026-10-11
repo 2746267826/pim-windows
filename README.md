@@ -6,19 +6,58 @@ PIM 的 Windows 端：守护程序采集前台应用、窗口与键鼠活跃度�
 
 | 路径 | 内容 |
 | --- | --- |
-| `src/client-windows/` | 守护程序（WPF / .NET，解决方案 `Pim.Client.Windows.slnx`） |
+| `src/client-windows/` | 守护程序（WPF / .NET，解决方案 `Pim.Client.Windows.slnx`；产品工程，不含测试工程） |
 | `src/client-shell-windows/` | 旧 WPF 壳——**V2 的 Tauri 壳上线后退役** |
-| `browser-extension/` | 浏览器扩展（Chrome / Edge，WebExtension，独立打包） |
+| `browser-extension/` | 浏览器扩展（WebExtension；Chrome MV3 与 Firefox MV2 两份产物均随发版构建） |
 | `publish/`、`installer/`、`branding/` | 安装脚本、Inno Setup 打包、品牌资源 |
 | `build-daemon.ps1`、`openserver.bat`、`scripts/*.ps1` | 构建与运维脚本 |
-| `.github/workflows/` | `build-windows.yml`、`build-shell-windows.yml`、`build-browser-extension.yml` |
+| `.github/workflows/` | `ci.yml`（CI 门禁 + 发版）、`build-windows.yml`、`build-shell-windows.yml`、`build-browser-extension.yml` |
 
-## 构建
+## CI 门禁（`ci.yml`）
 
-```powershell
-dotnet build src/client-windows/Pim.Client.Windows.slnx
+`gate`（CI Gate）汇总下列必需 job，任何一个非 success 都算失败；`release` 依赖全部必需 job 与 `gate`，
+且 failure / skipped / cancelled 任一结果都不发版：
+
+| job | 作用 |
+| --- | --- |
+| `build-*` / `test-client-*` | 平台构建与客户端测试 |
+| `release-assets` | 发版纯逻辑（资产名 + `version.json`）在 PR 上真实执行 |
+| `browser-extension-lint` | 浏览器插件 Prettier 检查（原来写在永不执行的嵌套目录里） |
+| `contract-freshness` | 契约快照与权威 `pim-api` 对比（需要网络，不需要凭据） |
+| `ci-scripts` | 本仓 CI 守卫 + 故障对照（`check-audit-guards` 等）逐条真实执行 |
+| `codeql` | CodeQL 静态安全扫描（fork PR 跳过；作为发版前置参与门禁） |
+| `pr-metadata` | 只在 `pull_request` 上校验双语四段与分支命名（`push` 到 master 不要求 PR body） |
+
+```bash
+# 本地等价命令
+node scripts/ci/check-audit-guards.mjs
+node scripts/ci/test-audit-guards.mjs
+node --test scripts/ci/test-*.mjs
+bash scripts/ci/check-release-logic-tested.sh
+bash scripts/ci/test-contract-freshness.sh && bash scripts/ci/check-contract-freshness.sh
+bash scripts/ci/test-resolve-version.sh
+```
+
+> 审计守卫**没有任何 `--exclude`**：11 项检查（含 F-11 的 `webview-token-policy`）
+> 全部直接执行。`ci-scripts` job 里有一条机械断言，谁再给守卫加排除项都会立刻变红。
+
+## 构建与测试
+
+```bash
+# 跨平台核心测试（与 CI 的 test-client-core 同一工程，Linux/Windows 都可跑）
+dotnet build tests/Pim.Client.Tests/Pim.Client.Tests.csproj
+dotnet test tests/Pim.Client.Tests/Pim.Client.Tests.csproj
+
+# Windows 专属测试（真实 WebView2 / DPAPI / 托盘等，只能在 Windows runner 上跑）
+dotnet test tests/Pim.Client.App.Tests/Pim.Client.App.Tests.csproj
+
 # 浏览器扩展
 cd browser-extension && npm install && npm run build
+```
+
+```powershell
+# Windows 专属：托盘 / WebView2 / 安装包相关的工程与解决方案需要 Windows 工具链
+dotnet build src/client-windows/Pim.Client.Windows.slnx
 ```
 
 ## 相关仓库
