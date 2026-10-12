@@ -28,12 +28,20 @@ PIM 的 Windows 端：守护程序采集前台应用、窗口与键鼠活跃度�
 | `pr-metadata` | 只在 `pull_request` 上校验双语四段与分支命名（`push` 到 master 不要求 PR body） |
 
 ```bash
-# 本地等价命令
-node scripts/ci/check-pr-metadata.mjs      # 只读已有 env，无 PR payload 时按事件自身 exit 0
+# 本地等价命令（与 CI 里各 job 的步骤一一对应）
 bash scripts/ci/test-release-assets.sh
 bash scripts/ci/check-release-logic-tested.sh
 bash scripts/ci/test-resolve-version.sh
-bash scripts/ci/test-contract-freshness.sh && bash scripts/ci/check-contract-freshness.sh
+
+# pr-metadata：pull_request 事件校验真实 payload；其它事件（push / schedule / dispatch）步骤自身 exit 0。
+# 不带 env 直接跑会按“标题/正文/分支名全空”判定为不合规并 exit 1，那不是本地误报，而是缺 payload。
+EVENT_NAME=push node scripts/ci/check-pr-metadata.mjs
+PR_TITLE='…' PR_BODY='…' HEAD_REF='…' node scripts/ci/check-pr-metadata.mjs
+
+# contract-freshness：行为测试（离线对照）当前在 master 上为红 —— 4 条负对照在
+# `contract/` 快照刷新后自失效（master 既存问题，另有独立工作项负责），
+# 因此 check-contract-freshness.sh 这一步在修好之前跑不到。
+bash scripts/ci/test-contract-freshness.sh
 ```
 
 > 尚未纳入本门禁的审计守卫（`check-audit-guards.mjs` / `test-audit-guards.mjs`、
@@ -48,7 +56,7 @@ bash scripts/ci/test-contract-freshness.sh && bash scripts/ci/check-contract-fre
 dotnet build tests/Pim.Client.Tests/Pim.Client.Tests.csproj
 dotnet test tests/Pim.Client.Tests/Pim.Client.Tests.csproj
 
-# Windows 专属测试（真实 WebView2 / DPAPI / 托盘等，只能在 Windows runner 上跑）
+# Windows 专属测试（WPF / WinForms UI 组件：托盘、状态中心、单实例守卫等，只能在 Windows runner 上跑）
 dotnet test tests/Pim.Client.App.Tests/Pim.Client.App.Tests.csproj
 
 # 浏览器扩展
