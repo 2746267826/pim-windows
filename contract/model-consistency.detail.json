@@ -1,0 +1,1314 @@
+{
+ "repo": "pim-windows",
+ "worktree": "/home/coder/workspace/pim-wt/win-contract",
+ "branch": "deepseek-linux/contract-refresh-master",
+ "freshMasterSha": "cbfcbeffc93a1cc522eec1c522860e2881778b40",
+ "generatedAtUtc": "2026-10-12T01:35:00Z",
+ "source": {
+  "repo": "2746267826/pim-api",
+  "ref": "master",
+  "resolvedCommit": "940fe42face873e48c7c36af030d8ca838791471",
+  "bytes": 938271,
+  "sha256": "4dd7eafb4938818e13766e7177e1d05f45a4090643f9fe6dcd8d108c4f82af53"
+ },
+ "baselineSnapshot": {
+  "bytes": 258542,
+  "sha256": "1cf261973833a0690b09d2f2eda916de382359636259ab8ed55a8bb38f1aec98",
+  "gitBlob": "fd3e464c73b8766de10984553e36e9c2ea2b3018",
+  "declaredSourceCommit": "2f56dbb3"
+ },
+ "serializer": {
+  "library": "System.Text.Json via System.Net.Http.Json",
+  "configured": "no explicit JsonSerializerOptions at the ApiClient call sites (ApiClient.cs:218 ReadFromJsonAsync<T>(ct), :142 PostAsJsonAsync)",
+  "effective": {
+   "readFromJsonAsync": "case-insensitive on the configured JSON name (probe-verified)",
+   "postAsJsonAsync": "JsonPropertyName used verbatim; naming policy = camelCase for attributes-less properties",
+   "unknownProperties": "ignored on read",
+   "enumConverter": "JsonStringEnumConverter NOT configured anywhere"
+  },
+  "probeLog": "remediation/contract-refresh-20261012/android-windows-refresh-models/commandsrawlogs/03-windows-systemtextjson-probe.txt",
+  "probeRuntime": {
+   "packetProbe": ".NET 9.0.0",
+   "productTarget": "net8.0 / net8.0-windows",
+   "r1IndependentRepro": "R1 在 net8.0（8.0.31）重跑，结论与 .NET 9 逐字一致（读侧大小写不敏感、写侧 [JsonPropertyName] 原样、无特性位置记录 camelCase）",
+   "log": "remediation/contract-refresh-20261012/reviews/android-windows-models-r1.logs/05-windows-dotnet-probe.log"
+  }
+ },
+ "operations": {
+  "AuthService.RegisterAsync": [
+   {
+    "path": "displayName",
+    "kind": "CONTRACT_NULLABLE_CLIENT_NONNULL",
+    "role": "request",
+    "risk": "response: server null -> decode issue; request: client always sends value (informational)",
+    "contract": {
+     "nullable": true
+    },
+    "client": {
+     "type": "string"
+    },
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "RegisterRequest",
+     "parentSchema": "RegisterRequest",
+     "required": false,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": true,
+     "type": "string",
+     "format": null,
+     "enum": null,
+     "ref": null,
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": false,
+     "appliesTo": "n/a"
+    }
+   }
+  ],
+  "DaemonHeartbeatReporter": [
+   {
+    "path": "activityWatchState",
+    "kind": "ENUM_STRING_CLIENT_OPEN_STRING",
+    "role": "request",
+    "risk": "observation: no client-side enum validation",
+    "contract": {
+     "ref": "DaemonSourceState",
+     "enum": [
+      "Unknown",
+      "Available",
+      "Unavailable",
+      "Paused"
+     ]
+    },
+    "client": {
+     "wire": "activityWatchState",
+     "type": "string"
+    },
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "DaemonHeartbeatRequest",
+     "parentSchema": "DaemonHeartbeatRequest",
+     "required": true,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": null,
+     "type": "string",
+     "format": null,
+     "enum": [
+      "Unknown",
+      "Available",
+      "Unavailable",
+      "Paused"
+     ],
+     "ref": "DaemonSourceState",
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": true,
+     "appliesTo": "request-and-response"
+    }
+   },
+   {
+    "path": "keyStatsState",
+    "kind": "ENUM_STRING_CLIENT_OPEN_STRING",
+    "role": "request",
+    "risk": "observation: no client-side enum validation",
+    "contract": {
+     "ref": "DaemonSourceState",
+     "enum": [
+      "Unknown",
+      "Available",
+      "Unavailable",
+      "Paused"
+     ]
+    },
+    "client": {
+     "wire": "keyStatsState",
+     "type": "string"
+    },
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "DaemonHeartbeatRequest",
+     "parentSchema": "DaemonHeartbeatRequest",
+     "required": true,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": null,
+     "type": "string",
+     "format": null,
+     "enum": [
+      "Unknown",
+      "Available",
+      "Unavailable",
+      "Paused"
+     ],
+     "ref": "DaemonSourceState",
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": true,
+     "appliesTo": "request-and-response"
+    }
+   }
+  ],
+  "ApiClient.GetEndpointStatuses": [
+   {
+    "path": "appVersion",
+    "kind": "CONTRACT_FIELD_ABSENT_IN_CLIENT",
+    "role": "response",
+    "risk": "response-coverage-gap",
+    "contract": {
+     "required": false,
+     "kind": "string",
+     "ref": null,
+     "nullable": true,
+     "enum": null
+    },
+    "client": null,
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "EndpointStatusDto",
+     "parentSchema": "EndpointStatusDto",
+     "required": false,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": true,
+     "type": "string",
+     "format": null,
+     "enum": null,
+     "ref": null,
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": false,
+     "appliesTo": "n/a"
+    }
+   }
+  ],
+  "NativeTrackerService tracker upload": [],
+  "NativeTrackerService browser-tt": [
+   {
+    "path": "events[].at",
+    "kind": "CLIENT_FIELD_ABSENT_IN_CONTRACT",
+    "role": "request",
+    "risk": "field not backed by the authoritative contract",
+    "contract": null,
+    "client": {
+     "wire": "at",
+     "type": "long?",
+     "declared": "At",
+     "explicitJsonName": true
+    },
+    "contractField": {
+     "inContract": false,
+     "rootSchema": "SiteEventsUploadRequest"
+    },
+    "requiredSemantics": {
+     "declaredRequired": null,
+     "appliesTo": "n/a"
+    }
+   }
+  ],
+  "KeyStatsCollectorService legacy upload": [
+   {
+    "path": "formattedMouseDistance",
+    "kind": "CLIENT_FIELD_ABSENT_IN_CONTRACT",
+    "role": "request",
+    "risk": "field not backed by the authoritative contract",
+    "contract": null,
+    "client": {
+     "wire": "formattedMouseDistance",
+     "type": "string?",
+     "declared": "FormattedMouseDistance",
+     "explicitJsonName": true
+    },
+    "contractField": {
+     "inContract": false,
+     "rootSchema": "KeystatsUploadRequest"
+    },
+    "requiredSemantics": {
+     "declaredRequired": null,
+     "appliesTo": "n/a"
+    }
+   },
+   {
+    "path": "formattedScrollDistance",
+    "kind": "CLIENT_FIELD_ABSENT_IN_CONTRACT",
+    "role": "request",
+    "risk": "field not backed by the authoritative contract",
+    "contract": null,
+    "client": {
+     "wire": "formattedScrollDistance",
+     "type": "string?",
+     "declared": "FormattedScrollDistance",
+     "explicitJsonName": true
+    },
+    "contractField": {
+     "inContract": false,
+     "rootSchema": "KeystatsUploadRequest"
+    },
+    "requiredSemantics": {
+     "declaredRequired": null,
+     "appliesTo": "n/a"
+    }
+   },
+   {
+    "path": "peakKps",
+    "kind": "WIRE_NAME_CASE_MISMATCH",
+    "role": "request",
+    "risk": "确定 wire 名大小写不一致（字段本身存在，客户端确实发送）",
+    "contract": {
+     "required": true,
+     "wire": "peakKps",
+     "kind": "integer",
+     "nullable": false,
+     "readOnly": null,
+     "writeOnly": null,
+     "default": null
+    },
+    "client": {
+     "wire": "peakKPS",
+     "type": "int",
+     "declared": "PeakKps",
+     "explicitJsonName": true,
+     "source": "KeyStatsCollectorService.cs:247"
+    },
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "KeystatsUploadRequest",
+     "parentSchema": "KeystatsUploadRequest",
+     "required": true,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": null,
+     "type": "integer",
+     "format": "int32",
+     "enum": null,
+     "ref": null,
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": true,
+     "appliesTo": "request-and-response"
+    }
+   },
+   {
+    "path": "peakCps",
+    "kind": "WIRE_NAME_CASE_MISMATCH",
+    "role": "request",
+    "risk": "确定 wire 名大小写不一致（字段本身存在，客户端确实发送）",
+    "contract": {
+     "required": true,
+     "wire": "peakCps",
+     "kind": "integer",
+     "nullable": false,
+     "readOnly": null,
+     "writeOnly": null,
+     "default": null
+    },
+    "client": {
+     "wire": "peakCPS",
+     "type": "int",
+     "declared": "PeakCps",
+     "explicitJsonName": true,
+     "source": "KeyStatsCollectorService.cs:244"
+    },
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "KeystatsUploadRequest",
+     "parentSchema": "KeystatsUploadRequest",
+     "required": true,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": null,
+     "type": "integer",
+     "format": "int32",
+     "enum": null,
+     "ref": null,
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": true,
+     "appliesTo": "request-and-response"
+    }
+   }
+  ],
+  "KeyStatsCollectorService legacy upload originalAsPublishedFindings": [
+   {
+    "path": "peakCps",
+    "kind": "CONTRACT_FIELD_ABSENT_IN_CLIENT",
+    "role": "request",
+    "risk": "request-omits-field",
+    "contract": {
+     "required": true,
+     "kind": "integer",
+     "ref": null,
+     "nullable": false,
+     "enum": null
+    },
+    "client": null,
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "KeystatsUploadRequest",
+     "parentSchema": "KeystatsUploadRequest",
+     "required": true,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": null,
+     "type": "integer",
+     "format": "int32",
+     "enum": null,
+     "ref": null,
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": true,
+     "appliesTo": "request-and-response"
+    }
+   },
+   {
+    "path": "peakKps",
+    "kind": "CONTRACT_FIELD_ABSENT_IN_CLIENT",
+    "role": "request",
+    "risk": "request-omits-field",
+    "contract": {
+     "required": true,
+     "kind": "integer",
+     "ref": null,
+     "nullable": false,
+     "enum": null
+    },
+    "client": null,
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "KeystatsUploadRequest",
+     "parentSchema": "KeystatsUploadRequest",
+     "required": true,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": null,
+     "type": "integer",
+     "format": "int32",
+     "enum": null,
+     "ref": null,
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": true,
+     "appliesTo": "request-and-response"
+    }
+   },
+   {
+    "path": "formattedMouseDistance",
+    "kind": "CLIENT_FIELD_ABSENT_IN_CONTRACT",
+    "role": "request",
+    "risk": "field not backed by the authoritative contract",
+    "contract": null,
+    "client": {
+     "wire": "formattedMouseDistance",
+     "type": "string?",
+     "declared": "FormattedMouseDistance",
+     "explicitJsonName": true
+    },
+    "contractField": {
+     "inContract": false,
+     "rootSchema": "KeystatsUploadRequest"
+    },
+    "requiredSemantics": {
+     "declaredRequired": null,
+     "appliesTo": "n/a"
+    }
+   },
+   {
+    "path": "formattedScrollDistance",
+    "kind": "CLIENT_FIELD_ABSENT_IN_CONTRACT",
+    "role": "request",
+    "risk": "field not backed by the authoritative contract",
+    "contract": null,
+    "client": {
+     "wire": "formattedScrollDistance",
+     "type": "string?",
+     "declared": "FormattedScrollDistance",
+     "explicitJsonName": true
+    },
+    "contractField": {
+     "inContract": false,
+     "rootSchema": "KeystatsUploadRequest"
+    },
+    "requiredSemantics": {
+     "declaredRequired": null,
+     "appliesTo": "n/a"
+    }
+   },
+   {
+    "path": "peakCPS",
+    "kind": "CLIENT_FIELD_ABSENT_IN_CONTRACT",
+    "role": "request",
+    "risk": "field not backed by the authoritative contract",
+    "contract": null,
+    "client": {
+     "wire": "peakCPS",
+     "type": "int",
+     "declared": "PeakCps",
+     "explicitJsonName": true
+    },
+    "contractField": {
+     "inContract": false,
+     "rootSchema": "KeystatsUploadRequest"
+    },
+    "requiredSemantics": {
+     "declaredRequired": null,
+     "appliesTo": "n/a"
+    }
+   },
+   {
+    "path": "peakKPS",
+    "kind": "CLIENT_FIELD_ABSENT_IN_CONTRACT",
+    "role": "request",
+    "risk": "field not backed by the authoritative contract",
+    "contract": null,
+    "client": {
+     "wire": "peakKPS",
+     "type": "int",
+     "declared": "PeakKps",
+     "explicitJsonName": true
+    },
+    "contractField": {
+     "inContract": false,
+     "rootSchema": "KeystatsUploadRequest"
+    },
+    "requiredSemantics": {
+     "declaredRequired": null,
+     "appliesTo": "n/a"
+    }
+   }
+  ],
+  "NativeTrackerService tracker upload originalAsPublishedFindings": [
+   {
+    "path": "events[].rawJson",
+    "kind": "TYPE_MISMATCH",
+    "role": "request",
+    "risk": "shape / decode",
+    "contract": {
+     "kind": null,
+     "format": null
+    },
+    "client": {
+     "wire": "rawJson",
+     "type": "object?",
+     "jsonName": true
+    },
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "TrackerEventsUploadRequest",
+     "parentSchema": "TrackerEventDto",
+     "required": false,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": true,
+     "type": null,
+     "format": null,
+     "enum": null,
+     "ref": null,
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": false,
+     "appliesTo": "n/a"
+    }
+   }
+  ],
+  "AuthDtos dead declarations (unreferenced)": [
+   {
+    "path": "rRule",
+    "kind": "WIRE_NAME_CASE_MISMATCH",
+    "role": "response",
+    "risk": "unused declaration（全仓含测试 0 引用）；读侧大小写不敏感，写侧服务端接受性 NOT-VERIFIED(runtime)",
+    "contract": {
+     "wire": "rRule",
+     "type": "string",
+     "nullable": true,
+     "required": false
+    },
+    "client": {
+     "wire": "rrule",
+     "type": "string?",
+     "declared": "RRule",
+     "explicitJsonName": true,
+     "source": "Pim.Client.Core/Models/AuthDtos.cs:88-89"
+    },
+    "callSites": "0（AuthDtos.cs 之外 0 引用）",
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "EventResponse",
+     "parentSchema": "EventResponse",
+     "required": false,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": true,
+     "type": "string",
+     "format": null,
+     "enum": null,
+     "ref": null,
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": false,
+     "appliesTo": "n/a"
+    },
+    "probeEvidence": "写侧 [JsonPropertyName(\"rrule\")] 原样输出；读侧 ReadFromJsonAsync 大小写不敏感 → 能绑定 rRule"
+   }
+  ]
+ },
+ "summary": {
+  "definitions": {
+   "byKind": "按 finding.kind 计数；originalAsPublishedFindings 里的历史条目不计入",
+   "CONTRACT_FIELD_ABSENT_IN_CLIENT": "契约有、客户端未声明的属性（本轮只剩 appVersion）",
+   "WIRE_NAME_CASE_MISMATCH": "同名字段、wire 名大小写不同（字段本身存在）—— 与「字段缺失」分开计",
+   "CLIENT_FIELD_ABSENT_IN_CONTRACT": "客户端声明、契约未支撑的字段",
+   "CONTRACT_NULLABLE_CLIENT_NONNULL": "契约 nullable、客户端非空",
+   "ENUM_STRING_CLIENT_OPEN_STRING": "契约字符串枚举、客户端开放 String（非破坏）"
+  },
+  "byKind": {
+   "CONTRACT_NULLABLE_CLIENT_NONNULL": 1,
+   "ENUM_STRING_CLIENT_OPEN_STRING": 2,
+   "CONTRACT_FIELD_ABSENT_IN_CLIENT": 1,
+   "CLIENT_FIELD_ABSENT_IN_CONTRACT": 3,
+   "WIRE_NAME_CASE_MISMATCH": 3
+  },
+  "originalAsPublished": {
+   "CONTRACT_NULLABLE_CLIENT_NONNULL": 1,
+   "ENUM_STRING_CLIENT_OPEN_STRING": 2,
+   "CONTRACT_FIELD_ABSENT_IN_CLIENT": 3,
+   "TYPE_MISMATCH": 1,
+   "CLIENT_FIELD_ABSENT_IN_CONTRACT": 5
+  },
+  "originalAsPublishedNote": "原 CONTRACT_FIELD_ABSENT_IN_CLIENT=3 中，2 条是 keystats 大小写差异（客户端确实发了 peakKPS/peakCPS）；原 TYPE_MISMATCH=1（rawJson）是等价误报。修订后按 kind 重算见 byKind。"
+ },
+ "coverage": {
+  "criteria": {
+   "handwrittenModelClasses": "src/client-windows/Pim.Client.Core/**/*.cs 手写 DTO 类计数",
+   "mappedToAnOperation": "能通过某个真实调用点映射到契约 schema 的类",
+   "notMappedToAnyOperation": "没有任何真实 operation 指向的类（死声明 / 本机类型 / 本地服务类型）"
+  },
+  "handwrittenModelClasses": 43,
+  "mappedToAnOperation": 15,
+  "notMappedToAnyOperation": [
+   "ApiClient",
+   "ApiResponse",
+   "AuthService",
+   "BrowserConnection",
+   "BrowserHeartbeat",
+   "CalendarResponse",
+   "EndpointOperationBoundaryResult",
+   "EventResponse",
+   "KeyStatsAppStats",
+   "KeyStatsConvergencePlan",
+   "KeyStatsCounterSnapshot",
+   "KeyStatsFixResult",
+   "KeyStatsFixSuggestion",
+   "KeyStatsHealthResult",
+   "KeyStatsProcessInfo",
+   "KeyStatsStopResult",
+   "NotificationActionRoute",
+   "PagedResult",
+   "PersistedToken",
+   "SearchResult",
+   "SiteEventsRequest",
+   "StatsDto",
+   "TaskResponse",
+   "TrackerConfig",
+   "TrackerPageVisit",
+   "TrackerPersistentState",
+   "TrackerSession",
+   "TrackerWindowInfo"
+  ],
+  "arithmetic": "43 = 15 + 28（自洽；R1 独立复算确认）",
+  "classFiles": {
+   "TrackerConfig": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "TrackerWindowInfo": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "BrowserHeartbeat": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "TrackerSession": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "TrackerPageVisit": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "TrackerEventForUpload": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "BrowserConnection": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "TrackerEventsUploadRequest": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "TrackerHealthRequest": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "SiteEventDto": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "SiteEventsRequest": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "SiteEventsUploadRequest": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+   "PlannedOfflineRequest": "src/client-windows/Pim.Client.Core/Models/PlannedOfflineDtos.cs",
+   "DaemonHeartbeatRequest": "src/client-windows/Pim.Client.Core/Models/DaemonHeartbeatDtos.cs",
+   "EndpointStatusDto": "src/client-windows/Pim.Client.Core/Models/EndpointDtos.cs",
+   "EndpointCollectionQualityDto": "src/client-windows/Pim.Client.Core/Models/EndpointDtos.cs",
+   "EndpointNotificationActionRequestDto": "src/client-windows/Pim.Client.Core/Models/EndpointDtos.cs",
+   "EndpointNotificationActionResponseDto": "src/client-windows/Pim.Client.Core/Models/EndpointDtos.cs",
+   "KeyStatsStopResult": "src/client-windows/Pim.Client.Core/Models/KeyStatsFixModels.cs",
+   "KeyStatsFixSuggestion": "src/client-windows/Pim.Client.Core/Models/KeyStatsFixModels.cs",
+   "KeyStatsFixResult": "src/client-windows/Pim.Client.Core/Models/KeyStatsFixModels.cs",
+   "KeyStatsProcessInfo": "src/client-windows/Pim.Client.Core/Models/KeyStatsHealthModels.cs",
+   "KeyStatsCounterSnapshot": "src/client-windows/Pim.Client.Core/Models/KeyStatsHealthModels.cs",
+   "KeyStatsHealthResult": "src/client-windows/Pim.Client.Core/Models/KeyStatsHealthModels.cs",
+   "ApiResponse": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+   "AuthResponse": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+   "UserInfo": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+   "CalendarResponse": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+   "EventResponse": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+   "TaskResponse": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+   "SearchResult": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+   "PagedResult": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+   "AuthService": "src/client-windows/Pim.Client.Core/Services/AuthService.cs",
+   "PersistedToken": "src/client-windows/Pim.Client.Core/Services/AuthService.cs",
+   "TrackerPersistentState": "src/client-windows/Pim.Client.Core/Services/TrackerStateManager.cs",
+   "EndpointOperationBoundaryResult": "src/client-windows/Pim.Client.Core/Services/EndpointCollectionBoundaryService.cs",
+   "StatsDto": "src/client-windows/Pim.Client.Core/Services/KeyStatsLocalStatsClient.cs",
+   "KeyStatsConvergencePlan": "src/client-windows/Pim.Client.Core/Services/KeyStatsProcessManager.cs",
+   "NotificationActionRoute": "src/client-windows/Pim.Client.Core/Services/NotificationActionRouter.cs",
+   "KeyStatsSnapshot": "src/client-windows/Pim.Client.Core/Services/KeyStatsCollectorService.cs",
+   "KeyStatsAppStats": "src/client-windows/Pim.Client.Core/Services/KeyStatsCollectorService.cs",
+   "KeystatsSampleUploadPayload": "src/client-windows/Pim.Client.Core/Services/KeyStatsCollectorService.cs",
+   "ApiClient": "src/client-windows/Pim.Client.Core/Services/ApiClient.cs"
+  },
+  "originalAsPublished": {
+   "handwrittenModelClasses": 43,
+   "mappedToAnOperation": 15,
+   "notMappedToAnyOperation": [
+    "ApiClient",
+    "ApiResponse",
+    "AuthService",
+    "BrowserConnection",
+    "BrowserHeartbeat",
+    "CalendarResponse",
+    "EndpointOperationBoundaryResult",
+    "EventResponse",
+    "KeyStatsAppStats",
+    "KeyStatsConvergencePlan",
+    "KeyStatsCounterSnapshot",
+    "KeyStatsFixResult",
+    "KeyStatsFixSuggestion",
+    "KeyStatsHealthResult",
+    "KeyStatsProcessInfo",
+    "KeyStatsStopResult",
+    "NotificationActionRoute",
+    "PagedResult",
+    "PersistedToken",
+    "SearchResult",
+    "SiteEventsRequest",
+    "StatsDto",
+    "TaskResponse",
+    "TrackerConfig",
+    "TrackerPageVisit",
+    "TrackerPersistentState",
+    "TrackerSession",
+    "TrackerWindowInfo"
+   ],
+   "classFiles": {
+    "TrackerConfig": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "TrackerWindowInfo": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "BrowserHeartbeat": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "TrackerSession": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "TrackerPageVisit": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "TrackerEventForUpload": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "BrowserConnection": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "TrackerEventsUploadRequest": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "TrackerHealthRequest": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "SiteEventDto": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "SiteEventsRequest": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "SiteEventsUploadRequest": "src/client-windows/Pim.Client.Core/Models/TrackerModels.cs",
+    "PlannedOfflineRequest": "src/client-windows/Pim.Client.Core/Models/PlannedOfflineDtos.cs",
+    "DaemonHeartbeatRequest": "src/client-windows/Pim.Client.Core/Models/DaemonHeartbeatDtos.cs",
+    "EndpointStatusDto": "src/client-windows/Pim.Client.Core/Models/EndpointDtos.cs",
+    "EndpointCollectionQualityDto": "src/client-windows/Pim.Client.Core/Models/EndpointDtos.cs",
+    "EndpointNotificationActionRequestDto": "src/client-windows/Pim.Client.Core/Models/EndpointDtos.cs",
+    "EndpointNotificationActionResponseDto": "src/client-windows/Pim.Client.Core/Models/EndpointDtos.cs",
+    "KeyStatsStopResult": "src/client-windows/Pim.Client.Core/Models/KeyStatsFixModels.cs",
+    "KeyStatsFixSuggestion": "src/client-windows/Pim.Client.Core/Models/KeyStatsFixModels.cs",
+    "KeyStatsFixResult": "src/client-windows/Pim.Client.Core/Models/KeyStatsFixModels.cs",
+    "KeyStatsProcessInfo": "src/client-windows/Pim.Client.Core/Models/KeyStatsHealthModels.cs",
+    "KeyStatsCounterSnapshot": "src/client-windows/Pim.Client.Core/Models/KeyStatsHealthModels.cs",
+    "KeyStatsHealthResult": "src/client-windows/Pim.Client.Core/Models/KeyStatsHealthModels.cs",
+    "ApiResponse": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+    "AuthResponse": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+    "UserInfo": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+    "CalendarResponse": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+    "EventResponse": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+    "TaskResponse": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+    "SearchResult": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+    "PagedResult": "src/client-windows/Pim.Client.Core/Models/AuthDtos.cs",
+    "AuthService": "src/client-windows/Pim.Client.Core/Services/AuthService.cs",
+    "PersistedToken": "src/client-windows/Pim.Client.Core/Services/AuthService.cs",
+    "TrackerPersistentState": "src/client-windows/Pim.Client.Core/Services/TrackerStateManager.cs",
+    "EndpointOperationBoundaryResult": "src/client-windows/Pim.Client.Core/Services/EndpointCollectionBoundaryService.cs",
+    "StatsDto": "src/client-windows/Pim.Client.Core/Services/KeyStatsLocalStatsClient.cs",
+    "KeyStatsConvergencePlan": "src/client-windows/Pim.Client.Core/Services/KeyStatsProcessManager.cs",
+    "NotificationActionRoute": "src/client-windows/Pim.Client.Core/Services/NotificationActionRouter.cs",
+    "KeyStatsSnapshot": "src/client-windows/Pim.Client.Core/Services/KeyStatsCollectorService.cs",
+    "KeyStatsAppStats": "src/client-windows/Pim.Client.Core/Services/KeyStatsCollectorService.cs",
+    "KeystatsSampleUploadPayload": "src/client-windows/Pim.Client.Core/Services/KeyStatsCollectorService.cs",
+    "ApiClient": "src/client-windows/Pim.Client.Core/Services/ApiClient.cs"
+   }
+  },
+  "originalAsPublishedNote": "原 coverage 算术已自洽（15+28=43），本轮只补口径与交叉引用，不改数值。"
+ },
+ "excludedFindings": [
+  {
+   "group": "NativeTrackerService tracker upload",
+   "path": "events[].rawJson",
+   "originalKind": "TYPE_MISMATCH",
+   "excludedAs": "functional-equivalent",
+   "reason": "契约 TrackerEventDto.rawJson = {nullable:true}，没有 type（untyped，等价于任意 JSON）；客户端 object? 与该无类型声明功能等价 —— 不是类型冲突，不计偏差。",
+   "consistencyNote": "与 md §3.6「22/22 字段名、类型、可空性完全一致」一致；原 detail 的 TYPE_MISMATCH 是误报。",
+   "originalFinding": {
+    "path": "events[].rawJson",
+    "kind": "TYPE_MISMATCH",
+    "role": "request",
+    "risk": "shape / decode",
+    "contract": {
+     "kind": null,
+     "format": null
+    },
+    "client": {
+     "wire": "rawJson",
+     "type": "object?",
+     "jsonName": true
+    },
+    "contractField": {
+     "inContract": true,
+     "rootSchema": "TrackerEventsUploadRequest",
+     "parentSchema": "TrackerEventDto",
+     "required": false,
+     "readOnly": null,
+     "writeOnly": null,
+     "nullable": true,
+     "type": null,
+     "format": null,
+     "enum": null,
+     "ref": null,
+     "default": null
+    },
+    "requiredSemantics": {
+     "declaredRequired": false,
+     "appliesTo": "n/a"
+    }
+   }
+  }
+ ],
+ "operationAudit": [
+  {
+   "fun": "AuthService.LoginAsync",
+   "method": "POST",
+   "path": "/api/v1/auth/login",
+   "callSite": "Pim.Client.Core/Services/AuthService.cs:69",
+   "request": {
+    "clientDecl": "anonymous { username, password }",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "LoginRequest",
+    "contractRequiredProps": [
+     "password",
+     "username"
+    ],
+    "verdict": "match (client class name differs from contract schema name)"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<AuthResponse>",
+    "clientContainer": "object",
+    "contractEnvelope": "AuthResponseApiResponse",
+    "contractDataKind": "object",
+    "contractDataSchema": "AuthResponse",
+    "contractDataItems": null,
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "match"
+   }
+  },
+  {
+   "fun": "AuthService.RegisterAsync",
+   "method": "POST",
+   "path": "/api/v1/auth/register",
+   "callSite": "Pim.Client.Core/Services/AuthService.cs:82",
+   "request": {
+    "clientDecl": "anonymous { username, email, password, displayName }",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "RegisterRequest",
+    "contractRequiredProps": [
+     "email",
+     "password",
+     "username"
+    ],
+    "verdict": "match (client class name differs from contract schema name)"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<AuthResponse>",
+    "clientContainer": "object",
+    "contractEnvelope": "AuthResponseApiResponse",
+    "contractDataKind": "object",
+    "contractDataSchema": "AuthResponse",
+    "contractDataItems": null,
+    "contractContentType": "application/json",
+    "contractCode": "201",
+    "verdict": "match"
+   }
+  },
+  {
+   "fun": "AuthService.RefreshCore",
+   "method": "POST",
+   "path": "/api/v1/auth/refresh",
+   "callSite": "Pim.Client.Core/Services/AuthService.cs:281",
+   "request": {
+    "clientDecl": "anonymous { refreshToken }",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "RefreshRequest",
+    "contractRequiredProps": [
+     "refreshToken"
+    ],
+    "verdict": "match (client class name differs from contract schema name)"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<AuthResponse>",
+    "clientContainer": "object",
+    "contractEnvelope": "AuthResponseApiResponse",
+    "contractDataKind": "object",
+    "contractDataSchema": "AuthResponse",
+    "contractDataItems": null,
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "match"
+   }
+  },
+  {
+   "fun": "DaemonHeartbeatReporter.ReportAsync",
+   "method": "POST",
+   "path": "/api/v1/daemon/heartbeat",
+   "callSite": "Pim.Client.Core/Services/DaemonHeartbeatReporter.cs:18",
+   "request": {
+    "clientDecl": "DaemonHeartbeatRequest",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "DaemonHeartbeatRequest",
+    "contractRequiredProps": [
+     "activityWatchState",
+     "collectionPaused",
+     "daemonKind",
+     "deviceId",
+     "keyStatsState",
+     "serverUrl",
+     "statusJson",
+     "version"
+    ],
+    "verdict": "match"
+   },
+   "response": {
+    "clientDecl": "PostAsync<object> (discarded)",
+    "clientContainer": "discarded",
+    "contractEnvelope": "DaemonHeartbeatDtoApiResponse",
+    "contractDataKind": "object",
+    "contractDataSchema": "DaemonHeartbeatDto",
+    "contractDataItems": null,
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "client discards the response body"
+   }
+  },
+  {
+   "fun": "PlannedOfflineReporter.ReportAsync",
+   "method": "POST",
+   "path": "/api/v1/daemon/planned-offline",
+   "callSite": "Pim.Client.Core/Services/PlannedOfflineReporter.cs:16",
+   "request": {
+    "clientDecl": "PlannedOfflineRequest",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "PlannedOfflineRequest",
+    "contractRequiredProps": [
+     "daemonKind",
+     "deviceId"
+    ],
+    "verdict": "match"
+   },
+   "response": {
+    "clientDecl": "PostAsync<object> (discarded)",
+    "clientContainer": "discarded",
+    "contractEnvelope": "DaemonHeartbeatDtoApiResponse",
+    "contractDataKind": "object",
+    "contractDataSchema": "DaemonHeartbeatDto",
+    "contractDataItems": null,
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "client discards the response body"
+   }
+  },
+  {
+   "fun": "ApiClient.GetEndpointStatusesAsync",
+   "method": "GET",
+   "path": "/api/v1/endpoints",
+   "callSite": "Pim.Client.Core/Services/ApiClient.cs:111-112",
+   "request": {
+    "clientDecl": null,
+    "contractPresent": false,
+    "contractRequired": null,
+    "contractSchema": null,
+    "contractRequiredProps": null,
+    "verdict": "match (no request body on either side)"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<List<EndpointStatusDto>>",
+    "clientContainer": "list",
+    "contractEnvelope": "EndpointStatusDtoIReadOnlyListApiResponse",
+    "contractDataKind": "array",
+    "contractDataSchema": null,
+    "contractDataItems": "EndpointStatusDto",
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "match"
+   }
+  },
+  {
+   "fun": "ApiClient.GetEndpointCollectionQualityAsync",
+   "method": "GET",
+   "path": "/api/v1/endpoints/{deviceId}/collection-quality",
+   "callSite": "Pim.Client.Core/Services/ApiClient.cs:114-117",
+   "request": {
+    "clientDecl": null,
+    "contractPresent": false,
+    "contractRequired": null,
+    "contractSchema": null,
+    "contractRequiredProps": null,
+    "verdict": "match (no request body on either side)"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<EndpointCollectionQualityDto>",
+    "clientContainer": "object",
+    "contractEnvelope": "EndpointCollectionQualityDtoApiResponse",
+    "contractDataKind": "object",
+    "contractDataSchema": "EndpointCollectionQualityDto",
+    "contractDataItems": null,
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "match"
+   }
+  },
+  {
+   "fun": "ApiClient.SendEndpointNotificationActionAsync",
+   "method": "POST",
+   "path": "/api/v1/endpoints/{deviceId}/notification-actions",
+   "callSite": "Pim.Client.Core/Services/ApiClient.cs:121-125",
+   "request": {
+    "clientDecl": "EndpointNotificationActionRequestDto",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "EndpointNotificationActionRequest",
+    "contractRequiredProps": [
+     "action",
+     "riskLevel"
+    ],
+    "verdict": "match (client class name differs from contract schema name)"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<EndpointNotificationActionResponseDto>",
+    "clientContainer": "object",
+    "contractEnvelope": "EndpointNotificationActionResponseApiResponse",
+    "contractDataKind": "object",
+    "contractDataSchema": "EndpointNotificationActionResponse",
+    "contractDataItems": null,
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "match"
+   }
+  },
+  {
+   "fun": "NativeTrackerService.upload (window)",
+   "method": "POST",
+   "path": "/api/v1/pc/tracker/upload",
+   "callSite": "Pim.Client.Core/Services/NativeTrackerService.cs:252,692",
+   "request": {
+    "clientDecl": "TrackerEventsUploadRequest",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "TrackerEventsUploadRequest",
+    "contractRequiredProps": [
+     "deviceId",
+     "events"
+    ],
+    "verdict": "match"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<int>",
+    "clientContainer": "scalar",
+    "contractEnvelope": "Int32ApiResponse",
+    "contractDataKind": "scalar",
+    "contractDataSchema": null,
+    "contractDataItems": "integer",
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "match"
+   }
+  },
+  {
+   "fun": "NativeTrackerService.upload (browser-tt)",
+   "method": "POST",
+   "path": "/api/v1/pc/browser-tt/upload",
+   "callSite": "Pim.Client.Core/Services/NativeTrackerService.cs:790",
+   "request": {
+    "clientDecl": "SiteEventsUploadRequest",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "SiteEventsUploadRequest",
+    "contractRequiredProps": [
+     "deviceId",
+     "events"
+    ],
+    "verdict": "match"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<int>",
+    "clientContainer": "scalar",
+    "contractEnvelope": "Int32ApiResponse",
+    "contractDataKind": "scalar",
+    "contractDataSchema": null,
+    "contractDataItems": "integer",
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "match"
+   }
+  },
+  {
+   "fun": "NativeTrackerService.reportHealth",
+   "method": "POST",
+   "path": "/api/v1/pc/tracker/health",
+   "callSite": "Pim.Client.Core/Services/NativeTrackerService.cs:867",
+   "request": {
+    "clientDecl": "TrackerHealthRequest",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "TrackerHealthRequest",
+    "contractRequiredProps": [
+     "browserConnected",
+     "deviceId",
+     "eventsUploaded",
+     "hookActive",
+     "pollCount",
+     "sessionsCreated",
+     "status",
+     "uploadFailures",
+     "uptimeSeconds"
+    ],
+    "verdict": "match"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<string>",
+    "clientContainer": "scalar",
+    "contractEnvelope": "StringApiResponse",
+    "contractDataKind": "scalar",
+    "contractDataSchema": null,
+    "contractDataItems": "string",
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "match"
+   }
+  },
+  {
+   "fun": "KeyStatsCollectorService.upload (samples)",
+   "method": "POST",
+   "path": "/api/v1/pc/keystats/samples",
+   "callSite": "Pim.Client.Core/Services/KeyStatsCollectorService.cs:136",
+   "request": {
+    "clientDecl": "KeystatsSampleUploadPayload",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "KeystatsSampleUploadRequest",
+    "contractRequiredProps": [
+     "date",
+     "keyPresses",
+     "leftClicks",
+     "middleClicks",
+     "mouseDistance",
+     "pimDeviceId",
+     "rightClicks",
+     "sampledAt",
+     "scrollDistance",
+     "sideBackClicks",
+     "sideForwardClicks"
+    ],
+    "verdict": "match (client class name differs from contract schema name)"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<string>",
+    "clientContainer": "scalar",
+    "contractEnvelope": "StringApiResponse",
+    "contractDataKind": "scalar",
+    "contractDataSchema": null,
+    "contractDataItems": "string",
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "match"
+   }
+  },
+  {
+   "fun": "KeyStatsCollectorService.upload (legacy)",
+   "method": "POST",
+   "path": "/api/v1/pc/keystats/upload",
+   "callSite": "Pim.Client.Core/Services/KeyStatsCollectorService.cs:137",
+   "request": {
+    "clientDecl": "KeyStatsSnapshot",
+    "contractPresent": true,
+    "contractRequired": true,
+    "contractSchema": "KeystatsUploadRequest",
+    "contractRequiredProps": [
+     "date",
+     "deviceId",
+     "keyPresses",
+     "leftClicks",
+     "middleClicks",
+     "mouseDistance",
+     "peakCps",
+     "peakKps",
+     "rightClicks",
+     "scrollDistance",
+     "sideBackClicks",
+     "sideForwardClicks"
+    ],
+    "verdict": "match (client class name differs from contract schema name)"
+   },
+   "response": {
+    "clientDecl": "ApiResponse<string>",
+    "clientContainer": "scalar",
+    "contractEnvelope": "StringApiResponse",
+    "contractDataKind": "scalar",
+    "contractDataSchema": null,
+    "contractDataItems": "string",
+    "contractContentType": "application/json",
+    "contractCode": "200",
+    "verdict": "match"
+   }
+  }
+ ],
+ "security": {
+  "realOperations": 13,
+  "bearerOperations": 10,
+  "anonymousOperations": 3,
+  "anonymous": [
+   "POST /api/v1/auth/login",
+   "POST /api/v1/auth/register",
+   "POST /api/v1/auth/refresh"
+  ],
+  "bearer": [
+   "POST /api/v1/daemon/heartbeat",
+   "POST /api/v1/daemon/planned-offline",
+   "GET /api/v1/endpoints",
+   "GET /api/v1/endpoints/{deviceId}/collection-quality",
+   "POST /api/v1/endpoints/{deviceId}/notification-actions",
+   "POST /api/v1/pc/tracker/upload",
+   "POST /api/v1/pc/browser-tt/upload",
+   "POST /api/v1/pc/tracker/health",
+   "POST /api/v1/pc/keystats/samples",
+   "POST /api/v1/pc/keystats/upload"
+  ],
+  "clientSideBehaviour": {
+   "singleHttpClient": "ApiClient.SetAccessToken 把 Bearer 写到 DefaultRequestHeaders（ApiClient.cs:100-104），ClearAccessToken 清掉（:106-109）",
+   "noPerOperationSwitch": "全部 operation 走同一个 SendWithAuthRetryAsync，没有 per-operation 匿名/Bearer 切换",
+   "anonymousButMayCarryBearer": "login/register/refresh 契约 security=null，但客户端可能带上一次登录遗留的 Bearer（服务端忽略，无实际危害）",
+   "health": "GET /health 走 StatusWindow 的静态 Http（无鉴权头），契约匿名 ✅",
+   "opsKey": "X-PIM-Ops-Key Windows 全仓 0 引用"
+  },
+  "headerOriginBoundary": {
+   "observation": "ApiClient.SetBaseUrl（ApiClient.cs:57-73）保留旧 DefaultRequestHeaders.Authorization（注释 // Preserve the current auth header），4 个切换点都不强制登出",
+   "switchSites": [
+    "AuthService.cs:64 (ServerUrl setter)",
+    "StatusWindow.xaml.cs:376",
+    "MainShellWindow.xaml.cs:77",
+    "App.xaml.cs:179"
+   ],
+   "risk": "header origin boundary；代码路径明确，是否真的发出 NOT-VERIFIED(runtime)（未抓包/真机）"
+  },
+  "originalAsPublished": {
+   "bearerOperations": 10,
+   "anonymousOperations": 3,
+   "note": "原 §2/§4 已逐 op 正确（与 R1 独立复算一致），本轮只做显式化，不改数值。"
+  },
+  "runtimeStatus": "NOT-VERIFIED(runtime)：未跑 API/DB/真机，不冒称授权链路已 runtime 验收。"
+ },
+ "excludedObservations": [
+  {
+   "item": "AuthResponse.ExpiresAt（DateTimeOffset）↔ date-time string",
+   "reason": "probe 实测可正确解析，等价"
+  },
+  {
+   "item": "ApiResponse<T> 无 timestamp",
+   "reason": "服务端多返回 timestamp，读侧忽略未知属性，等价"
+  },
+  {
+   "item": "TrackerEventForUpload ↔ TrackerEventDto 22/22",
+   "reason": "字段名/类型/可空性一致，非偏差"
+  },
+  {
+   "item": "DaemonSourceState 收到 Paused",
+   "reason": "客户端只发 3 值、收到 Paused 不会解码失败 → 覆盖缺口（非破坏）"
+  },
+  {
+   "item": "未用查询参数 / 客户端多发参数",
+   "reason": "非破坏覆盖观察"
+  }
+ ],
+ "revision": {
+  "round": "R1-correction",
+  "note": "对 windows 模型报告做 R1 复核修订（不是新的 R1，不重置 review 轮数）；只改报告，不改产品/契约。",
+  "review": "remediation/contract-refresh-20261012/reviews/android-windows-models-r1.md",
+  "evidenceLogs": [
+   "reviews/android-windows-models-r1.logs/03-windows-contract-check.log",
+   "reviews/android-windows-models-r1.logs/05-windows-dotnet-probe.log",
+   "reviews/android-windows-models-r1.logs/06-coverage-audit.log"
+  ],
+  "corrections": [
+   {
+    "id": "M-3/M-4",
+    "title": "keystats 大小写差异归类错误",
+    "change": "peakKps/peakCps 由 CONTRACT_FIELD_ABSENT_IN_CLIENT + client:null 改为 WIRE_NAME_CASE_MISMATCH，并写明客户端确实发 peakKPS/peakCPS（wire 名大小写不同，字段本身存在）。",
+    "originalFactKept": "原始 4 条 finding 保留在该 op 组的 originalAsPublishedFindings。"
+   },
+   {
+    "id": "M-3",
+    "title": "rawJson TYPE_MISMATCH 是误报",
+    "change": "TrackerEventDto.rawJson 契约 {nullable:true} 无 type、客户端 object? → 功能等价，移入 excludedFindings，不再计入命中数。",
+    "originalFactKept": "原始 finding 保留在 excludedFindings[].originalFinding。"
+   },
+   {
+    "id": "M-7",
+    "title": "probe runtime 与产品 target 版本表述",
+    "change": "写明 packet probe 跑 .NET 9、产品 target net8.0/net8.0-windows；R1 在 net8.0（8.0.31）重跑结果逐字一致。",
+    "originalFactKept": "原 serializer 记录保留。"
+   },
+   {
+    "id": "M-10",
+    "title": "detail JSON 缺 WIN-1（rrule）条目",
+    "change": "新增 AuthDtos dead declarations 组，记录 EventResponse.rrule ↔ 契约 rRule 的 wire 名大小写差异 + 死声明事实。",
+    "originalFactKept": "—"
+   },
+   {
+    "id": "I-1(口径)",
+    "title": "五维元数据补齐",
+    "change": "全部 finding 补齐 required/nullable/default/readOnly/writeOnly/enum/ref/type + requiredSemantics 方向分类。",
+    "originalFactKept": "原 contract/client 字段保留。"
+   }
+  ]
+ },
+ "snapshotBytesHash": {
+  "refreshedSnapshot": {
+   "bytes": 938271,
+   "sha256": "4dd7eafb4938818e13766e7177e1d05f45a4090643f9fe6dcd8d108c4f82af53",
+   "gitBlob": "e0842c562e9057f7ec57ee7216c99b57022439ed",
+   "sourcePath": "contract/openapi.json",
+   "note": "本轮未改动，字节与哈希保持不变"
+  },
+  "baselineSnapshot": {
+   "bytes": 258542,
+   "sha256": "1cf261973833a0690b09d2f2eda916de382359636259ab8ed55a8bb38f1aec98",
+   "gitBlob": "fd3e464c73b8766de10984553e36e9c2ea2b3018",
+   "declaredSourceCommit": "2f56dbb3"
+  }
+ }
+}
