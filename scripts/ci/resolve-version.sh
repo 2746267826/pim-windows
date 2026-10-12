@@ -52,7 +52,10 @@ CLIENT_PATCH="${CLIENT_PATCH:-}"
 
 is_release=false
 version="$BASE"
-if [[ "$REF" == "refs/heads/master" ]]; then
+# 审计 F-22：发版只允许由 **push 到 master** 触发。
+# 只看 GITHUB_REF 会让「在 master 上手动 workflow_dispatch」也发版 —— 手动重跑或
+# 演练会真的创建一个 Release，而这类触发从来不该产生发布。
+if [[ "$REF" == "refs/heads/master" && "$EVENT" == "push" ]]; then
   is_release=true
   if [[ -n "$CLIENT_PATCH" ]]; then
     version="${BASE}+${CLIENT_PATCH}"

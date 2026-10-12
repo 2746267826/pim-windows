@@ -25,7 +25,8 @@ on:
       extension_ref:
         required: false
         type: string
-        default: 'master'
+        # 不再回退到可变分支：传了 extension_repo 就必须同时传 40 位提交号（审计 F-09）。
+        default: ''
       extension_kind:
         required: false
         type: string
@@ -57,9 +58,9 @@ on:
         required: false
         default: ''
       extension_ref:
-        description: 'Browser extension ref (branch or tag)'
+        description: 'Browser extension ref (must be a full 40-hex commit SHA)'
         required: false
-        default: 'master'
+        default: ''
       extension_kind:
         description: 'Extension kind: url (tracker-web) or site (time-tracker fork)'
         required: false
@@ -98,8 +99,28 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.extension_repo }}
-          ref: ${{ inputs.extension_ref || 'master' }}
+          ref: ${{ inputs.extension_ref }}
           path: .browser-extension-src
+
+      # 外部仓必须固定到 40 位提交号，缺失或可变 ref 一律失败（审计 F-09）。
+      - name: Require pinned ref for external browser extension source
+        if: inputs.extension_repo != ''
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          case "${{ inputs.extension_ref }}" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *)
+              echo "::error::extension_repo is set but extension_ref='${{ inputs.extension_ref }}' is not a 40-hex commit SHA"
+              exit 1
+              ;;
+          esac
+          # 检出后的 HEAD 必须真的等于这个提交号（只看输入值不足以证明检出的就是它）。
+          actual="$(git -C "$GITHUB_WORKSPACE/.browser-extension-src" rev-parse HEAD)"
+          if [ "$actual" != "${{ inputs.extension_ref }}" ]; then
+            echo "::error::browser extension HEAD is $actual, expected ${{ inputs.extension_ref }}"
+            exit 1
+          fi
 
       - name: Use in-repo browser extension source
         if: inputs.extension_repo == ''
