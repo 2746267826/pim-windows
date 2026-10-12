@@ -9,7 +9,7 @@ This repository is shared by multiple agent conversations. Keep `master` useful 
 - 本仓与 `pim-api` 的接口以 `contract/openapi.json` 为准（快照随本仓提交，说明见 `contract/README.md`）。
 - **不要凭猜测调用接口**：不得手写或臆测契约里不存在的路径、字段、枚举值。改动涉及接口时，先对照契约确认形状。
 - **需要新接口时不要自己造**：把需求写给用户转交后端实现 —— 说明用途、请求方法与路径、请求字段、响应字段、示例。后端在 `pim-api` 实现并更新契约后，本仓再刷新快照并接入。
-- 后端契约更新后，用 `scripts/ci/fetch-contract.sh` 刷新本仓快照再提交。快照落后不影响本仓 CI（不阻塞），但接入新字段前必须先刷新。
+- 后端契约更新后，用 `scripts/ci/fetch-contract.sh` 刷新本仓快照（同时写出 `contract/provenance.json`）再提交。**快照落后会让本仓 CI 变红**：`contract-freshness` job 会把仓内快照与上游 `master` 的字节逐字节比较，并接进必过的 `CI Gate`；跑一次刷新脚本并提交两个产物即恢复。只读校验用 `scripts/ci/check-contract-freshness.sh`（CI 调的就是它，**绝不写仓**），不要拿刷新脚本当校验用。
 
 ### 门禁怎么过
 - 四个公开仓（api / web / android / windows）的 `master` 有两把锁：**`CI Gate`** 与 **`PIM Independent Acceptance`**。

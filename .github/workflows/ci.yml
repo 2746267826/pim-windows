@@ -123,9 +123,45 @@ jobs:
         run: dotnet test tests/Pim.Client.App.Tests/Pim.Client.App.Tests.csproj --logger "console;verbosity=minimal"
 
 
+  # 契约新鲜度（required job）：只读校验，绝不写仓。
+  # 事件面：push(master) / pull_request(master) / workflow_dispatch 全部真实执行；
+  # 无 if:、无 continue-on-error、无路径过滤 —— 快照陈旧或取不到权威源一律 fail-closed，
+  # 不因「不是 PR」而放行（master 上的静默漂移正是最需要拦的场景）。
+  # 刷新入口只有 scripts/ci/fetch-contract.sh（人工），CI 只调只读 check。
+  contract-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 行为测试里的「旧 master 无 freshness 入口」负对照要读 origin/master。
+          fetch-depth: 0
+
+      # 显式准备 python：check / fetch 用 python3 校验 payload 与 provenance；
+      # 行为测试还需要 PyYAML 从真实 ci.yml 原样抽取 step 与 gate 检查函数。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install python dependencies for contract checks
+        run: python3 -m pip install --disable-pip-version-check --quiet PyYAML
+
+      # 先跑离线目标行为测试（本机 git 上游 + 本机 HTTP raw 源），再跑默认真实上游 check。
+      - name: Contract freshness behavior tests (offline fixtures)
+        run: |
+          set -euo pipefail
+          bash scripts/ci/test-contract-freshness.sh
+
+      # 不设任何 PIM_CONTRACT_* env：走默认真实上游，无跨仓覆盖、无本地权威源旁路。
+      - name: Verify contract snapshot is up to date (real upstream)
+        run: |
+          set -euo pipefail
+          bash scripts/ci/check-contract-freshness.sh
+          echo "✅ contract/openapi.json 与 contract/provenance.json 均与 pim-api 当前上游一致"
+
+
   gate:
     name: CI Gate
-    needs: [resolve-version, build-windows, build-shell-windows, build-browser-extension, build-browser-extension-firefox, test-client-core, test-client-app]
+    needs: [resolve-version, build-windows, build-shell-windows, build-browser-extension, build-browser-extension-firefox, test-client-core, test-client-app, contract-freshness]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -138,6 +174,7 @@ jobs:
           R_EXT_FIREFOX: ${{ needs.build-browser-extension-firefox.result }}
           R_TEST_CORE: ${{ needs.test-client-core.result }}
           R_TEST_APP: ${{ needs.test-client-app.result }}
+          R_CONTRACT: ${{ needs.contract-freshness.result }}
         run: |
           set -uo pipefail
           fail=0
@@ -157,6 +194,7 @@ jobs:
           check "build-browser-extension-firefox" "$R_EXT_FIREFOX"
           check "test-client-core" "$R_TEST_CORE"
           check "test-client-app" "$R_TEST_APP"
+          check "contract-freshness" "$R_CONTRACT"
 
           if [ "$fail" -ne 0 ]; then
             echo ""
@@ -176,9 +214,10 @@ jobs:
     if: |
       always() &&
       needs.resolve-version.outputs.is_release == 'true' &&
+      needs.contract-freshness.result == 'success' &&
       !contains(needs.*.result, 'failure') &&
       !contains(needs.*.result, 'cancelled')
-    needs: [resolve-version, build-windows, build-shell-windows]
+    needs: [resolve-version, contract-freshness, build-windows, build-shell-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
