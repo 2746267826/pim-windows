@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Models;
 
 namespace Pim.Client.Core.Services;
@@ -75,7 +76,7 @@ public sealed class KeyStatsCollectorService : IDisposable
     {
         try
         {
-            var stats = await _keyStats.GetFromJsonAsync<KeyStatsSnapshot>("/api/stats/", _cts.Token);
+            var stats = await _keyStats.GetFromJsonAsync<KeyStatsLocalSnapshot>("/api/stats/", _cts.Token);
             if (stats is null) return;
 
             var snapshot = new KeyStatsCounterSnapshot(
@@ -114,27 +115,51 @@ public sealed class KeyStatsCollectorService : IDisposable
                 return;
             }
 
-            var sample = new KeystatsSampleUploadPayload(
-                stats.DeviceId,
-                DateTimeOffset.UtcNow.ToString("O"),
-                stats.Date,
-                stats.KeyPresses,
-                stats.KeyPressCounts,
-                stats.LeftClicks,
-                stats.RightClicks,
-                stats.MiddleClicks,
-                stats.SideBackClicks,
-                stats.SideForwardClicks,
-                stats.MouseDistance,
-                stats.ScrollDistance,
-                stats.PeakKps,
-                stats.PeakCps,
-                stats.FormattedMouseDistance,
-                stats.FormattedScrollDistance,
-                stats.AppStats);
+            // 上报用的两个请求体都是**契约生成类型**：字段名/类型/必填性来自 contract/openapi.json。
+            // 注意契约里这两条路径的字段名本来就不一致（KeystatsSampleUploadRequest 用 peakKPS，
+            // KeystatsUploadRequest 用 peakKps），生成物如实照搬 —— 客户端不再自己发明大小写。
+            var wireAppStats = ToWireAppStats(stats.AppStats);
+            var sample = new KeystatsSampleUploadRequest
+            {
+                PimDeviceId = stats.DeviceId,
+                SampledAt = DateTimeOffset.UtcNow.ToString("O"),
+                Date = stats.Date,
+                KeyPresses = stats.KeyPresses,
+                KeyPressCounts = stats.KeyPressCounts,
+                LeftClicks = stats.LeftClicks,
+                RightClicks = stats.RightClicks,
+                MiddleClicks = stats.MiddleClicks,
+                SideBackClicks = stats.SideBackClicks,
+                SideForwardClicks = stats.SideForwardClicks,
+                MouseDistance = stats.MouseDistance,
+                ScrollDistance = stats.ScrollDistance,
+                PeakKPS = stats.PeakKps,
+                PeakCPS = stats.PeakCps,
+                FormattedMouseDistance = stats.FormattedMouseDistance,
+                FormattedScrollDistance = stats.FormattedScrollDistance,
+                AppStats = wireAppStats,
+            };
 
-            var sampleResult = await TryPostAsync("/pc/keystats/samples", sample);
-            var legacyResult = await TryPostAsync("/pc/keystats/upload", stats);
+            var legacy = new KeystatsUploadRequest
+            {
+                DeviceId = stats.DeviceId,
+                Date = stats.Date,
+                KeyPresses = stats.KeyPresses,
+                KeyPressCounts = stats.KeyPressCounts,
+                LeftClicks = stats.LeftClicks,
+                RightClicks = stats.RightClicks,
+                MiddleClicks = stats.MiddleClicks,
+                SideBackClicks = stats.SideBackClicks,
+                SideForwardClicks = stats.SideForwardClicks,
+                MouseDistance = stats.MouseDistance,
+                ScrollDistance = stats.ScrollDistance,
+                PeakKps = stats.PeakKps,
+                PeakCps = stats.PeakCps,
+                AppStats = wireAppStats,
+            };
+
+            var sampleResult = await TryUploadSampleAsync(sample);
+            var legacyResult = await TryUploadLegacyAsync(legacy);
             var healthMessage = BuildUploadHealthMessage(sampleResult is not null, legacyResult is not null);
 
             if (sampleResult is not null || legacyResult is not null)
@@ -164,20 +189,61 @@ public sealed class KeyStatsCollectorService : IDisposable
         }
     }
 
-    private async Task<ApiResponse<string>?> TryPostAsync(string endpoint, object payload)
+    private async Task<StringApiResponse?> TryUploadSampleAsync(KeystatsSampleUploadRequest payload)
     {
         try
         {
-            return await _api.PostAsync<ApiResponse<string>>(endpoint, payload, _cts.Token);
+            return await _api.UploadKeystatsSampleAsync(payload, _cts.Token);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            Log?.Invoke($"[KeyStatsCollector] Upload to {endpoint} failed: {ex.Message}");
+            Log?.Invoke($"[KeyStatsCollector] Upload to {ContractOperation.UploadKeystatsSample.PathTemplate} failed: {ex.Message}");
             return null;
         }
     }
 
-    private static string FormatUploadResult(ApiResponse<string>? result)
+    private async Task<StringApiResponse?> TryUploadLegacyAsync(KeystatsUploadRequest payload)
+    {
+        try
+        {
+            return await _api.UploadKeystatsSnapshotAsync(payload, _cts.Token);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Log?.Invoke($"[KeyStatsCollector] Upload to {ContractOperation.UploadKeystatsSnapshot.PathTemplate} failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>本机 keystats 服务的 appStats 形状 → 契约生成的 <see cref="AppStatEntry"/>。</summary>
+    private static Dictionary<string, AppStatEntry>? ToWireAppStats(Dictionary<string, KeyStatsAppStats>? appStats)
+    {
+        if (appStats is null)
+        {
+            return null;
+        }
+
+        var result = new Dictionary<string, AppStatEntry>(appStats.Count, StringComparer.Ordinal);
+        foreach (var (key, value) in appStats)
+        {
+            result[key] = new AppStatEntry
+            {
+                AppName = value.AppName,
+                DisplayName = value.DisplayName,
+                KeyPresses = value.KeyPresses,
+                LeftClicks = value.LeftClicks,
+                RightClicks = value.RightClicks,
+                MiddleClicks = value.MiddleClicks,
+                SideBackClicks = value.SideBackClicks,
+                SideForwardClicks = value.SideForwardClicks,
+                ScrollDistance = value.ScrollDistance,
+            };
+        }
+
+        return result;
+    }
+
+    private static string FormatUploadResult(StringApiResponse? result)
     {
         return result is null ? "failed" : "ok";
     }
@@ -200,7 +266,12 @@ public sealed class KeyStatsCollectorService : IDisposable
         _keyStats.Dispose();
     }
 
-    private sealed class KeyStatsSnapshot
+    /// <summary>
+    /// 本机 keystats 服务（<see cref="ClientDefaults.KeyStatsBaseUrl"/>，不是 pim-api）返回的快照形状。
+    /// 它的 <c>peakKPS</c>/<c>peakCPS</c> 是本机服务自己的写法，与 pim-api 契约无关；
+    /// 上线前由本类逐字段映射到契约生成的请求类型。
+    /// </summary>
+    private sealed class KeyStatsLocalSnapshot
     {
         [JsonPropertyName("deviceId")]
         public string DeviceId { get; set; } = Environment.MachineName;
@@ -264,27 +335,4 @@ public sealed class KeyStatsCollectorService : IDisposable
         public double ScrollDistance { get; set; }
     }
 
-    private sealed record KeystatsSampleUploadPayload(
-        string PimDeviceId,
-        string SampledAt,
-        string Date,
-        int KeyPresses,
-        Dictionary<string, int>? KeyPressCounts,
-        int LeftClicks,
-        int RightClicks,
-        int MiddleClicks,
-        int SideBackClicks,
-        int SideForwardClicks,
-        double MouseDistance,
-        double ScrollDistance,
-        [property: JsonPropertyName("peakKPS")]
-        int PeakKps,
-        [property: JsonPropertyName("peakCPS")]
-        int PeakCps,
-        [property: JsonPropertyName("formattedMouseDistance")]
-        string? FormattedMouseDistance,
-        [property: JsonPropertyName("formattedScrollDistance")]
-        string? FormattedScrollDistance,
-        Dictionary<string, KeyStatsAppStats>? AppStats
-    );
 }

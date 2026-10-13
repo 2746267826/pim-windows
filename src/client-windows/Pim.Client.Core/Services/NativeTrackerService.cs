@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading.Channels;
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Models;
 using Pim.Client.Core.Utils;
 
@@ -24,7 +26,7 @@ public sealed class NativeTrackerService : IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly CancellationTokenSource _cts = new();
     private readonly Channel<TrackerWindowInfo> _windowChannel = Channel.CreateUnbounded<TrackerWindowInfo>();
-    private readonly ConcurrentQueue<TrackerEventForUpload> _uploadQueue = new();
+    private readonly ConcurrentQueue<TrackerEventDto> _uploadQueue = new();
     private readonly ConcurrentQueue<SiteEventDto> _siteUploadQueue = new();
     private readonly object _statsLock = new();
     private readonly object _siteStatsLock = new();
@@ -233,7 +235,7 @@ public sealed class NativeTrackerService : IDisposable
 
         while (!_uploadQueue.IsEmpty && !linkedCts.IsCancellationRequested)
         {
-            var batch = new List<TrackerEventForUpload>();
+            var batch = new List<TrackerEventDto>();
             while (batch.Count < _config.UploadBatchSize && _uploadQueue.TryDequeue(out var ev))
             {
                 batch.Add(ev);
@@ -249,7 +251,7 @@ public sealed class NativeTrackerService : IDisposable
 
             try
             {
-                var resp = await _api.PostAsync<ApiResponse<int>>("/pc/tracker/upload", req, linkedCts.Token).ConfigureAwait(false);
+                var resp = await _api.UploadTrackerEventsAsync(req, linkedCts.Token).ConfigureAwait(false);
                 if (resp is not null)
                 {
                     lock (_statsLock)
@@ -294,7 +296,7 @@ public sealed class NativeTrackerService : IDisposable
         }
     }
 
-    private void EnqueueEventSafely(TrackerEventForUpload ev)
+    private void EnqueueEventSafely(TrackerEventDto ev)
     {
         if (DateTimeOffset.TryParse(ev.Timestamp, out var ts))
         {
@@ -334,32 +336,34 @@ public sealed class NativeTrackerService : IDisposable
             var segDuration = (chunkEnd - cur).TotalSeconds;
             if (segDuration > 0)
             {
-                EnqueueEventSafely(new TrackerEventForUpload
+                EnqueueEventSafely(new TrackerEventDto
                 {
                     Timestamp = cur.ToString("O"),
                     Duration = segDuration,
                     EventType = "gap",
                     IsIdle = false,
                     IsMediaActive = false,
+                    PageVisitCount = 0,
+                    PageVisitDuration = 0,
                     Date = BusinessDayUtils.GetBusinessDateString(cur),
-                    RawJson = new { gapStart = cur, gapEnd = chunkEnd, isStartup }
+                    RawJson = JsonSerializer.SerializeToElement(new { gapStart = cur, gapEnd = chunkEnd, isStartup })
                 });
             }
             cur = chunkEnd;
         }
     }
 
-    public List<TrackerEventForUpload> SessionToEvents(TrackerSession session, DateTimeOffset endedAt)
+    public List<TrackerEventDto> SessionToEvents(TrackerSession session, DateTimeOffset endedAt)
     {
         var duration = session.DurationSecs ?? (endedAt - session.StartedAt).TotalSeconds;
-        if (duration <= 0) return new List<TrackerEventForUpload>();
+        if (duration <= 0) return new List<TrackerEventDto>();
 
         // Idle sessions are single event
         if (session.IsIdle)
         {
-            return new List<TrackerEventForUpload>
+            return new List<TrackerEventDto>
             {
-                new TrackerEventForUpload
+                new TrackerEventDto
                 {
                     Timestamp = session.StartedAt.ToString("O"),
                     Duration = duration,
@@ -370,8 +374,10 @@ public sealed class NativeTrackerService : IDisposable
                     WindowTitle = session.WindowTitle,
                     IsIdle = true,
                     IsMediaActive = session.IsMediaActive,
+                    PageVisitCount = 0,
+                    PageVisitDuration = 0,
                     Date = BusinessDayUtils.GetBusinessDateString(session.StartedAt),
-                    RawJson = new { sessionId = session.Id, isIdle = true }
+                    RawJson = JsonSerializer.SerializeToElement(new { sessionId = session.Id, isIdle = true })
                 }
             };
         }
@@ -393,9 +399,9 @@ public sealed class NativeTrackerService : IDisposable
         if (validVisits.Count == 0)
         {
             // Non-browser or browser without recorded page visits: single window event
-            return new List<TrackerEventForUpload>
+            return new List<TrackerEventDto>
             {
-                new TrackerEventForUpload
+                new TrackerEventDto
                 {
                     Timestamp = session.StartedAt.ToString("O"),
                     Duration = duration,
@@ -408,7 +414,7 @@ public sealed class NativeTrackerService : IDisposable
                     IsIdle = false,
                     IsMediaActive = session.IsMediaActive,
                     Date = BusinessDayUtils.GetBusinessDateString(session.StartedAt),
-                    RawJson = new { sessionId = session.Id },
+                    RawJson = JsonSerializer.SerializeToElement(new { sessionId = session.Id }),
                     PageVisitCount = 0,
                     PageVisitDuration = 0,
                     Browser = hbForWindow?.Browser,
@@ -418,7 +424,7 @@ public sealed class NativeTrackerService : IDisposable
         }
 
         // Decompose browser session into non-overlapping segments (window and web-page)
-        var list = new List<TrackerEventForUpload>();
+        var list = new List<TrackerEventDto>();
         var cur = session.StartedAt;
 
         foreach (var pv in validVisits)
@@ -433,7 +439,7 @@ public sealed class NativeTrackerService : IDisposable
                 var gapDur = (pvStart - cur).TotalSeconds;
                 if (gapDur >= 0.05)
                 {
-                    list.Add(new TrackerEventForUpload
+                    list.Add(new TrackerEventDto
                     {
                         Timestamp = cur.ToString("O"),
                         Duration = gapDur,
@@ -444,8 +450,10 @@ public sealed class NativeTrackerService : IDisposable
                         WindowTitle = session.WindowTitle,
                         IsIdle = false,
                         IsMediaActive = session.IsMediaActive,
+                        PageVisitCount = 0,
+                        PageVisitDuration = 0,
                         Date = BusinessDayUtils.GetBusinessDateString(cur),
-                        RawJson = new { sessionId = session.Id },
+                        RawJson = JsonSerializer.SerializeToElement(new { sessionId = session.Id }),
                         Browser = hbForWindow?.Browser,
                         InstanceId = hbForWindow?.InstanceId
                     });
@@ -457,7 +465,7 @@ public sealed class NativeTrackerService : IDisposable
             var visitDur = (pvEnd - visitStart).TotalSeconds;
             if (visitDur >= 0.05)
             {
-                list.Add(new TrackerEventForUpload
+                list.Add(new TrackerEventDto
                 {
                     Timestamp = visitStart.ToString("O"),
                     Duration = visitDur,
@@ -474,8 +482,10 @@ public sealed class NativeTrackerService : IDisposable
                     TabCount = hbForWindow?.TabCount,
                     IsIdle = false,
                     IsMediaActive = false,
+                    PageVisitCount = 0,
+                    PageVisitDuration = 0,
                     Date = BusinessDayUtils.GetBusinessDateString(visitStart),
-                    RawJson = new { sessionId = session.Id, pageVisit = pv },
+                    RawJson = JsonSerializer.SerializeToElement(new { sessionId = session.Id, pageVisit = pv }),
                     Browser = hbForWindow?.Browser,
                     InstanceId = hbForWindow?.InstanceId
                 });
@@ -491,7 +501,7 @@ public sealed class NativeTrackerService : IDisposable
             var tailDur = (endedAt - cur).TotalSeconds;
             if (tailDur >= 0.05)
             {
-                list.Add(new TrackerEventForUpload
+                list.Add(new TrackerEventDto
                 {
                     Timestamp = cur.ToString("O"),
                     Duration = tailDur,
@@ -502,8 +512,10 @@ public sealed class NativeTrackerService : IDisposable
                     WindowTitle = session.WindowTitle,
                     IsIdle = false,
                     IsMediaActive = session.IsMediaActive,
+                    PageVisitCount = 0,
+                    PageVisitDuration = 0,
                     Date = BusinessDayUtils.GetBusinessDateString(cur),
-                    RawJson = new { sessionId = session.Id },
+                    RawJson = JsonSerializer.SerializeToElement(new { sessionId = session.Id }),
                     Browser = hbForWindow?.Browser,
                     InstanceId = hbForWindow?.InstanceId
                 });
@@ -673,11 +685,11 @@ public sealed class NativeTrackerService : IDisposable
 
         while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
         {
-            List<TrackerEventForUpload>? batch = null;
+            List<TrackerEventDto>? batch = null;
             try
             {
                 if (_uploadQueue.IsEmpty) continue;
-                batch = new List<TrackerEventForUpload>();
+                batch = new List<TrackerEventDto>();
                 while (batch.Count < _config.UploadBatchSize && _uploadQueue.TryDequeue(out var ev))
                     batch.Add(ev);
 
@@ -689,7 +701,7 @@ public sealed class NativeTrackerService : IDisposable
                     Events = batch
                 };
 
-                var result = await _api.PostAsync<ApiResponse<int>>("/pc/tracker/upload", req, ct).ConfigureAwait(false);
+                var result = await _api.UploadTrackerEventsAsync(req, ct).ConfigureAwait(false);
                 if (result is not null)
                 {
                     lock (_statsLock) _eventsUploaded += batch.Count;
@@ -744,6 +756,21 @@ public sealed class NativeTrackerService : IDisposable
     }
 
     /// <summary>
+    /// 本机站点事件（<see cref="SiteEventDto"/>）→ 契约生成的 <see cref="SiteEventUploadDto"/>。
+    /// 契约里没有 <c>at</c>，因此它只在本机链路里流转、不上线；契约新增字段时会在这里编译报错，
+    /// 不会出现「客户端偷偷多发一个契约没有的字段」。
+    /// </summary>
+    private static SiteEventUploadDto ToWireSiteEvent(SiteEventDto ev) => new()
+    {
+        Kind = ev.Kind,
+        Host = ev.Host,
+        StartMs = ev.StartMs,
+        EndMs = ev.EndMs,
+        DurationMs = ev.DurationMs,
+        Date = ev.Date,
+    };
+
+    /// <summary>
     /// Drains site-level events from the bridge channel and uploads them to
     /// /pc/browser-tt/upload with the same retry semantics as the window
     /// tracker: requeue on server/transport errors, drop on other 4xx.
@@ -782,12 +809,14 @@ public sealed class NativeTrackerService : IDisposable
                         : DateTimeOffset.Now.ToString("yyyy-MM-dd");
                 }
 
+                // 站点事件在本机链路里用的是 SiteEventDto（含契约没有的 at 字段）；
+                // 上线前映射成契约类型 SiteEventUploadDto —— 契约里没有的字段不会发出去。
                 var req = new SiteEventsUploadRequest
                 {
                     DeviceId = Environment.MachineName,
-                    Events = batch
+                    Events = batch.ConvertAll(ToWireSiteEvent)
                 };
-                var result = await _api.PostAsync<ApiResponse<int>>("/pc/browser-tt/upload", req, ct).ConfigureAwait(false);
+                var result = await _api.UploadSiteEventsAsync(req, ct).ConfigureAwait(false);
                 if (result is not null)
                 {
                     lock (_siteStatsLock) _siteEventsUploaded += batch.Count;
@@ -864,7 +893,7 @@ public sealed class NativeTrackerService : IDisposable
                     SiteEventsUploaded = SiteEventsUploaded,
                     SiteLastError = SiteLastError
                 };
-                await _api.PostAsync<ApiResponse<string>>("/pc/tracker/health", req, ct).ConfigureAwait(false);
+                await _api.ReportTrackerHealthAsync(req, ct).ConfigureAwait(false);
                 _logger.Debug("Tracker", $"Health reported: hook={req.HookActive} polls={req.PollCount} sessions={req.SessionsCreated} uploaded={req.EventsUploaded}");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }

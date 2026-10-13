@@ -3,6 +3,11 @@ using Pim.Client.Core.Utils;
 
 namespace Pim.Client.Core.Models;
 
+// 说明：本文件只保留**客户端内部**模型（本机采集状态、浏览器桥协议、本地服务）。
+// 与 pim-api 交互的接口 DTO 已由契约生成，位于 Pim.Client.Core.Contract
+// （TrackerEventDto / TrackerEventsUploadRequest / TrackerHealthRequest / SiteEventUploadDto /
+//  SiteEventsUploadRequest，见 scripts/contract/generate-csharp.py）。
+
 public sealed class TrackerConfig
 {
     public bool Enabled { get; set; } = true;
@@ -32,6 +37,7 @@ public sealed class TrackerWindowInfo
                              || string.Equals(AppName, "ShellExperienceHost", StringComparison.OrdinalIgnoreCase);
 }
 
+/// <summary>浏览器扩展 → 守护程序的桥协议消息（本机 WebSocket / HTTP，不是 pim-api 契约）。</summary>
 public sealed class BrowserHeartbeat
 {
     [JsonPropertyName("url")] public string Url { get; set; } = string.Empty;
@@ -92,32 +98,6 @@ public sealed class TrackerPageVisit
     public double? DurationSecs { get; set; }
 }
 
-public sealed class TrackerEventForUpload
-{
-    [JsonPropertyName("timestamp")] public string Timestamp { get; set; } = string.Empty;
-    [JsonPropertyName("duration")] public double Duration { get; set; }
-    [JsonPropertyName("eventType")] public string EventType { get; set; } = "window";
-    [JsonPropertyName("exePath")] public string? ExePath { get; set; }
-    [JsonPropertyName("appName")] public string? AppName { get; set; }
-    [JsonPropertyName("displayName")] public string? DisplayName { get; set; }
-    [JsonPropertyName("windowTitle")] public string? WindowTitle { get; set; }
-    [JsonPropertyName("commandLine")] public string? CommandLine { get; set; }
-    [JsonPropertyName("isIdle")] public bool IsIdle { get; set; }
-    [JsonPropertyName("isMediaActive")] public bool IsMediaActive { get; set; }
-    [JsonPropertyName("url")] public string? Url { get; set; }
-    [JsonPropertyName("domain")] public string? Domain { get; set; }
-    [JsonPropertyName("pagePath")] public string? PagePath { get; set; }
-    [JsonPropertyName("audible")] public bool? Audible { get; set; }
-    [JsonPropertyName("incognito")] public bool? Incognito { get; set; }
-    [JsonPropertyName("tabCount")] public int? TabCount { get; set; }
-    [JsonPropertyName("pageVisitCount")] public int PageVisitCount { get; set; }
-    [JsonPropertyName("pageVisitDuration")] public double PageVisitDuration { get; set; }
-    [JsonPropertyName("rawJson")] public object? RawJson { get; set; }
-    [JsonPropertyName("date")] public string Date { get; set; } = string.Empty;
-    [JsonPropertyName("browser")] public string? Browser { get; set; }
-    [JsonPropertyName("instanceId")] public string? InstanceId { get; set; }
-}
-
 public sealed class BrowserConnection
 {
     public string InstanceId { get; set; } = string.Empty;
@@ -135,34 +115,22 @@ public sealed class BrowserConnection
     public readonly object SyncRoot = new();
 }
 
-public sealed class TrackerEventsUploadRequest
+/// <summary>
+/// 浏览器扩展 → 守护程序的桥协议报文（本机 HTTP，不是 pim-api 契约）：
+/// 扩展把站点事件批量投递到本机 bridge，字段由扩展侧决定。
+/// </summary>
+public sealed class SiteEventsRequest
 {
-    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = Environment.MachineName;
-    [JsonPropertyName("events")] public List<TrackerEventForUpload> Events { get; set; } = new();
+    [JsonPropertyName("events")] public List<SiteEventDto> Events { get; set; } = new();
 }
 
-
-public sealed class TrackerHealthRequest
-{
-    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = Environment.MachineName;
-    [JsonPropertyName("status")] public string Status { get; set; } = "running";
-    [JsonPropertyName("uptimeSeconds")] public double UptimeSeconds { get; set; }
-    [JsonPropertyName("hookActive")] public bool HookActive { get; set; }
-    [JsonPropertyName("pollCount")] public long PollCount { get; set; }
-    [JsonPropertyName("sessionsCreated")] public long SessionsCreated { get; set; }
-    [JsonPropertyName("eventsUploaded")] public long EventsUploaded { get; set; }
-    [JsonPropertyName("uploadFailures")] public long UploadFailures { get; set; }
-    [JsonPropertyName("lastError")] public string? LastError { get; set; }
-    [JsonPropertyName("browserConnected")] public bool BrowserConnected { get; set; }
-    [JsonPropertyName("browserHeartbeatAgeSeconds")] public double? BrowserHeartbeatAgeSeconds { get; set; }
-    [JsonPropertyName("siteConnected")] public bool SiteConnected { get; set; }
-    [JsonPropertyName("siteLastEventAgeSeconds")] public double? SiteLastEventAgeSeconds { get; set; }
-    [JsonPropertyName("siteEventsUploaded")] public long SiteEventsUploaded { get; set; }
-    [JsonPropertyName("siteLastError")] public string? SiteLastError { get; set; }
-}
-
-// —— 站点级浏览数据（Time Tracker fork → 守护进程 → 服务端） ——
-// kind: focus(startMs/endMs) | tick(startMs/durationMs) | visit | run/media(date/durationMs)
+/// <summary>
+/// 站点级浏览数据（Time Tracker fork → 守护进程）的内部传输类型，kind 取值：
+/// focus(startMs/endMs) | tick(startMs/durationMs) | visit | run/media(date/durationMs)。
+///
+/// 它**不是** pim-api 契约里的类型：上线前由 NativeTrackerService 映射为契约生成的
+/// <c>Pim.Client.Core.Contract.SiteEventUploadDto</c>；本类型多出来的 <c>at</c> 只在本机链路里流转。
+/// </summary>
 public sealed class SiteEventDto
 {
     [JsonPropertyName("kind")] public string Kind { get; set; } = string.Empty;
@@ -172,15 +140,4 @@ public sealed class SiteEventDto
     [JsonPropertyName("durationMs")] public long? DurationMs { get; set; }
     [JsonPropertyName("date")] public string? Date { get; set; }
     [JsonPropertyName("at")] public long? At { get; set; }
-}
-
-public sealed class SiteEventsRequest
-{
-    [JsonPropertyName("events")] public List<SiteEventDto> Events { get; set; } = new();
-}
-
-public sealed class SiteEventsUploadRequest
-{
-    [JsonPropertyName("deviceId")] public string DeviceId { get; set; } = Environment.MachineName;
-    [JsonPropertyName("events")] public List<SiteEventDto> Events { get; set; } = new();
 }

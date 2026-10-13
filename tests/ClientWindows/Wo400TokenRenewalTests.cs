@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Models;
 using Pim.Client.Core.Services;
 using Xunit;
@@ -98,8 +99,8 @@ public sealed class Wo400TokenRenewalTests : IDisposable
         for (int minute = 0; minute < 45; minute++)
         {
             clock.Advance(TimeSpan.FromMinutes(1));
-            await api.PostAsync<ApiResponse<int>>("/pc/tracker/upload",
-                new TrackerEventsUploadRequest { DeviceId = "PC-01", Events = new List<TrackerEventForUpload>() });
+            await api.UploadTrackerEventsAsync(
+                new TrackerEventsUploadRequest { DeviceId = "PC-01", Events = new List<TrackerEventDto>() });
         }
 
         Assert.Equal(0, handler.BusinessUnauthorized);
@@ -152,8 +153,8 @@ public sealed class Wo400TokenRenewalTests : IDisposable
         handler.InvalidateServerSideToken();
 
         var tasks = Enumerable.Range(0, 8).Select(_ =>
-            api.PostAsync<ApiResponse<int>>("/pc/tracker/upload",
-                new TrackerEventsUploadRequest { DeviceId = "PC-01", Events = new List<TrackerEventForUpload>() }))
+            api.UploadTrackerEventsAsync(
+                new TrackerEventsUploadRequest { DeviceId = "PC-01", Events = new List<TrackerEventDto>() }))
             .ToArray();
 
         await Task.WhenAll(tasks);

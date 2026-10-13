@@ -6,12 +6,13 @@
 #       做逐字节比较，并校验 contract/provenance.json 的形状及其与仓内快照的一致性。
 #       任一不一致 → 非 0，交由 CI Gate 拦截。
 #
-# 本仓没有 generated 产物：客户端模型是手写的，没有 openapi-typescript 步骤，
-# 因此这里**不**做（也不假造）生成物比较；模型与契约的一致性由
-# contract/model-consistency.md / .detail.json 的人工报告负责（只报告不修产品）。
+# 本脚本只管**契约快照本身**的新鲜度；客户端生成物（ContractModels.cs / ContractOperations.cs）
+# 的一致性由 scripts/ci/check-contract-csharp.sh（CI 的 contract-generated job）负责 ——
+# 两个门禁各管一段，这里不重复也不假造生成物比较。
 #
 # 只读保证：本脚本不写任何仓内文件；所有中间产物都在仓外 mktemp 目录，退出时删除。
-#           「谁写」= scripts/ci/fetch-contract.sh（人工 refresh）；「谁只读」= 本脚本。
+#           「谁写」= scripts/ci/fetch-contract.sh（人工 refresh；一键入口是刷新快照 + 生成物同批的
+#           scripts/ci/refresh-contract.sh）；「谁只读」= 本脚本。
 #
 # 用法：
 #   bash scripts/ci/check-contract-freshness.sh
@@ -120,7 +121,7 @@ UP_SHA="$(pim_contract_sha256 "$UPSTREAM")"
 pim_contract_log "上游字节  : $UP_BYTES 字节 sha256=$UP_SHA $(pim_contract_payload_summary "$UPSTREAM")"
 
 if [ ! -f "$SNAPSHOT" ]; then
-  pim_contract_err "仓内快照不存在：$SNAPSHOT（陈旧：需要运行 scripts/ci/fetch-contract.sh 并提交）"
+  pim_contract_err "仓内快照不存在：$SNAPSHOT（陈旧：需要运行 scripts/ci/refresh-contract.sh 并提交）"
   exit $EXIT_STALE
 fi
 SNAP_BYTES="$(pim_contract_bytes "$SNAPSHOT")"
@@ -129,7 +130,7 @@ pim_contract_log "仓内快照  : $SNAP_BYTES 字节 sha256=$SNAP_SHA"
 
 # --- 4) 核心判据：逐字节比较（只有字节差异决定退出码） ----------------------
 if ! cmp -s "$UPSTREAM" "$SNAPSHOT"; then
-  pim_contract_err "契约快照已陈旧：contract/openapi.json（$SNAP_BYTES 字节 sha256=$SNAP_SHA）≠ 上游 $REPO@$RESOLVED_SHA（$UP_BYTES 字节 sha256=$UP_SHA）。请运行 scripts/ci/fetch-contract.sh 并提交刷新结果。"
+  pim_contract_err "契约快照已陈旧：contract/openapi.json（$SNAP_BYTES 字节 sha256=$SNAP_SHA）≠ 上游 $REPO@$RESOLVED_SHA（$UP_BYTES 字节 sha256=$UP_SHA）。请运行 scripts/ci/refresh-contract.sh（快照 + 生成物同批）并提交刷新结果。"
   pim_contract_log "  上游 $(pim_contract_payload_summary "$UPSTREAM")"
   pim_contract_log "  快照 $(pim_contract_payload_summary "$SNAPSHOT")"
   exit $EXIT_STALE

@@ -1,6 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
-using Pim.Client.Core.Models;
+using Pim.Client.Core.Contract;
 
 namespace Pim.Client.Core.Services;
 
@@ -15,9 +15,13 @@ public sealed class DaemonHeartbeatReporter
 
     public async Task ReportAsync(DaemonHeartbeatRequest heartbeat, CancellationToken ct = default)
     {
-        await _api.PostAsync<object>("daemon/heartbeat", heartbeat, ct);
+        await _api.ReportDaemonHeartbeatAsync(heartbeat, ct);
     }
 
+    /// <param name="activityWatchState">
+    /// 契约枚举 <see cref="DaemonSourceState"/>：取值只能来自契约，写错编译期就不过。
+    /// </param>
+    /// <param name="keyStatsState">同上。</param>
     public static DaemonHeartbeatRequest BuildHeartbeat(
         string deviceId,
         string version,
@@ -26,8 +30,8 @@ public sealed class DaemonHeartbeatReporter
         DateTimeOffset? lastAttemptedUploadAt,
         string? lastError,
         int? uploadQueueCount = null,
-        string activityWatchState = "Unknown",
-        string keyStatsState = "Unknown",
+        DaemonSourceState activityWatchState = DaemonSourceState.Unknown,
+        DaemonSourceState keyStatsState = DaemonSourceState.Unknown,
         object? statusDetails = null)
     {
         var normalizedServerUrl = ApiClient.NormalizeServerUrl(
@@ -49,20 +53,22 @@ public sealed class DaemonHeartbeatReporter
             }
         }
 
-        return new DaemonHeartbeatRequest(
-            deviceId,
-            "windows",
-            string.IsNullOrWhiteSpace(version)
+        return new DaemonHeartbeatRequest
+        {
+            DeviceId = deviceId,
+            DaemonKind = "windows",
+            Version = string.IsNullOrWhiteSpace(version)
                 ? Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown"
                 : version,
-            normalizedServerUrl,
-            lastSuccessfulUploadAt,
-            lastAttemptedUploadAt,
-            lastError,
-            uploadQueueCount,
-            activityWatchState,
-            keyStatsState,
-            false,
-            JsonSerializer.Serialize(statusPayload));
+            ServerUrl = normalizedServerUrl,
+            LastSuccessfulUploadAt = lastSuccessfulUploadAt,
+            LastAttemptedUploadAt = lastAttemptedUploadAt,
+            LastError = lastError,
+            UploadQueueCount = uploadQueueCount,
+            ActivityWatchState = activityWatchState,
+            KeyStatsState = keyStatsState,
+            CollectionPaused = false,
+            StatusJson = JsonSerializer.Serialize(statusPayload),
+        };
     }
 }

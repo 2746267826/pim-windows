@@ -2,8 +2,8 @@
 # ---------------------------------------------------------------------------
 # 契约新鲜度设施 · 行为测试（离线；唯一外部前置是 python3 + PyYAML）
 #
-# 覆盖（本仓实际产物 = contract/openapi.json + contract/provenance.json 两个；
-# 本仓无 generated 产物，故不做也不假造"生成物新鲜度"分支）：
+# 覆盖（本脚本只管 contract/openapi.json + contract/provenance.json 两个产物；
+# 客户端生成物的一致性由 scripts/ci/test-contract-csharp.sh 负责，两边不重复也不假造）：
 #   ① 同字节 → check 0 且仓内零写入          ② 合法 JSON 但内容不同 → 非 0
 #   ③ 取源失败（不可达 / 404）→ 非 0          ④ payload HTML / 空体 → 非 0
 #   ⑤ PIM_CONTRACT_REPO/REF 真实改变被访问路径（含 40-hex 直用不解析）
