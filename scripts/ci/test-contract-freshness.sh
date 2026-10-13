@@ -881,26 +881,21 @@ PY
   run_check "$OLD_SB" fakejson
   record "new_entry_rejects_noncontract_json" $([ "$CHECK_RC" -ne 0 ] && echo 0 || echo 1) "new check rc=$CHECK_RC on the very payload the old entry installed"
 
-  # (c) 同一「陈旧快照」沙箱：旧树没有任何**字节比较**动作 → 不可能变红；新入口 rc=1
+  # (c) 同一「陈旧快照」沙箱：旧树没有任何字节比较机制 → 不可能变红；新入口 rc=1
   #
-  # 注意与上面第 1 条的区别：第 1 条只看「有没有 freshness 相关的 step 名」，
-  # 这一条直接扫旧 ci.yml 全量 run 体里**有没有字节比较命令**（cmp/diff/git diff -q 等）。
-  # 两者曾用同一谓词（等价于重复断言、零独立信息量），此处改为独立判据。
-  OLD_BYTECMP="$(python3 - "$OLD_CI" <<'PY'
-import re, sys, yaml
-doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-pat = re.compile(r"(^|[^\w-])(cmp|diff|git\s+diff|sha256sum\s+-c)([^\w-]|$)")
-hits = []
-for job, spec in (doc.get("jobs") or {}).items():
-    for s in (spec.get("steps") or []):
-        body = (s.get("run") or "")
-        if pat.search(body):
-            hits.append("%s/%s" % (job, s.get("name")))
-print(",".join(hits) if hits else "NONE")
-PY
-)"
-  record "old_master_stale_snapshot_cannot_turn_red" $([ "$OLD_BYTECMP" = "NONE" ] && echo 0 || echo 1) \
-    "no step in the base workflow performs a byte comparison (surfaces: $OLD_BYTECMP), so the stale snapshot below would stay green on old master"
+  # 注：此处**不再单独记一条结构断言**。原因（实测发现）：
+  #   「旧 master 上陈旧快照不会变红」这一事实，与上面第 1 条
+  #   old_master_has_no_freshness_entry_in_workflow 的谓词完全相同（都等价于
+  #   「旧 ci.yml 里没有 freshness 入口」），单独记一条即重复断言、零独立信息量。
+  #   曾尝试把它改为「扫旧 ci.yml 的 run 体里有没有字节比较命令」，但实测该判据**恒真** ——
+  #   真实的字节比较发生在 scripts/ci/check-contract-freshness.sh 脚本内部，不在 workflow
+  #   的 run: 文本里，所以无论基准是什么都扫不到，反而更糟。故删除。
+  #
+  #   该对照关系仍由下面这一对**行为断言**承载（它们才是真正有判定力的）：
+  #     old_master_stale_snapshot_cannot_turn_red  → 已移除（见上）
+  #     new_entry_red_on_same_stale_snapshot       → 新入口在同一陈旧沙箱上 rc=1
+  #   即「新入口会红、旧 master 不会」这个差异，由 new_entry_red_on_same_stale_snapshot
+  #   配合 old_master_has_no_freshness_entry_in_workflow 共同证明。
   run_check "$WORK/c2" master
   record "new_entry_red_on_same_stale_snapshot" $([ "$CHECK_RC" -eq 1 ] && echo 0 || echo 1) "new check rc=$CHECK_RC on the same stale snapshot the old master accepted"
 else
