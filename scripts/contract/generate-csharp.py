@@ -211,20 +211,35 @@ def reject_non_path_parameters(op: dict, op_path: str, path_item: dict | None = 
                     f"operation {op_path} 的 path 参数用了 $ref（{parameter['$ref']}），"
                     "生成器尚未解析 components.parameters，拒绝产出。"
                 )
+            if "content" in parameter:
+                raise GenerationError(
+                    f"operation {op_path} 的 path 参数 {name} 用 content 描述（而非 schema），"
+                    "生成器尚未支持，拒绝产出。"
+                )
             if name and f"{{{name}}}" not in op_path:
                 raise GenerationError(
                     f"operation {op_path} 声明了 path 参数 {name}，但它不在路径模板里 —— 会被静默丢掉。"
                 )
             schema = parameter.get("schema") or {}
-            constraints = [
-                key for key in ("enum", "pattern", "format", "minimum", "maximum", "minLength", "maxLength")
-                if schema.get(key) is not None
-            ]
-            if "enum" in schema or constraints:
+            # 白名单式判定：path 参数的 schema 只允许「就是 string」这一种形状。
+            # 任何其它写法（enum/pattern/format/数值范围/$ref/allOf/oneOf/anyOf/not/items…）
+            # 都是生成器表达不了的约束 —— 静默丢掉等于「契约有约束、C# 边界没有」。
+            allowed_keys = {"type", "description", "example", "title", "deprecated", "default", "nullable"}
+            unknown = sorted(key for key in schema if key not in allowed_keys and not key.startswith("x-"))
+            if unknown:
                 raise GenerationError(
-                    f"operation {op_path} 的 path 参数 {name} 带生成器无法表达的约束"
-                    f"（{', '.join(sorted(set(constraints + (['enum'] if 'enum' in schema else []))))}）："
-                    "需要扩展显式方法签名（例如生成枚举/校验），不能静默丢掉。"
+                    f"operation {op_path} 的 path 参数 {name} 的 schema 带生成器无法表达的键"
+                    f"（{', '.join(unknown)}）：需要扩展显式方法签名（例如生成枚举/校验），不能静默丢掉。"
+                )
+            if schema.get("$ref") is not None:
+                raise GenerationError(
+                    f"operation {op_path} 的 path 参数 {name} 的 schema 用了 $ref，"
+                    "生成器尚未解析参数级 schema 引用，拒绝产出。"
+                )
+            if schema.get("nullable") is True:
+                raise GenerationError(
+                    f"operation {op_path} 的 path 参数 {name} 声明为 nullable，"
+                    "路径参数不可能是 null —— 契约形状可疑，拒绝产出。"
                 )
             if schema.get("type") not in (None, "string"):
                 raise GenerationError(

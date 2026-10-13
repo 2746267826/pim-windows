@@ -55,14 +55,18 @@ python3 "$SB/scripts/contract/generate-csharp.py" --out-dir "$SB"
 
 echo ""
 echo "== ③ 两步都成功了，才开始安装（任一步失败过，这里根本不会执行） =="
-# 安装策略（预备份 → 预写临时文件 → 原子替换 → 复核通过才收尾）：
-#   1) 为 4 个产物全部预备份到仓外（**先于任何改名**，且刷新前不存在的产物也登记下来）；
-#   2) 各写一份同目录 `<name>.tmp-<pid>`；
-#   3) 逐个 `mv` 原子替换（POSIX rename；这一步之后才可能改变仓内文件）；
-#   4) 复核（check-contract-csharp.sh）通过后才删备份。
-# 任一步失败（含复核失败）→ `rollback`：用备份 `cp` 还原（备份**不消费**，可重试），
-# 清掉临时文件，**立即以非 0 退出**（不返回主流程 —— 否则会带着半成品继续往下走）。
-# 若还原本身也失败：保留备份目录、打印未还原清单，绝不删除无法还原的文件。
+# 安装策略（全量预备份 → 预写临时文件 → 原子替换 → 复核通过才收尾）：
+#   1) 为每个产物做**可校验**的备份：先写 `<name>.part` 再原子改名为 `<name>`，并记录 sha256；
+#      （`cp` 写一半就失败时不会污染同名备份；回滚前还要用记录下来的 sha256 复核备份）
+#   2) 各写一份同目录 `<name>.tmp-<pid>`（同目录 → rename 不跨文件系统）；
+#   3) 逐个 `mv` 原子替换（这一步之后才可能改变仓内文件）；
+#   4) 复核通过后才删备份。
+# 任一步失败（含复核失败、以及可捕获的终止信号 INT/TERM/HUP）→ `rollback`：
+#   * 只用**校验通过**的备份还原（备份不消费，可重试）；
+#   * 刷新前不存在的产物 → 删掉本次装进去的（恢复「不存在」）；
+#   * 绝不删除无法还原的文件，也不拿可疑备份覆盖正本；
+#   * 清掉临时文件、保留未完成的备份目录并打印恢复指引，然后**立即以非 0 退出**。
+# 已知限制：SIGKILL 无法捕获，此时会留下临时文件与备份目录（备份目录是刻意保留的救命数据）。
 BACKUP="$TMP/backup"
 mkdir -p "$BACKUP"
 INSTALLED=()
@@ -83,55 +87,86 @@ remove_temp_files() {
   local relative
   for relative in "${ARTIFACT_RELATIVES[@]}"; do
     rm -f "$ROOT/$relative.tmp-$$"
+    rm -f "$BACKUP/$relative.part"
   done
 }
 
+was_missing_before() {
+  local candidate
+  for candidate in "${MISSING_BEFORE[@]:-}"; do
+    [ "$candidate" = "$1" ] && return 0
+  done
+  return 1
+}
+
 rollback() {
-  local failed_rc=$?
+  local failed_rc="${1:-$?}"
   [ "$ROLLBACK_DONE" -eq 1 ] && return 0
   ROLLBACK_DONE=1
   set +e
-  local restored=0 failed=0 missing=0 relative
+  local restored=0 failed=0 removed=0 relative
   for relative in "${ARTIFACT_RELATIVES[@]}"; do
     if [ -f "$BACKUP/$relative" ]; then
-      # 用 cp 还原（不消费备份，失败还能重试）；失败的记下来。
+      if [ -f "$BACKUP/$relative.sha256" ] && ! ( cd "$BACKUP" && sha256sum -c --status "$relative.sha256" ); then
+        failed=$((failed+1))
+        echo "  ❌ 备份校验失败，拒绝用它覆盖正本：$relative（备份：$BACKUP/$relative）" >&2
+        continue
+      fi
       if cp -p "$BACKUP/$relative" "$ROOT/$relative"; then
         restored=$((restored+1))
       else
         failed=$((failed+1))
         echo "  ❌ 未能还原：$relative（备份仍在 $BACKUP/$relative）" >&2
       fi
+    elif was_missing_before "$relative"; then
+      # 刷新前不存在 → 恢复「不存在」，删掉本次装进去的
+      if [ -e "$ROOT/$relative" ]; then
+        rm -f "$ROOT/$relative"
+        removed=$((removed+1))
+      fi
     else
-      # 没有备份 = 刷新前不存在。**不删除**任何东西（可能是备份阶段就失败了，
-      # 那个文件是刷新前的正本）；只如实报告。
-      missing=$((missing+1))
-      echo "  ⚠️ 无备份可还原：$relative（刷新前不存在，或备份未建立）" >&2
+      failed=$((failed+1))
+      echo "  ❌ 无备份可还原：$relative（备份未建立或已损坏；未改动该文件）" >&2
     fi
   done
   remove_temp_files
   if [ "$failed" -eq 0 ]; then
-    echo "失败：已回滚 $restored 个产物，仓内保持刷新前的状态。" >&2
+    echo "失败：已回滚 $restored 个产物、移除 $removed 个新增产物，仓内保持刷新前的状态。" >&2
   else
     ROLLBACK_FAILED=1
-    echo "失败：$restored 个已还原、$failed 个未能还原、$missing 个无备份 —— 仓内可能处于混合状态，" >&2
-    echo "     请用 $BACKUP 下的备份手工恢复。" >&2
+    echo "失败：$restored 个已还原、$removed 个新增已移除、$failed 个未能还原 —— 仓内可能处于混合状态，" >&2
+    echo "     请用 $BACKUP 下的备份手工恢复（校验文件：*.sha256）。" >&2
+    if [ "${#INSTALLED[@]}" -eq 0 ]; then
+      echo "     注：失败发生在改名之前，本次未改动任何仓内文件。" >&2
+    fi
   fi
   exit "$failed_rc"
 }
 trap 'rollback' ERR
+trap 'echo "收到终止信号，回滚…" >&2; rollback 130' INT
+trap 'echo "收到终止信号，回滚…" >&2; rollback 143' TERM HUP
 
-# 1) 预备份：必须在任何改名之前完成（这一步失败 → 仓内一个文件都还没动）
+# 1) 可校验的预备份：写 .part → 校验 sha256 → 原子改名 → 记录 sha256
+#    （必须在任何改名之前完成；这一步失败时仓内一个文件都还没动）
 for relative in "${ARTIFACT_RELATIVES[@]}"; do
   target="$ROOT/$relative"
-  if [ -f "$target" ]; then
-    mkdir -p "$BACKUP/$(dirname "$relative")"
-    cp -p "$target" "$BACKUP/$relative"
-  else
+  if [ ! -f "$target" ]; then
     MISSING_BEFORE+=("$relative")
+    continue
   fi
+  mkdir -p "$BACKUP/$(dirname "$relative")"
+  cp -p "$target" "$BACKUP/$relative.part"
+  # 写完立刻校验：cp 成功但内容可疑（例如磁盘写满被截断）时这里就会发现
+  if ! cmp -s "$target" "$BACKUP/$relative.part"; then
+    echo "备份内容与正本不一致（疑似写入失败）：$relative" >&2
+    rm -f "$BACKUP/$relative.part"
+    false
+  fi
+  mv -f "$BACKUP/$relative.part" "$BACKUP/$relative"
+  ( cd "$BACKUP" && sha256sum "$relative" > "$relative.sha256" )
 done
 
-# 2) 预写临时文件（同目录，保证 rename 不跨文件系统）
+# 2) 预写临时文件
 for relative in "${ARTIFACT_RELATIVES[@]}"; do
   mkdir -p "$(dirname "$ROOT/$relative")"
   cp -p "$SB/$relative" "$ROOT/$relative.tmp-$$"
@@ -149,7 +184,7 @@ echo "== ④ 复核：快照与生成物必须一致（不一致就回滚，不�
 bash "$HERE/check-contract-csharp.sh"
 
 # 复核通过：解除回滚保护、清掉备份与任何临时文件
-trap - ERR
+trap - ERR INT TERM HUP
 remove_temp_files
 rm -rf "$BACKUP"
 

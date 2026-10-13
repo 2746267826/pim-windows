@@ -457,6 +457,14 @@ reject_case "path_parameter_not_in_template" "声明的 path 参数不在路径�
   'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"name": "deviceID", "in": "path", "required": True, "schema": {"type": "string"}}]'
 reject_case "path_parameter_ref" "path 参数用 \$ref 引用（生成器尚未解析 components.parameters）" \
   'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"$" "ref": "#/components/parameters/DeviceId"}]'
+reject_case "path_parameter_schema_ref" "path 参数的 schema 用 \$ref 引用（约束会被静默丢掉）" \
+  'doc["components"]["schemas"]["DeviceIdRef"] = {"type": "string", "enum": ["ONLY"]}; doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"name": "deviceId", "in": "path", "required": True, "schema": {"$" "ref": "#/components/schemas/DeviceIdRef"}}]'
+reject_case "path_parameter_allof" "path 参数的 schema 用 allOf 组合约束" \
+  'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"name": "deviceId", "in": "path", "required": True, "schema": {"allOf": [{"type": "string", "enum": ["ONLY"]}]}}]'
+reject_case "path_parameter_not" "path 参数的 schema 用 not 排除约束" \
+  'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"name": "deviceId", "in": "path", "required": True, "schema": {"not": {"enum": ["FORBIDDEN"]}}}]'
+reject_case "path_parameter_pattern" "path 参数的 schema 带 pattern" \
+  'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"name": "deviceId", "in": "path", "required": True, "schema": {"type": "string", "pattern": "^PC-[0-9]+$"}}]'
 
 section "⑭ 生成物固定 UTF-8 + LF（Windows 刷新与 Linux CI 复跑必须逐字节相同）"
 CR_CHECK="$(python3 - "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractModels.cs" "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs" <<'PYEOF'
