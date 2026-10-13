@@ -19,7 +19,7 @@
 #
 # 用法：bash scripts/ci/test-contract-freshness.sh
 #   PIM_CONTRACT_TEST_KEEP=1     保留临时工作目录（默认删除）
-#   PIM_CONTRACT_BASE_REF=<ref>  ⑬ 负对照所用的旧 master ref（默认 origin/master）
+#   PIM_CONTRACT_BASE_REF=<ref>  ⑬ 负对照所用的旧 master ref（默认为引入本门禁前的固定提交）
 #   PYTHONDONTWRITEBYTECODE=1    由脚本自身强制设置
 # ---------------------------------------------------------------------------
 set -uo pipefail
@@ -33,7 +33,18 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 CHECK="$HERE/check-contract-freshness.sh"
 FETCH="$HERE/fetch-contract.sh"
 CI_YML="$ROOT/.github/workflows/ci.yml"
-BASE_REF="${PIM_CONTRACT_BASE_REF:-origin/master}"
+# ⚠️ 负对照的基准必须固定在「引入本门禁之前」的提交上，**不能**取 origin/master。
+#
+# 原因（此前 master 一直红，就是踩了这个坑）：
+#   这些负对照要证明的是「旧 master 上既没有 freshness 入口、也不会因快照陈旧变红」。
+#   如果基准取 origin/master，那么一旦本门禁自己合进 master，origin/master 也就带上了
+#   freshness 入口 —— 断言的前提永久失效，任何 base=master 的 PR（含 master 自身重跑）
+#   都会红，且无法自愈。
+#
+#   cbfcbeffc93a1cc522eec1c522860e2881778b40 = 引入本门禁（PR #10）之前 master 的提交。
+#   它已实测确认没有 scripts/ci/check-contract-freshness.sh 与 test-contract-freshness.sh。
+#   该提交是 master 的祖先，不受 GC 影响；将来若仓库历史被重写，需同步更新此常量。
+BASE_REF="${PIM_CONTRACT_BASE_REF:-cbfcbeffc93a1cc522eec1c522860e2881778b40}"
 
 CHECK_STEP_NAME="Verify contract snapshot is up to date (real upstream)"
 TEST_STEP_NAME="Contract freshness behavior tests (offline fixtures)"
