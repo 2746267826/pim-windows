@@ -25,15 +25,17 @@ on:
       extension_ref:
         required: false
         type: string
-        default: 'master'
+        # 不再回退到可变分支：传了 extension_repo 就必须同时传 40 位提交号（审计 F-09）。
+        default: ''
       site_extension_repo:
         required: false
         type: string
         default: '2746267826/time-tracker-4-browser'
       site_extension_ref:
         required: false
+        # 固定为 361c90088f822e34973e338fb706b2e77d2225d5（main，2026-09-03 解析）；见下方 checkout 注释。
         type: string
-        default: 'main'
+        default: '361c90088f822e34973e338fb706b2e77d2225d5'
   workflow_dispatch:
     inputs:
       version:
@@ -57,17 +59,19 @@ on:
         required: false
         default: ''
       extension_ref:
-        description: 'Browser extension ref (branch or tag)'
+        description: 'Browser extension ref（外部仓时必须填 40 位提交号；留空 = 用本仓 browser-extension/）'
         required: false
-        default: 'master'
+        default: ''
       site_extension_repo:
         description: 'Site-level extension source repository'
         required: false
         default: '2746267826/time-tracker-4-browser'
       site_extension_ref:
-        description: 'Site-level extension ref (branch or tag)'
+        description: 'Site-level extension ref（只接受 40 位提交号，非 40 位一律失败）'
         required: false
-        default: 'main'
+        # 与 workflow_call 的默认值保持同一个真实提交，手动入口不再回退到可变分支 `main`
+        # （审计 F-09 / 独立 review C-1）。
+        default: '361c90088f822e34973e338fb706b2e77d2225d5'
 
 jobs:
   build:
@@ -123,15 +127,44 @@ jobs:
             -p:Version=${{ steps.ver.outputs.assembly_version }} `
             -p:FileVersion=${{ steps.ver.outputs.assembly_version }}
 
+      # 供应链固定（审计 F-08）：这里以前是 `git clone --depth 1` 直接拿默认分支的
+      # 最新提交，安装器会打包随时间变化、且从未被本仓评审过的上游代码。
+      # 仓库 keyStats 的默认分支是 `main`。
+      # 固定的提交：5a2f5242170904a638f95ea9860b6231ac911b4d（main，2026-07-12，由
+      # `git ls-remote https://github.com/2746267826/keyStats.git refs/heads/main` 解析）。
+      - name: Fetch pinned KeyStats source
+        shell: pwsh
+        env:
+          KEYSTATS_REPO: https://github.com/2746267826/keyStats.git
+          KEYSTATS_COMMIT: 5a2f5242170904a638f95ea9860b6231ac911b4d
+        run: |
+          if (Test-Path .keyStats-tmp) { Remove-Item -Recurse -Force .keyStats-tmp }
+          git clone --no-checkout $env:KEYSTATS_REPO .keyStats-tmp
+          if ($LASTEXITCODE -ne 0) { Write-Error "KeyStats clone failed"; exit 1 }
+          # 只接受 40 位十六进制提交号；分支/标签等可变 ref 一律拒绝。
+          if ($env:KEYSTATS_COMMIT -notmatch '^[0-9a-f]{40}$') {
+            Write-Error "KEYSTATS_COMMIT must be a full 40-hex commit SHA, got '$env:KEYSTATS_COMMIT'"
+            exit 1
+          }
+          git -C .keyStats-tmp checkout --detach $env:KEYSTATS_COMMIT
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "KeyStats commit $env:KEYSTATS_COMMIT not found; refusing to build an unpinned dependency"
+            exit 1
+          }
+          $actual = (git -C .keyStats-tmp rev-parse HEAD).Trim()
+          if ($actual -ne $env:KEYSTATS_COMMIT) {
+            Write-Error "KeyStats HEAD is $actual, expected $env:KEYSTATS_COMMIT"
+            exit 1
+          }
+
       - name: Build and include KeyStats
         shell: pwsh
         run: |
-          # Clone KeyStats repo
-          git clone --depth 1 https://github.com/2746267826/keyStats.git .keyStats-tmp
+          # 源码缺失即失败（审计 F-08）：以前只 Write-Warning 后 return，
+          # 安装包会静默缺少键鼠组件而 CI 仍然全绿。
           if (-not (Test-Path ".keyStats-tmp/KeyStats.Windows/KeyStats/KeyStats.csproj")) {
-            Write-Warning "KeyStats source not found; skipping build"
-            Remove-Item -Recurse -Force .keyStats-tmp -ErrorAction SilentlyContinue
-            return
+            Write-Error "KeyStats source not found at the pinned commit; refusing to publish a partial installer"
+            exit 1
           }
 
           # Restore NuGet packages and build
@@ -174,26 +207,69 @@ jobs:
           if (-not (Test-Path "publish/fix-keystats-session.ps1")) { throw "fix-keystats-session.ps1 not in publish" }
 
       # URL 级插件（原 fork 仓 tracker-web，PIM Browser Watcher）已迁入本仓 browser-extension/。
+      # 外部仓路径默认关闭；一旦传了 extension_repo，就必须同时传 40 位提交号，
+      # ref 不再回退到可变分支（审计 F-09）。
       - name: Checkout URL-level extension source (external)
         if: inputs.extension_repo != ''
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.extension_repo }}
-          ref: ${{ inputs.extension_ref || 'master' }}
+          ref: ${{ inputs.extension_ref }}
           path: .extension-url
+
+      - name: Require pinned ref for external URL-level extension
+        if: inputs.extension_repo != ''
+        shell: bash
+        # 本 job 的默认 cwd 是 src/client-windows，而 checkout 落在 $GITHUB_WORKSPACE 下；
+        # 因此显式切回 workspace，并用绝对路径读 HEAD（审计 F-09 / review C-1）。
+        working-directory: ${{ github.workspace }}
+        run: |
+          case "${{ inputs.extension_ref }}" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *)
+              echo "::error::extension_repo is set but extension_ref='${{ inputs.extension_ref }}' is not a 40-hex commit SHA"
+              exit 1
+              ;;
+          esac
+          actual="$(git -C "$GITHUB_WORKSPACE/.extension-url" rev-parse HEAD)"
+          if [ "$actual" != "${{ inputs.extension_ref }}" ]; then
+            echo "::error::URL-level extension HEAD is $actual, expected ${{ inputs.extension_ref }}"
+            exit 1
+          fi
 
       - name: Use in-repo URL-level extension source
         if: inputs.extension_repo == ''
         shell: bash
         run: ln -sfn "$GITHUB_WORKSPACE/browser-extension" "$GITHUB_WORKSPACE/.extension-url"
 
-      # 站点级插件（2746267826/time-tracker-4-browser，Time Tracker PIM fork）
+      # 站点级插件（2746267826/time-tracker-4-browser，Time Tracker PIM fork）。
+      # 固定提交：361c90088f822e34973e338fb706b2e77d2225d5（main，2026-09-03，由
+      # `git ls-remote https://github.com/2746267826/time-tracker-4-browser.git refs/heads/main` 解析）。
       - name: Checkout site-level extension source
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.site_extension_repo || '2746267826/time-tracker-4-browser' }}
-          ref: ${{ inputs.site_extension_ref || 'main' }}
+          ref: ${{ inputs.site_extension_ref }}
           path: .extension-site
+
+      - name: Require pinned ref for site-level extension
+        shell: bash
+        # 同上：checkout 落在 $GITHUB_WORKSPACE/.extension-site，必须用绝对路径读 HEAD
+        # （原先的 `git -C .extension-site` 是相对 src/client-windows 的，必然 exit 128）。
+        working-directory: ${{ github.workspace }}
+        run: |
+          case "${{ inputs.site_extension_ref }}" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *)
+              echo "::error::site_extension_ref='${{ inputs.site_extension_ref }}' is not a 40-hex commit SHA"
+              exit 1
+              ;;
+          esac
+          actual="$(git -C "$GITHUB_WORKSPACE/.extension-site" rev-parse HEAD)"
+          if [ "$actual" != "${{ inputs.site_extension_ref }}" ]; then
+            echo "::error::site-level extension HEAD is $actual, expected ${{ inputs.site_extension_ref }}"
+            exit 1
+          fi
 
       - name: Setup Node for browser extensions
         uses: actions/setup-node@v4
