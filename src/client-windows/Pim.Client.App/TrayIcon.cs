@@ -192,7 +192,7 @@ public partial class TrayIcon : IDisposable
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var latest = await http.GetFromJsonAsync<LatestDto>($"{url.TrimEnd('/')}/api/client/shell/latest");
+            var latest = await FetchLatestAsync(http, url);
             if (latest?.error != null)
             {
                 Logger.Warn($"Daemon update check failed: {latest.error} checkedAt={latest.checkedAt}");
@@ -214,7 +214,17 @@ public partial class TrayIcon : IDisposable
         }
     }
 
-    private record LatestDto(string? windowsVersion, string? windowsUrl, string? error, string? checkedAt);
+    /// <summary>
+    /// 更新检查的真实 HTTP 入口（审计 F-03 的可注入接缝）：
+    /// 生产在 <see cref="CheckUpdateAsync"/> 里用上面那个 5 秒超时的 HttpClient 调它，
+    /// 契约用例用记录型 handler 驱动**同一段产品代码**并捕获线上 method/路径。
+    /// 行为与抽出前逐字相同：GET <c>{serverUrl}/api/client/shell/latest</c>，
+    /// 响应仍是 <see cref="LatestDto"/>（异常语义也照旧由 GetFromJsonAsync 决定）。
+    /// </summary>
+    internal static Task<LatestDto?> FetchLatestAsync(HttpClient http, string serverUrl)
+        => http.GetFromJsonAsync<LatestDto>($"{serverUrl.TrimEnd('/')}/api/client/shell/latest");
+
+    internal record LatestDto(string? windowsVersion, string? windowsUrl, string? error, string? checkedAt);
 
     public void Dispose()
     {

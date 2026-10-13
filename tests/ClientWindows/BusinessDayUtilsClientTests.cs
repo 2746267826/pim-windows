@@ -1,10 +1,22 @@
+using System;
 using Pim.Client.Core.Utils;
-using Pim.Module.PcTracker.Services;
 using Xunit;
 
 namespace Pim.UnitTests.ClientWindows;
 
-public sealed class BusinessDayUtilsTests
+/// <summary>
+/// 审计整改 round5 · REQ-COM-02 / REQ-COM-06（F-10）：从**不被编译的孤儿文件**
+/// <c>BusinessDayUtilsTests.cs</c> 迁移出来的 3 条**只依赖客户端类型**的用例。
+///
+/// 迁移口径（round4 独立 review I-1 确认的分母：16 = 可移植 10 / 后端依赖 6）：
+///   - 本文件承接 3 条可移植用例（营业日边界、04:00 上海边界、下一营业日开始）；
+///   - 同文件里的第 4 条 <c>PcTrackerService_GetBusinessDayForTimestamp_MatchesBusinessDayUtils</c>
+///     需要后端程序集 <c>Pim.Module.PcTracker</c> 做对照，**不可移植**，归属与真实验证条件
+///     记录在 <c>tests/ClientWindows/BACKEND-OWNED-CASES.md</c>（保持 NOT-VERIFIED）。
+///
+/// 用例名与孤儿文件逐字相同，便于对照审计分母；断言未做任何弱化。
+/// </summary>
+public sealed class BusinessDayUtilsClientTests
 {
     [Fact]
     public void GetBusinessDate_BeforeFourAmShanghai_BelongsToPreviousCalendarDay()
@@ -46,25 +58,5 @@ public sealed class BusinessDayUtilsTests
         var next2 = BusinessDayUtils.GetNextBusinessDayStart(ts2);
         var expected2 = new DateTimeOffset(2026, 3, 25, 4, 0, 0, TimeSpan.FromHours(8)).ToUniversalTime();
         Assert.Equal(expected2, next2);
-    }
-
-    [Fact]
-    public void PcTrackerService_GetBusinessDayForTimestamp_MatchesBusinessDayUtils()
-    {
-        var testTimestamps = new[]
-        {
-            new DateTimeOffset(2026, 3, 24, 0, 0, 0, TimeSpan.Zero),
-            new DateTimeOffset(2026, 3, 24, 3, 59, 59, TimeSpan.FromHours(8)),
-            new DateTimeOffset(2026, 3, 24, 4, 0, 0, TimeSpan.FromHours(8)),
-            new DateTimeOffset(2026, 3, 24, 12, 0, 0, TimeSpan.Zero),
-            new DateTimeOffset(2026, 3, 24, 23, 59, 59, TimeSpan.FromHours(8))
-        };
-
-        foreach (var ts in testTimestamps)
-        {
-            var clientDate = BusinessDayUtils.GetBusinessDate(ts);
-            var serverDate = PcTrackerService.GetBusinessDayForTimestamp(ts);
-            Assert.Equal(clientDate.ToDateTime(TimeOnly.MinValue), serverDate);
-        }
     }
 }

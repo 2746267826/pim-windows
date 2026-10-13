@@ -108,28 +108,6 @@ public class ApiClient
         _httpClient.DefaultRequestHeaders.Authorization = null;
     }
 
-    public Task<ApiResponse<List<EndpointStatusDto>>?> GetEndpointStatusesAsync(CancellationToken ct = default)
-        => GetAsync<ApiResponse<List<EndpointStatusDto>>>("/endpoints", ct);
-
-    public Task<ApiResponse<EndpointCollectionQualityDto>?> GetEndpointCollectionQualityAsync(
-        string deviceId,
-        CancellationToken ct = default)
-        => GetAsync<ApiResponse<EndpointCollectionQualityDto>>(
-            $"/endpoints/{Uri.EscapeDataString(deviceId)}/collection-quality",
-            ct);
-
-    public Task<ApiResponse<EndpointNotificationActionResponseDto>?> SendEndpointNotificationActionAsync(
-        string deviceId,
-        EndpointNotificationActionRequestDto request,
-        CancellationToken ct = default)
-        => PostAsync<ApiResponse<EndpointNotificationActionResponseDto>>(
-            $"/endpoints/{Uri.EscapeDataString(deviceId)}/notification-actions",
-            request,
-            ct);
-
-    public static string BuildConfirmationDetailPath(string confirmationId)
-        => $"/confirmations/{Uri.EscapeDataString(confirmationId)}";
-
     public async Task<T?> GetAsync<T>(string endpoint, CancellationToken ct = default)
     {
         return await SendWithAuthRetryAsync<T>(
@@ -153,25 +131,6 @@ public class ApiClient
     {
         return await SendWithAuthRetryAsync<T>(
             () => _httpClient.PostAsJsonAsync(Resolve(endpoint), body, ct), ct, allowTokenRenewal: false);
-    }
-
-    public async Task<T?> PutAsync<T>(string endpoint, object body, CancellationToken ct = default)
-    {
-        return await SendWithAuthRetryAsync<T>(
-            () => _httpClient.PutAsJsonAsync(Resolve(endpoint), body, ct), ct);
-    }
-
-    public async Task DeleteAsync(string endpoint, CancellationToken ct = default)
-    {
-        await SendWithAuthRetryAsync<IgnoreResult>(
-            () => _httpClient.DeleteAsync(Resolve(endpoint), ct), ct);
-    }
-
-    public async Task<T?> PostStringAsync<T>(string endpoint, string content, CancellationToken ct = default)
-    {
-        return await SendWithAuthRetryAsync<T>(
-            () => _httpClient.PostAsync(Resolve(endpoint),
-                new StringContent(content, System.Text.Encoding.UTF8, "text/calendar"), ct), ct);
     }
 
     private async Task<T?> SendWithAuthRetryAsync<T>(
@@ -211,9 +170,6 @@ public class ApiClient
         }
 
         response.EnsureSuccessStatusCode();
-
-        if (typeof(T) == typeof(IgnoreResult))
-            return default;
 
         return await response.Content.ReadFromJsonAsync<T>(ct);
     }
@@ -287,6 +243,17 @@ public class ApiClient
             return false;
         }
 
+        // 审计 F-18：这里原本直接 `await RenewTokenAsync()`。它是可空的
+        // Func 属性，调用方在 401 分支里用 `RenewTokenAsync is not null` 判过非空，
+        // 但等完信号量之后编译器不再记得那个判定，于是报 CS8602。
+        // 把回调取到本地变量再判一次：行为等价（null 时同样不续期、返回 false），
+        // 但走的是"运行时真的取到了回调"，不再是可空解引用。
+        var renewToken = RenewTokenAsync;
+        if (renewToken is null)
+        {
+            return false;
+        }
+
         await _tokenRenewalGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -299,7 +266,7 @@ public class ApiClient
             InsideTokenRenewal.Value = true;
             try
             {
-                if (!await RenewTokenAsync().ConfigureAwait(false))
+                if (!await renewToken().ConfigureAwait(false))
                 {
                     return false;
                 }
@@ -318,5 +285,4 @@ public class ApiClient
         }
     }
 
-    private sealed class IgnoreResult { }
 }
