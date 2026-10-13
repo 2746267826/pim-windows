@@ -1,8 +1,6 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
-using System.Net.Http;
-using System.Net.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Pim.Client.App.Services;
 using Pim.Client.Core;
@@ -39,7 +37,7 @@ public partial class TrayIcon : IDisposable
         var serverUrl = ResolveServerUrl(null);
         var trayMenu = BuildMenu(version, serverUrl);
         _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[0].Text, null, (_, _) => ShowAboutBox(version, serverUrl)));
-        _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[1].Text, null, async (_, _) => await CheckUpdateAsync(version, serverUrl)));
+        _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[1].Text, null, async (_, _) => await CheckUpdateAsync(version)));
         _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         _notifyIcon.ContextMenuStrip.Items.Add("登录...", null, (_, _) => ShowLogin());
         _notifyIcon.ContextMenuStrip.Items.Add("退出", null, (_, _) => ConfirmAndExit());
@@ -186,21 +184,27 @@ public partial class TrayIcon : IDisposable
         System.Windows.Forms.MessageBox.Show($"PIM Daemon v{version}\nAPI: {url}", "关于");
     }
 
-    private static async Task CheckUpdateAsync(string version, string serverUrl)
+    /// <summary>
+    /// 检查更新（接口边界契约化后走 <see cref="ApiClient"/> 的显式方法：
+    /// 路径来自契约生成物 <c>ContractOperation.GetClientShellLatest</c>，响应类型是生成的
+    /// <c>ClientShellLatestResponse</c> —— 不再有手写路径与手写 <c>LatestDto</c>）。
+    /// 服务器地址取自同一个 <see cref="ApiClient"/>（与守护程序其余请求同源、同样规范化）。
+    /// </summary>
+    private static async Task CheckUpdateAsync(string version)
     {
-        var url = ResolveServerUrl(serverUrl);
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var latest = await http.GetFromJsonAsync<LatestDto>($"{url.TrimEnd('/')}/api/client/shell/latest");
-            if (latest?.error != null)
+            var api = App.Services.GetRequiredService<ApiClient>();
+            var latest = await api.GetClientShellLatestAsync();
+
+            if (latest?.Error != null)
             {
-                Logger.Warn($"Daemon update check failed: {latest.error} checkedAt={latest.checkedAt}");
-                System.Windows.Forms.MessageBox.Show($"检查失败：{latest.error}", "PIM");
+                Logger.Warn($"Daemon update check failed: {latest.Error} checkedAt={latest.CheckedAt}");
+                System.Windows.Forms.MessageBox.Show($"检查失败：{latest.Error}", "PIM");
             }
-            else if (latest?.windowsVersion != null && UpdateChecker.IsNewer(version, latest.windowsVersion))
+            else if (latest?.WindowsVersion != null && UpdateChecker.IsNewer(version, latest.WindowsVersion))
             {
-                System.Windows.Forms.MessageBox.Show($"发现新版 {latest.windowsVersion}\n{latest.windowsUrl}", "PIM");
+                System.Windows.Forms.MessageBox.Show($"发现新版 {latest.WindowsVersion}\n{latest.WindowsUrl}", "PIM");
             }
             else
             {
@@ -213,8 +217,6 @@ public partial class TrayIcon : IDisposable
             System.Windows.Forms.MessageBox.Show($"检查失败：{ex.Message}", "PIM");
         }
     }
-
-    private record LatestDto(string? windowsVersion, string? windowsUrl, string? error, string? checkedAt);
 
     public void Dispose()
     {

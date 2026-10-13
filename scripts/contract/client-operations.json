@@ -9,18 +9,75 @@
     "需要新接口时的正确做法：让后端在 pim-api 实现并更新契约，再刷新快照并在本文件加一条。"
   ],
   "operations": [
-    { "apiClient": "LoginAsync", "method": "POST", "path": "/api/v1/auth/login" },
-    { "apiClient": "RegisterAsync", "method": "POST", "path": "/api/v1/auth/register" },
-    { "apiClient": "RefreshTokenAsync", "method": "POST", "path": "/api/v1/auth/refresh" },
-    { "apiClient": "ReportDaemonHeartbeatAsync", "method": "POST", "path": "/api/v1/daemon/heartbeat" },
-    { "apiClient": "ReportPlannedOfflineAsync", "method": "POST", "path": "/api/v1/daemon/planned-offline" },
-    { "apiClient": "GetEndpointStatusesAsync", "method": "GET", "path": "/api/v1/endpoints" },
-    { "apiClient": "GetEndpointCollectionQualityAsync", "method": "GET", "path": "/api/v1/endpoints/{deviceId}/collection-quality" },
-    { "apiClient": "SendEndpointNotificationActionAsync", "method": "POST", "path": "/api/v1/endpoints/{deviceId}/notification-actions" },
-    { "apiClient": "UploadTrackerEventsAsync", "method": "POST", "path": "/api/v1/pc/tracker/upload" },
-    { "apiClient": "UploadSiteEventsAsync", "method": "POST", "path": "/api/v1/pc/browser-tt/upload" },
-    { "apiClient": "ReportTrackerHealthAsync", "method": "POST", "path": "/api/v1/pc/tracker/health" },
-    { "apiClient": "UploadKeystatsSampleAsync", "method": "POST", "path": "/api/v1/pc/keystats/samples" },
-    { "apiClient": "UploadKeystatsSnapshotAsync", "method": "POST", "path": "/api/v1/pc/keystats/upload" }
+    {
+      "apiClient": "LoginAsync",
+      "method": "POST",
+      "path": "/api/v1/auth/login"
+    },
+    {
+      "apiClient": "RegisterAsync",
+      "method": "POST",
+      "path": "/api/v1/auth/register"
+    },
+    {
+      "apiClient": "RefreshTokenAsync",
+      "method": "POST",
+      "path": "/api/v1/auth/refresh"
+    },
+    {
+      "apiClient": "ReportDaemonHeartbeatAsync",
+      "method": "POST",
+      "path": "/api/v1/daemon/heartbeat"
+    },
+    {
+      "apiClient": "ReportPlannedOfflineAsync",
+      "method": "POST",
+      "path": "/api/v1/daemon/planned-offline"
+    },
+    {
+      "apiClient": "GetEndpointStatusesAsync",
+      "method": "GET",
+      "path": "/api/v1/endpoints"
+    },
+    {
+      "apiClient": "GetEndpointCollectionQualityAsync",
+      "method": "GET",
+      "path": "/api/v1/endpoints/{deviceId}/collection-quality"
+    },
+    {
+      "apiClient": "SendEndpointNotificationActionAsync",
+      "method": "POST",
+      "path": "/api/v1/endpoints/{deviceId}/notification-actions"
+    },
+    {
+      "apiClient": "UploadTrackerEventsAsync",
+      "method": "POST",
+      "path": "/api/v1/pc/tracker/upload"
+    },
+    {
+      "apiClient": "UploadSiteEventsAsync",
+      "method": "POST",
+      "path": "/api/v1/pc/browser-tt/upload"
+    },
+    {
+      "apiClient": "ReportTrackerHealthAsync",
+      "method": "POST",
+      "path": "/api/v1/pc/tracker/health"
+    },
+    {
+      "apiClient": "UploadKeystatsSampleAsync",
+      "method": "POST",
+      "path": "/api/v1/pc/keystats/samples"
+    },
+    {
+      "apiClient": "UploadKeystatsSnapshotAsync",
+      "method": "POST",
+      "path": "/api/v1/pc/keystats/upload"
+    },
+    {
+      "apiClient": "GetClientShellLatestAsync",
+      "method": "GET",
+      "path": "/api/client/shell/latest"
+    }
   ]
 }

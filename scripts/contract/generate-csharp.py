@@ -28,9 +28,23 @@
   * `required` 且不属于「请求方向的 readOnly」→ C# `required` 成员：调用方必须显式给值，
     少写一个必填字段是**编译错误**（CS9035），序列化时一定上线。
   * 其余属性 → 可空引用类型（值类型保持非空，缺字段取默认值，与契约「可缺席」一致）。
+  * 契约枚举生成的 C# enum **不在值类型白名单里**：非必填的枚举字段生成为可空
+    （缺席时上线 `null`，而不是发一个「看起来像值」的默认成员名）。
+  * `array.items` / `additionalProperties` 自身 `nullable: true` → 逐字映射成
+    `List<T?>` / `Dictionary<string, T?>`（不把元素的空性抹掉）。
   * OpenAPI 3.0：`readOnly` 属性的 `required` 只对响应生效，`writeOnly` 只对请求生效。
     生成器按 schema 在客户端实际出现的方向判定；同一 schema 在两个方向需要不同的
     required 集合时**直接报错**（不能悄悄二选一）。
+  * 方向化的读/写约束（`readOnly` 字段出现在请求方向、`writeOnly` 出现在响应方向）需要
+    「一个 schema 两个方向类型」或 `JsonIgnore` 支持，生成器**拒绝产出**而不是假装没看见。
+
+不做静默降级的形状（一律 fail-closed，宁可刷新时停下来问）：内联对象属性、`allOf`/`oneOf`/
+`anyOf`/`not`、`properties` 与 `additionalProperties` 同时出现、内联 `enum`、整数枚举
+（契约没给成员名，臆造名字等于编造接口）、字符串枚举取值无法与 C# 成员名逐字相同
+（`JsonStringEnumConverter` 按成员名上线，改名就是改线格式）、operation 请求体/响应体根
+不是 `$ref`、以及 `in: query|header|cookie` 等本生成器尚未表达的 operation 参数。
+
+输出固定 UTF-8 + LF（`newline="\n"`）：Windows 上刷新与 Linux 上 CI 复跑必须逐字节相同。
 
 类型映射（C#）：
   string → string；string/date-time → System.DateTimeOffset；string/date → System.DateOnly
@@ -163,6 +177,31 @@ def iter_refs(node) -> list[str]:
     return found
 
 
+def single_ref(schema, what: str) -> str | None:
+    """请求体/响应体的根必须是 `$ref`；内联根形状会让边界拿不到具名类型（静默丢类型）。"""
+    if schema is None:
+        return None
+    if isinstance(schema, dict) and isinstance(schema.get("$ref"), str):
+        return schema["$ref"].rsplit("/", 1)[-1]
+    raise GenerationError(
+        f"{what} 的 schema 根不是 $ref（内联形状生成器尚未支持，不能悄悄产出没有类型的边界）："
+        f"{json.dumps(schema, sort_keys=True)[:200]}"
+    )
+
+
+def reject_non_path_parameters(op: dict, op_path: str) -> None:
+    """只支持 path 参数（由路径模板表达）：query/header/cookie 参数会被生成器丢掉，
+    丢掉的后果是「请求少带了契约要求的参数」，因此 fail-closed。"""
+    for parameter in op.get("parameters") or []:
+        location = parameter.get("in")
+        if location == "path":
+            continue
+        raise GenerationError(
+            f"operation {op_path} 带 {location} 参数（{parameter.get('name')}），"
+            "生成器目前只支持由路径模板表达的 path 参数 —— 需要先扩展显式方法签名。"
+        )
+
+
 def json_request_schema(op: dict):
     body = op.get("requestBody") or {}
     media = (body.get("content") or {}).get("application/json")
@@ -177,6 +216,7 @@ def success_response_schemas(op: dict) -> list[dict]:
         media = (response.get("content") or {}).get("application/json")
         if media is None or media.get("schema") is None:
             raise GenerationError(f"operation 的 {status} 响应不是 application/json（生成器只支持 JSON 边界）")
+        single_ref(media["schema"], f"{status} 响应")
         result.append(media["schema"])
     if not result:
         raise GenerationError("operation 没有任何 2xx 响应")
@@ -209,9 +249,11 @@ def schema_directions(contract: dict, operations: list[dict]) -> tuple[dict[str,
         method = str(entry["method"]).upper()
         op_path = str(entry["path"])
         op = operation_schema(contract, method, op_path)
+        reject_non_path_parameters(op, op_path)
 
         request_schema = json_request_schema(op)
         if request_schema is not None:
+            single_ref(request_schema, f"{method} {op_path} 请求体")
             request_roots.update(iter_refs(request_schema))
 
         response_schemas = success_response_schemas(op)
@@ -256,12 +298,22 @@ def pascal_case(raw: str, what: str) -> str:
 
 
 def enum_member_name(value: str, enum_name: str) -> str:
-    words = split_words(value)
-    name = "".join(word[:1].upper() + word[1:] for word in words) if words else ""
-    if not name:
-        raise GenerationError(f"契约枚举 {enum_name} 的取值无法转成 C# 成员名：{value!r}")
-    if name[0].isdigit():
-        name = "_" + name
+    """枚举成员名必须与契约里的 wire 值**逐字相同**。
+
+    `JsonStringEnumConverter`（无命名策略）上线时写的是**成员名**，所以任何
+    「PascalCase 化」都会静默改掉线格式（例如契约值 `low` 变成上线 `Low`）。
+    net8.0 没有 `[JsonStringEnumMemberName]`，因此这里只能要求成员名 == wire 值；
+    不满足就拒绝产出，而不是产出一个线格式不对的枚举。
+    """
+    if not value:
+        raise GenerationError(f"契约枚举 {enum_name} 有空取值，无法生成")
+    name = value
+    if not (name[0].isalpha() or name[0] == "_") or not all(ch.isalnum() or ch == "_" for ch in name):
+        raise GenerationError(
+            f"契约枚举 {enum_name} 的取值 {value!r} 不能直接作为 C# 成员名"
+            "（net8.0 的 JsonStringEnumConverter 按成员名上线，改名就是改线格式）："
+            "需要后端把取值改成合法标识符，或改用自定义 converter。"
+        )
     return "@" + name if name in CSHARP_KEYWORDS else name
 
 
@@ -301,16 +353,28 @@ def csharp_type(schema: dict) -> str:
                 f"{json.dumps(schema, sort_keys=True)[:200]}"
             )
 
+    if "enum" in schema:
+        raise GenerationError(
+            "契约里出现**内联** enum（属性/元素级），生成器尚未支持（需要先决定命名规则）："
+            f"{json.dumps(schema, sort_keys=True)[:200]}"
+        )
+
     kind = schema.get("type")
     if kind == "array":
         items = schema.get("items")
         if not isinstance(items, dict):
             raise GenerationError(f"array 没有 items：{json.dumps(schema, sort_keys=True)}")
-        return f"System.Collections.Generic.List<{csharp_type(items)}>"
+        return f"System.Collections.Generic.List<{element_type(items)}>"
     if kind == "object":
         additional = schema.get("additionalProperties")
         if isinstance(additional, dict):
-            return f"System.Collections.Generic.Dictionary<string, {csharp_type(additional)}>"
+            if "properties" in schema:
+                # 同时有具名字段与自由键：只映射成字典会**静默丢掉** properties。
+                raise GenerationError(
+                    "契约里同一个对象同时有 properties 与 additionalProperties，生成器尚未支持"
+                    f"（二选一会静默丢字段）：{json.dumps(schema, sort_keys=True)[:200]}"
+                )
+            return f"System.Collections.Generic.Dictionary<string, {element_type(additional)}>"
         if "properties" in schema:
             raise GenerationError(
                 "契约里出现内联对象属性，生成器尚未支持（需要先决定命名规则）："
@@ -325,6 +389,14 @@ def csharp_type(schema: dict) -> str:
     return scalar_type(schema)
 
 
+def element_type(schema: dict) -> str:
+    """数组元素 / 字典值：契约允许该元素为 null 时保留可空标记（不抹掉空性）。"""
+    mapped = csharp_type(schema)
+    if schema.get("nullable") and not mapped.endswith("?"):
+        return f"{mapped}?"
+    return mapped
+
+
 def is_value_type(csharp: str) -> bool:
     if csharp.endswith("?"):
         return True
@@ -334,6 +406,24 @@ def is_value_type(csharp: str) -> bool:
         "int", "long", "double", "float", "bool",
         "System.DateTimeOffset", "System.DateOnly", "System.Text.Json.JsonElement",
     )
+
+
+def reject_direction_only_property(schema_name: str, name: str, prop: dict, directions: set[str]) -> None:
+    """readOnly 字段出现在请求方向（或 writeOnly 出现在响应方向）需要方向化类型才能表达。
+
+    生成器不这么做，也**不允许**静默忽略：那样会让「客户端不该发这个字段」这条契约约束
+    变成纸面注释（字段照发不误）。
+    """
+    if prop.get("readOnly") and "request" in directions:
+        raise GenerationError(
+            f"schema {schema_name} 的字段 {name} 是 readOnly，但它所在的 schema 也用于请求方向："
+            "需要「一个 schema 两个方向类型」或 JsonIgnore 支持，生成器拒绝产出。"
+        )
+    if prop.get("writeOnly") and "response" in directions:
+        raise GenerationError(
+            f"schema {schema_name} 的字段 {name} 是 writeOnly，但它所在的 schema 也用于响应方向："
+            "需要方向化类型或 JsonIgnore 支持，生成器拒绝产出。"
+        )
 
 
 def property_is_required(schema: dict, name: str, prop: dict, directions: set[str]) -> bool:
@@ -356,7 +446,10 @@ def required_names(schema: dict, directions: set[str]) -> list[str]:
     return names
 
 
-def render_property(schema: dict, contract_name: str, prop: dict, directions: set[str]) -> list[str]:
+def render_property(
+    schema_name: str, schema: dict, contract_name: str, prop: dict, directions: set[str]
+) -> list[str]:
+    reject_direction_only_property(schema_name, contract_name, prop, directions)
     required = property_is_required(schema, contract_name, prop, directions)
     base_type = csharp_type(prop)
     nullable = bool(prop.get("nullable"))
@@ -384,13 +477,10 @@ def render_enum(name: str, schema: dict) -> list[str]:
     kind = schema.get("type")
     if kind != "string":
         joined = ", ".join(str(value) for value in values)
-        return [
-            "/// <summary>",
-            f"/// 契约枚举 <c>{name}</c>（整数，取值：{joined}）。",
-            "/// 契约没有给出成员名，臆造名字等于编造接口，因此不生成枚举类型，按 int 处理。",
-            "/// </summary>",
-            f"public enum {name} : System.Int32 {{ }} // 见注释：契约未给成员名",
-        ]
+        raise GenerationError(
+            f"契约枚举 {name} 是整数枚举（取值：{joined}），契约没有给出成员名 —— "
+            "臆造名字等于编造接口，生成器拒绝产出（需要后端把它改成字符串枚举或给出成员名）。"
+        )
 
     lines = [
         "/// <summary>",
@@ -422,7 +512,7 @@ def render_class(name: str, schema: dict, directions: set[str]) -> list[str]:
                 f"{name} 的字段归一化后重名：{seen[identifier]!r} / {contract_name!r}（契约里大小写不同的字段会撞到同一个 C# 属性）"
             )
         seen[identifier] = contract_name
-        lines.extend(render_property(schema, contract_name, prop, directions))
+        lines.extend(render_property(name, schema, contract_name, prop, directions))
     lines.append("}")
     return lines
 
@@ -506,17 +596,37 @@ def generate_models(contract: dict, operations: list[dict], contract_sha: str) -
     return "\n".join(generated_header(contract_sha) + body).rstrip("\n") + "\n"
 
 
+def relative_to_base(full_path: str) -> str:
+    """把契约里的绝对路径换算成相对 BaseAddress（`<serverUrl>/api/v1/`）的相对路径。
+
+    BaseAddress 固定以 `/api/v1/` 结尾（见 ApiClient），因此：
+      * `/api/v1/pc/tracker/health`      → `pc/tracker/health`（同一层）
+      * `/api/client/shell/latest`       → `../client/shell/latest`（退回 /api/ 一层）
+      * `/health`                        → `../../health`（退回 host 根两层）
+    这样 `<serverUrl>/子路径/api/v1/` 这类部署也能落到 `<serverUrl>/子路径/...`，
+    与改造前「先去掉 /api/v1 再拼」的语义一致。
+    """
+    base = CONTRACT_BASE_PATH.strip("/").split("/")
+    target = full_path.lstrip("/").split("/")
+    common = 0
+    while common < len(base) and common < len(target) and base[common] == target[common]:
+        common += 1
+    ups = len(base) - common
+    rest = "/".join(target[common:])
+    if ups == 0:
+        return rest or "./"
+    return "../" * ups + rest
+
+
 def render_operation_entry(entry: dict) -> list[str]:
     client_name = str(entry["apiClient"])
     if not client_name.endswith("Async"):
         raise GenerationError(f"operation 清单里的 apiClient 名必须以 Async 结尾（收到 {client_name}）")
     method = str(entry["method"]).upper()
     full_path = str(entry["path"])
-    if not full_path.startswith(CONTRACT_BASE_PATH + "/"):
-        raise GenerationError(
-            f"operation 清单里的路径必须位于契约基址 {CONTRACT_BASE_PATH} 之下：{full_path}"
-        )
-    relative = full_path[len(CONTRACT_BASE_PATH) + 1:]
+    if not full_path.startswith("/"):
+        raise GenerationError(f"operation 清单里的路径必须是绝对路径：{full_path}")
+    relative = relative_to_base(full_path)
     field_name = client_name[: -len("Async")]
     return [
         f'    public static readonly ContractOperation {field_name} =',
@@ -694,7 +804,8 @@ def main(argv: list[str]) -> int:
     for relative, content in ((MODELS_RELATIVE_PATH, models), (OPERATIONS_RELATIVE_PATH, ops)):
         target = Path(out_dir) / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        # 固定 LF：Windows 上刷新与 Linux 上 CI 复跑必须逐字节相同。
+        target.write_text(content, encoding="utf-8", newline="\n")
         print(f"生成 {relative}（{len(content.encode('utf-8'))} 字节）")
     return 0
 

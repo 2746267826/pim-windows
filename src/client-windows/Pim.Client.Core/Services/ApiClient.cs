@@ -196,6 +196,13 @@ public class ApiClient
     public Task<StringApiResponse?> UploadKeystatsSnapshotAsync(KeystatsUploadRequest request, CancellationToken ct = default)
         => SendJsonAsync<StringApiResponse>(ContractOperation.UploadKeystatsSnapshot, request, ct);
 
+    /// <summary>
+    /// <c>GET /api/client/shell/latest</c>（匿名；注意它在 <c>/api/v1</c> 之外，走 host 根路径）。
+    /// 守护程序的「检查更新」用它。
+    /// </summary>
+    public Task<ClientShellLatestResponse?> GetClientShellLatestAsync(CancellationToken ct = default)
+        => SendAsync<ClientShellLatestResponse>(ContractOperation.GetClientShellLatest, null, null, ct);
+
     // -----------------------------------------------------------------------
     // 内部实现：只接受生成物里的 operation，平静态类型化的请求体
     // -----------------------------------------------------------------------

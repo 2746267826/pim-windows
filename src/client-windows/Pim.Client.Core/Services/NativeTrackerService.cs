@@ -24,6 +24,13 @@ public sealed class NativeTrackerService : IDisposable
     /// （WO-ISSUES-396-400-20261007 §七.9 允许为 src/client-windows 做时钟注入）。
     /// </summary>
     private readonly TimeProvider _timeProvider;
+
+    /// <summary>
+    /// 与 <c>HttpClient.PostAsJsonAsync</c> 一致的列化选项（Web 默认：camelCase 命名策略）。
+    /// <c>rawJson</c> 里的嵌套对象（例如 <c>pageVisit</c>）必须保持改造前的键名 ——
+    /// 用默认 options 会把 <c>sessionId</c> 变成 <c>SessionId</c>，那是未声明的线格式变化。
+    /// </summary>
+    private static readonly JsonSerializerOptions WebJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly CancellationTokenSource _cts = new();
     private readonly Channel<TrackerWindowInfo> _windowChannel = Channel.CreateUnbounded<TrackerWindowInfo>();
     private readonly ConcurrentQueue<TrackerEventDto> _uploadQueue = new();
@@ -346,7 +353,7 @@ public sealed class NativeTrackerService : IDisposable
                     PageVisitCount = 0,
                     PageVisitDuration = 0,
                     Date = BusinessDayUtils.GetBusinessDateString(cur),
-                    RawJson = JsonSerializer.SerializeToElement(new { gapStart = cur, gapEnd = chunkEnd, isStartup })
+                    RawJson = ToRawJson(new { gapStart = cur, gapEnd = chunkEnd, isStartup })
                 });
             }
             cur = chunkEnd;
@@ -377,7 +384,7 @@ public sealed class NativeTrackerService : IDisposable
                     PageVisitCount = 0,
                     PageVisitDuration = 0,
                     Date = BusinessDayUtils.GetBusinessDateString(session.StartedAt),
-                    RawJson = JsonSerializer.SerializeToElement(new { sessionId = session.Id, isIdle = true })
+                    RawJson = ToRawJson(new { sessionId = session.Id, isIdle = true })
                 }
             };
         }
@@ -414,7 +421,7 @@ public sealed class NativeTrackerService : IDisposable
                     IsIdle = false,
                     IsMediaActive = session.IsMediaActive,
                     Date = BusinessDayUtils.GetBusinessDateString(session.StartedAt),
-                    RawJson = JsonSerializer.SerializeToElement(new { sessionId = session.Id }),
+                    RawJson = ToRawJson(new { sessionId = session.Id }),
                     PageVisitCount = 0,
                     PageVisitDuration = 0,
                     Browser = hbForWindow?.Browser,
@@ -453,7 +460,7 @@ public sealed class NativeTrackerService : IDisposable
                         PageVisitCount = 0,
                         PageVisitDuration = 0,
                         Date = BusinessDayUtils.GetBusinessDateString(cur),
-                        RawJson = JsonSerializer.SerializeToElement(new { sessionId = session.Id }),
+                        RawJson = ToRawJson(new { sessionId = session.Id }),
                         Browser = hbForWindow?.Browser,
                         InstanceId = hbForWindow?.InstanceId
                     });
@@ -485,7 +492,7 @@ public sealed class NativeTrackerService : IDisposable
                     PageVisitCount = 0,
                     PageVisitDuration = 0,
                     Date = BusinessDayUtils.GetBusinessDateString(visitStart),
-                    RawJson = JsonSerializer.SerializeToElement(new { sessionId = session.Id, pageVisit = pv }),
+                    RawJson = ToRawJson(new { sessionId = session.Id, pageVisit = pv }),
                     Browser = hbForWindow?.Browser,
                     InstanceId = hbForWindow?.InstanceId
                 });
@@ -515,7 +522,7 @@ public sealed class NativeTrackerService : IDisposable
                     PageVisitCount = 0,
                     PageVisitDuration = 0,
                     Date = BusinessDayUtils.GetBusinessDateString(cur),
-                    RawJson = JsonSerializer.SerializeToElement(new { sessionId = session.Id }),
+                    RawJson = ToRawJson(new { sessionId = session.Id }),
                     Browser = hbForWindow?.Browser,
                     InstanceId = hbForWindow?.InstanceId
                 });
@@ -754,6 +761,13 @@ public sealed class NativeTrackerService : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// 事件里的 <c>rawJson</c>（契约里是无类型 JSON）：用**与 HTTP 序列化一致的 Web 选项**固化，
+    /// 保证嵌套对象的键名与改造前完全一致（camelCase）。
+    /// </summary>
+    private static JsonElement ToRawJson<T>(T value) =>
+        JsonSerializer.SerializeToElement(value, WebJsonOptions);
 
     /// <summary>
     /// 本机站点事件（<see cref="SiteEventDto"/>）→ 契约生成的 <see cref="SiteEventUploadDto"/>。

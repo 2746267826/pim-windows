@@ -79,6 +79,41 @@ public sealed class AuthResponseApiResponse
     public System.DateTimeOffset Timestamp { get; set; }
 }
 
+/// <summary>契约 <c>components.schemas.ClientShellLatestResponse</c>（response）。</summary>
+public sealed class ClientShellLatestResponse
+{
+    /// <summary>契约字段 <c>androidUrl</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("androidUrl")]
+    public string? AndroidUrl { get; set; }
+    /// <summary>契约字段 <c>androidVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("androidVersion")]
+    public string? AndroidVersion { get; set; }
+    /// <summary>契约字段 <c>checkedAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("checkedAt")]
+    public System.DateTimeOffset? CheckedAt { get; set; }
+    /// <summary>契约字段 <c>error</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("error")]
+    public string? Error { get; set; }
+    /// <summary>契约字段 <c>shellAndroidUrl</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("shellAndroidUrl")]
+    public string? ShellAndroidUrl { get; set; }
+    /// <summary>契约字段 <c>shellAndroidVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("shellAndroidVersion")]
+    public string? ShellAndroidVersion { get; set; }
+    /// <summary>契约字段 <c>shellWindowsUrl</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("shellWindowsUrl")]
+    public string? ShellWindowsUrl { get; set; }
+    /// <summary>契约字段 <c>shellWindowsVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("shellWindowsVersion")]
+    public string? ShellWindowsVersion { get; set; }
+    /// <summary>契约字段 <c>windowsUrl</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("windowsUrl")]
+    public string? WindowsUrl { get; set; }
+    /// <summary>契约字段 <c>windowsVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("windowsVersion")]
+    public string? WindowsVersion { get; set; }
+}
+
 /// <summary>契约 <c>components.schemas.DaemonHeartbeatDto</c>（response）。</summary>
 public sealed class DaemonHeartbeatDto
 {

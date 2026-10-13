@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Pim.Client.Core.Contract;
+using Pim.Client.Core.Models;
 using Pim.Client.Core.Services;
 using Xunit;
 
@@ -316,6 +317,101 @@ public class ContractBoundaryBehaviorTests
         Assert.Contains("formattedMouseDistance", sampleBody);
     }
 
+    /// <summary>
+    /// 契约里被生成的每个字符串枚举：每个取值都必须与生成的 C# 枚举**逐字往返**。
+    ///
+    /// 这条挡的是「成员名 ≠ wire 值」这类静默线格式变化：`JsonStringEnumConverter` 上线写的是
+    /// 成员名，任何 PascalCase 化（例如契约值 `low` → 成员 `Low`）都会改掉线上字节。
+    /// </summary>
+    [Fact]
+    public void EveryGeneratedEnumRoundTripsEveryContractValue()
+    {
+        var assembly = typeof(ApiClient).Assembly;
+        using var contract = JsonDocument.Parse(File.ReadAllText(RepoPath("contract", "openapi.json")));
+
+        var checkedEnums = 0;
+        var checkedValues = 0;
+        foreach (var schema in contract.RootElement.GetProperty("components").GetProperty("schemas").EnumerateObject())
+        {
+            if (!schema.Value.TryGetProperty("enum", out var enumValues)) continue;
+            if (schema.Value.TryGetProperty("type", out var typeNode) && typeNode.GetString() != "string") continue;
+
+            var generated = assembly.GetType($"Pim.Client.Core.Contract.{schema.Name}");
+            if (generated is null || !generated.IsEnum) continue; // 不在本次 operation 闭包里 → 没有生成
+
+            checkedEnums++;
+            foreach (var value in enumValues.EnumerateArray())
+            {
+                var wire = value.GetString()!;
+                var parsed = JsonSerializer.Deserialize($"\"{wire}\"", generated);
+                Assert.NotNull(parsed);
+                // 上线必须是与契约取值逐字相同的 JSON 字符串（不是数字、不是大小写变形）。
+                Assert.Equal(JsonSerializer.Serialize(wire), JsonSerializer.Serialize(parsed, generated));
+                Assert.Equal(wire, parsed!.ToString());
+                checkedValues++;
+            }
+        }
+
+        Assert.True(checkedEnums > 0 && checkedValues > 0, "没有任何被生成的字符串枚举参与校验");
+    }
+
+    /// <summary>
+    /// 事件里的 `rawJson` 是无类型 JSON：嵌套对象的键名必须与改造前一致（Web 默认 camelCase）。
+    /// 改造前它由 `PostAsJsonAsync`（Web 选项）序列化；现在提前用同一套选项固化，
+    /// 换成默认 options 会把 `sessionId` 变成 `SessionId` —— 那是未声明的线格式变化。
+    /// </summary>
+    [Fact]
+    public void TrackerEventRawJson_KeepsCamelCaseForNestedPageVisit()
+    {
+        var logger = new TrackerLogger(1);
+        var statePath = Path.Combine(Path.GetTempPath(), "pim-rawjson-state-" + Guid.NewGuid().ToString("N") + ".json");
+        var start = new DateTimeOffset(2026, 10, 14, 9, 0, 0, TimeSpan.Zero);
+
+        using var tracker = new NativeTrackerService(
+            new ApiClient(() => new RecordingHandler()),
+            new TrackerConfig { Enabled = true },
+            windowResolver: new AlwaysNullWindowResolver(),
+            idleDetector: new AlwaysZeroIdleDetector(),
+            bridge: new BrowserBridgeService(15699, logger),
+            logger: logger,
+            stateManager: new TrackerStateManager(statePath));
+
+        var session = new TrackerSession
+        {
+            Id = 42,
+            AppName = "chrome",
+            ExePath = @"C:\chrome.exe",
+            StartedAt = start,
+            EndedAt = start.AddSeconds(60),
+            IsIdle = false,
+            PageVisits = new List<TrackerPageVisit>
+            {
+                new()
+                {
+                    Id = 7,
+                    SessionId = 42,
+                    Url = "https://github.com/",
+                    Domain = "github.com",
+                    StartedAt = start,
+                    EndedAt = start.AddSeconds(30),
+                    DurationSecs = 30,
+                },
+            },
+        };
+
+        var events = tracker.SessionToEvents(session, start.AddSeconds(60));
+        var pageEvent = events.Single(e => e.EventType == "web-page");
+        var json = JsonSerializer.Serialize(pageEvent.RawJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        // 外层与嵌套都必须是 camelCase（嵌套 pageVisit 是 TrackerPageVisit 的内部形状）。
+        Assert.Contains("\"sessionId\":42", json);
+        Assert.Contains("\"pageVisit\":{", json);
+        Assert.Contains("\"id\":7", json);
+        Assert.Contains("\"startedAt\"", json);
+        Assert.DoesNotContain("\"SessionId\"", json);
+        Assert.DoesNotContain("\"StartedAt\"", json);
+    }
+
     // ---- helpers ------------------------------------------------------------------
 
     /// <summary>契约 required 的字段在编译期就必须给全（漏一个 = CS9035）。</summary>
@@ -438,6 +534,9 @@ public class ContractBoundaryBehaviorTests
         new("POST", "/api/v1/pc/keystats/upload",
             SnapshotRequest(),
             (api, req) => api.UploadKeystatsSnapshotAsync((KeystatsUploadRequest)req!)),
+        // 契约基址 /api/v1 之外的 host 根路径：守护程序「检查更新」用它。
+        new("GET", "/api/client/shell/latest", null,
+            (api, _) => api.GetClientShellLatestAsync()),
     };
 
     private static List<string> DeclaredOperations()
@@ -483,6 +582,18 @@ public class ContractBoundaryBehaviorTests
         }
 
         throw new FileNotFoundException($"Could not find repository file {Path.Combine(parts)}.");
+    }
+
+
+    private sealed class AlwaysNullWindowResolver : IWindowResolver
+    {
+        public TrackerWindowInfo? GetForegroundWindowInfo() => null;
+    }
+
+    private sealed class AlwaysZeroIdleDetector : IIdleDetector
+    {
+        public TimeSpan GetIdleDuration() => TimeSpan.Zero;
+        public bool IsScreenOff() => false;
     }
 
     private sealed class RecordingHandler : System.Net.Http.HttpMessageHandler

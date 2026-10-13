@@ -17,6 +17,9 @@
 #   ⑪ 原样抽取真实 CI YAML：job / step / gate 接线（needs + env 映射 + gate 检查行），
 #      并真实执行抽取出来的 step 体与 gate 体，证明失败会传播
 #   ⑫ 生成物与 operation 清单的对应关系：仓内每个生成文件都被 check 覆盖（无「没被校验的产物」）
+#   ⑬ 生成器 fail-closed 负对照：内联 enum / 非标识符枚举值 / 整数枚举 / properties+additionalProperties /
+#      readOnly 落在请求方向 / 内联根 schema / query 参数 → 一律拒绝产出且零写入
+#   ⑭ 生成物固定 UTF-8 + LF（Windows 与 Linux 逐字节相同的必要条件）
 #
 # 用法：bash scripts/ci/test-contract-csharp.sh
 #   PIM_CONTRACT_TEST_KEEP=1  保留临时工作目录（默认删除）
@@ -400,11 +403,84 @@ PY
 record "every_generated_file_is_checked" $([ -z "$COVERAGE" ] && echo 0 || echo 1) \
   "unchecked generated files: '${COVERAGE:-none}'"
 
+
+section "⑬ 生成器 fail-closed 负对照：契约里出现尚未支持的形状一律拒绝产出"
+# 这些形状的共同危害是「静默丢契约约束」：生成器假装没看见，边界就会发出不合契约的请求。
+# 每一条都要求生成器**非 0 退出**，且仓内产物一个字节都不动。
+
+reject_case() { # reject_case <name> <描述> <python 变更片段>
+  local name="$1" desc="$2" snippet="$3"
+  local dir="$WORK/reject-$name"
+  mksb "$dir"
+  local before
+  python3 - "$dir/contract/openapi.json" <<PYEOF
+import json, sys
+path = sys.argv[1]
+doc = json.load(open(path, encoding="utf-8"))
+schemas = doc["components"]["schemas"]
+$snippet
+json.dump(doc, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=2, sort_keys=True)
+PYEOF
+  # 先改契约、再取基线：这样「零写入」度量的只是生成器自己的副作用。
+  before="$(sb_sig "$dir")"
+  run_generator "$dir"
+  local after
+  after="$(sb_sig "$dir")"
+  if [ "$GEN_RC" -ne 0 ] && [ "$before" = "$after" ]; then
+    record "generator_rejects_$name" 0 "$desc (rc=$GEN_RC, 仓内零写入)"
+  else
+    record "generator_rejects_$name" 1 "$desc (rc=$GEN_RC, 写入=$([ "$before" = "$after" ] && echo no || echo YES))"
+  fi
+}
+
+reject_case "inline_enum" "属性上的内联 enum" \
+  'schemas["LoginRequest"]["properties"]["username"]["enum"] = ["alice", "bob"]'
+reject_case "non_identifier_enum_value" "枚举取值不是合法 C# 标识符（改名就是改线格式）" \
+  'schemas["DaemonSourceState"]["enum"] = ["Unknown", "in-progress", "Available", "Unavailable", "Paused"]'
+reject_case "integer_enum" "整数枚举（契约没给成员名）" \
+  'schemas["DaemonSourceState"] = {"type": "integer", "format": "int32", "enum": [0, 1, 2]}'
+reject_case "properties_plus_additional" "对象同时有 properties 与 additionalProperties" \
+  'schemas["KeystatsUploadRequest"]["properties"]["keyPressCounts"] = {"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": {"type": "integer", "format": "int32"}}'
+reject_case "readonly_in_request_schema" "readOnly 字段出现在请求方向的 schema 里" \
+  'schemas["LoginRequest"]["properties"]["username"]["readOnly"] = True'
+reject_case "inline_root_request" "请求体根不是 \$ref（内联形状）" \
+  'doc["paths"]["/api/v1/auth/login"]["post"]["requestBody"]["content"]["application/json"]["schema"] = {"type": "object", "properties": {"username": {"type": "string"}}}'
+reject_case "query_parameter" "operation 带 query 参数（生成器只表达 path 参数）" \
+  'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "integer"}}]'
+
+section "⑭ 生成物固定 UTF-8 + LF（Windows 刷新与 Linux CI 复跑必须逐字节相同）"
+CR_CHECK="$(python3 - "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractModels.cs" "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs" <<'PYEOF'
+import sys
+bad = []
+for path in sys.argv[1:]:
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if b"\r" in data:
+        bad.append(path)
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        bad.append(path + " (not utf-8)")
+print(",".join(bad))
+PYEOF
+)"
+record "generated_artifacts_are_utf8_lf" $([ -z "$CR_CHECK" ] && echo 0 || echo 1) \
+  "no CR / valid UTF-8 in generated artifacts (offenders: '${CR_CHECK:-none}')"
+
 say ""
 say "== summary: PASS=$PASS FAIL=$FAIL NOT-RUN=$NR =="
 if [ "$FAIL" -ne 0 ]; then
   say "RESULT: 存在失败断言（exit 1）"
   exit 1
+fi
+if [ "$NR" -ne 0 ]; then
+  # 本地允许留 NOT-RUN 供人看，但 CI 里不许：必需负对照没跑到 = 门禁没有被验证过，
+  # 不能因为「没跑」就拿到绿（fail-closed）。
+  if [ "${CI:-}" = "true" ]; then
+    say "RESULT: CI 下存在未执行的断言（NOT-RUN=$NR，exit 1）"
+    exit 1
+  fi
+  say "注意：本地有 $NR 条断言未执行（CI 下会判失败）。"
 fi
 say "RESULT: 全部断言通过（exit 0）"
 exit 0

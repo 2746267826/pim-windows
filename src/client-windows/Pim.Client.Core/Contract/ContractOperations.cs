@@ -135,4 +135,6 @@ public sealed class ContractOperation
         new("POST", "/api/v1/pc/keystats/samples", "pc/keystats/samples");
     public static readonly ContractOperation UploadKeystatsSnapshot =
         new("POST", "/api/v1/pc/keystats/upload", "pc/keystats/upload");
+    public static readonly ContractOperation GetClientShellLatest =
+        new("GET", "/api/client/shell/latest", "../client/shell/latest");
 }
