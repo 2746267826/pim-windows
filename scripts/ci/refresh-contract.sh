@@ -62,7 +62,7 @@ echo "== ③ 两步都成功了，才开始安装（任一步失败过，这里�
 #   3) 逐个 `mv` 原子替换（这一步之后才可能改变仓内文件）；
 #   4) 复核通过后才删备份。
 # 任一步失败（含复核失败、以及可捕获的终止信号 INT/TERM/HUP）→ `rollback`：
-#   * 只用**校验通过**的备份还原（备份不消费，可重试）；
+#   * 只用**校验记录存在且通过**的备份还原（备份不消费，可重试）；
 #   * 刷新前不存在的产物 → 删掉本次装进去的（恢复「不存在」）；
 #   * 绝不删除无法还原的文件，也不拿可疑备份覆盖正本；
 #   * 清掉临时文件、保留未完成的备份目录并打印恢复指引，然后**立即以非 0 退出**。
@@ -107,7 +107,14 @@ rollback() {
   local restored=0 failed=0 removed=0 relative
   for relative in "${ARTIFACT_RELATIVES[@]}"; do
     if [ -f "$BACKUP/$relative" ]; then
-      if [ -f "$BACKUP/$relative.sha256" ] && ! ( cd "$BACKUP" && sha256sum -c --status "$relative.sha256" ); then
+      # 校验记录**必须存在且通过**：缺记录也要拒绝（否则一份被动过的备份会悄悄覆盖正本，
+      # 而脚本还报告「已回滚」并删掉证据）。
+      if [ ! -f "$BACKUP/$relative.sha256" ]; then
+        failed=$((failed+1))
+        echo "  ❌ 缺少校验记录（.sha256），拒绝用未校验的备份覆盖正本：$relative（备份：$BACKUP/$relative）" >&2
+        continue
+      fi
+      if ! ( cd "$BACKUP" && sha256sum -c --status "$relative.sha256" ); then
         failed=$((failed+1))
         echo "  ❌ 备份校验失败，拒绝用它覆盖正本：$relative（备份：$BACKUP/$relative）" >&2
         continue
@@ -119,10 +126,15 @@ rollback() {
         echo "  ❌ 未能还原：$relative（备份仍在 $BACKUP/$relative）" >&2
       fi
     elif was_missing_before "$relative"; then
-      # 刷新前不存在 → 恢复「不存在」，删掉本次装进去的
+      # 刷新前不存在 → 恢复「不存在」，删掉本次装进去的。
+      # `rm` 也要检查返回值：删不掉却计成功，会让脚本谎报「已回滚」并删掉备份。
       if [ -e "$ROOT/$relative" ]; then
-        rm -f "$ROOT/$relative"
-        removed=$((removed+1))
+        if rm -f "$ROOT/$relative"; then
+          removed=$((removed+1))
+        else
+          failed=$((failed+1))
+          echo "  ❌ 未能移除新增产物：$relative（它刷新前不存在，需人工删除）" >&2
+        fi
       fi
     else
       failed=$((failed+1))
