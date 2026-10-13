@@ -199,11 +199,42 @@ def reject_non_path_parameters(op: dict, op_path: str, path_item: dict | None = 
     """
     parameters = list((path_item or {}).get("parameters") or []) + list(op.get("parameters") or [])
     for parameter in parameters:
+        name = parameter.get("name")
         location = parameter.get("in")
+
         if location == "path":
+            # path 参数由路径模板表达；但它**自带的 schema 约束**（enum/pattern/format/数值范围）
+            # 或非 string 类型，生成的边界表达不了 —— 静默丢掉等于「契约有约束、C# 边界没有」，
+            # 因此这里 fail-closed，而不是假装没看见。
+            if "$ref" in parameter:
+                raise GenerationError(
+                    f"operation {op_path} 的 path 参数用了 $ref（{parameter['$ref']}），"
+                    "生成器尚未解析 components.parameters，拒绝产出。"
+                )
+            if name and f"{{{name}}}" not in op_path:
+                raise GenerationError(
+                    f"operation {op_path} 声明了 path 参数 {name}，但它不在路径模板里 —— 会被静默丢掉。"
+                )
+            schema = parameter.get("schema") or {}
+            constraints = [
+                key for key in ("enum", "pattern", "format", "minimum", "maximum", "minLength", "maxLength")
+                if schema.get(key) is not None
+            ]
+            if "enum" in schema or constraints:
+                raise GenerationError(
+                    f"operation {op_path} 的 path 参数 {name} 带生成器无法表达的约束"
+                    f"（{', '.join(sorted(set(constraints + (['enum'] if 'enum' in schema else []))))}）："
+                    "需要扩展显式方法签名（例如生成枚举/校验），不能静默丢掉。"
+                )
+            if schema.get("type") not in (None, "string"):
+                raise GenerationError(
+                    f"operation {op_path} 的 path 参数 {name} 是 {schema.get('type')} 类型："
+                    "生成的边界只接受 string 路由值，需要先决定类型映射。"
+                )
             continue
+
         raise GenerationError(
-            f"operation {op_path} 带 {location} 参数（{parameter.get('name')}），"
+            f"operation {op_path} 带 {location} 参数（{name}），"
             "生成器目前只支持由路径模板表达的 path 参数 —— 需要先扩展显式方法签名。"
         )
 

@@ -451,6 +451,12 @@ reject_case "path_item_query_parameter" "query 参数写在 Path Item 级（不�
   'doc["paths"]["/api/v1/endpoints"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "integer"}}]'
 reject_case "root_additional_properties" "具名对象根上带 typed additionalProperties（允许任意额外键）" \
   'schemas["LoginRequest"]["additionalProperties"] = {"type": "string"}'
+reject_case "path_parameter_enum" "path 参数自带 enum 约束（生成的边界表达不了）" \
+  'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"name": "deviceId", "in": "path", "required": True, "schema": {"type": "string", "enum": ["ONLY-ALLOWED"]}}]'
+reject_case "path_parameter_not_in_template" "声明的 path 参数不在路径模板里（会被静默丢掉）" \
+  'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"name": "deviceID", "in": "path", "required": True, "schema": {"type": "string"}}]'
+reject_case "path_parameter_ref" "path 参数用 \$ref 引用（生成器尚未解析 components.parameters）" \
+  'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"$" "ref": "#/components/parameters/DeviceId"}]'
 
 section "⑭ 生成物固定 UTF-8 + LF（Windows 刷新与 Linux CI 复跑必须逐字节相同）"
 CR_CHECK="$(python3 - "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractModels.cs" "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs" <<'PYEOF'

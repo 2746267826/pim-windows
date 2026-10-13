@@ -55,44 +55,107 @@ python3 "$SB/scripts/contract/generate-csharp.py" --out-dir "$SB"
 
 echo ""
 echo "== ③ 两步都成功了，才开始安装（任一步失败过，这里根本不会执行） =="
-# 安装策略：先把全部产物写成本目录下的 .tmp-<pid>，再逐个 rename 覆盖（POSIX rename 是原子的，
-# 不会出现「写了一半的文件」）；同时留下备份，rename 阶段失败就整体回滚。
-# 残留窗口只有 rename 本身（同目录元数据操作），比逐个 install 覆盖小得多。
+# 安装策略（预备份 → 预写临时文件 → 原子替换 → 复核通过才收尾）：
+#   1) 为 4 个产物全部预备份到仓外（**先于任何改名**，且刷新前不存在的产物也登记下来）；
+#   2) 各写一份同目录 `<name>.tmp-<pid>`；
+#   3) 逐个 `mv` 原子替换（POSIX rename；这一步之后才可能改变仓内文件）；
+#   4) 复核（check-contract-csharp.sh）通过后才删备份。
+# 任一步失败（含复核失败）→ `rollback`：用备份 `cp` 还原（备份**不消费**，可重试），
+# 清掉临时文件，**立即以非 0 退出**（不返回主流程 —— 否则会带着半成品继续往下走）。
+# 若还原本身也失败：保留备份目录、打印未还原清单，绝不删除无法还原的文件。
 BACKUP="$TMP/backup"
 mkdir -p "$BACKUP"
 INSTALLED=()
-rollback() {
+MISSING_BEFORE=()
+ROLLBACK_DONE=0
+ROLLBACK_FAILED=0
+
+cleanup() {
+  if [ "$ROLLBACK_FAILED" -eq 0 ]; then
+    rm -rf "$TMP"
+  else
+    echo "⚠️ 回滚未完整成功：备份**保留**在 $BACKUP" >&2
+  fi
+}
+trap cleanup EXIT
+
+remove_temp_files() {
   local relative
-  for relative in "${INSTALLED[@]}"; do
+  for relative in "${ARTIFACT_RELATIVES[@]}"; do
+    rm -f "$ROOT/$relative.tmp-$$"
+  done
+}
+
+rollback() {
+  local failed_rc=$?
+  [ "$ROLLBACK_DONE" -eq 1 ] && return 0
+  ROLLBACK_DONE=1
+  set +e
+  local restored=0 failed=0 missing=0 relative
+  for relative in "${ARTIFACT_RELATIVES[@]}"; do
     if [ -f "$BACKUP/$relative" ]; then
-      mv -f "$BACKUP/$relative" "$ROOT/$relative"
+      # 用 cp 还原（不消费备份，失败还能重试）；失败的记下来。
+      if cp -p "$BACKUP/$relative" "$ROOT/$relative"; then
+        restored=$((restored+1))
+      else
+        failed=$((failed+1))
+        echo "  ❌ 未能还原：$relative（备份仍在 $BACKUP/$relative）" >&2
+      fi
     else
-      rm -f "$ROOT/$relative"
+      # 没有备份 = 刷新前不存在。**不删除**任何东西（可能是备份阶段就失败了，
+      # 那个文件是刷新前的正本）；只如实报告。
+      missing=$((missing+1))
+      echo "  ⚠️ 无备份可还原：$relative（刷新前不存在，或备份未建立）" >&2
     fi
   done
-  echo "安装阶段失败：已回滚 ${#INSTALLED[@]} 个产物，仓内保持刷新前的状态。" >&2
+  remove_temp_files
+  if [ "$failed" -eq 0 ]; then
+    echo "失败：已回滚 $restored 个产物，仓内保持刷新前的状态。" >&2
+  else
+    ROLLBACK_FAILED=1
+    echo "失败：$restored 个已还原、$failed 个未能还原、$missing 个无备份 —— 仓内可能处于混合状态，" >&2
+    echo "     请用 $BACKUP 下的备份手工恢复。" >&2
+  fi
+  exit "$failed_rc"
 }
 trap 'rollback' ERR
 
+# 1) 预备份：必须在任何改名之前完成（这一步失败 → 仓内一个文件都还没动）
 for relative in "${ARTIFACT_RELATIVES[@]}"; do
   target="$ROOT/$relative"
-  mkdir -p "$(dirname "$target")"
   if [ -f "$target" ]; then
     mkdir -p "$BACKUP/$(dirname "$relative")"
     cp -p "$target" "$BACKUP/$relative"
+  else
+    MISSING_BEFORE+=("$relative")
   fi
-  cp -p "$SB/$relative" "$target.tmp-$$"
-  mv -f "$target.tmp-$$" "$target"
+done
+
+# 2) 预写临时文件（同目录，保证 rename 不跨文件系统）
+for relative in "${ARTIFACT_RELATIVES[@]}"; do
+  mkdir -p "$(dirname "$ROOT/$relative")"
+  cp -p "$SB/$relative" "$ROOT/$relative.tmp-$$"
+done
+
+# 3) 原子替换
+for relative in "${ARTIFACT_RELATIVES[@]}"; do
+  mv -f "$ROOT/$relative.tmp-$$" "$ROOT/$relative"
   INSTALLED+=("$relative")
   echo "  安装 $relative"
 done
 
-trap - ERR
-trap cleanup EXIT
-
 echo ""
-echo "== ④ 复核：快照与生成物必须一致（不一致就说明这一批没做完） =="
+echo "== ④ 复核：快照与生成物必须一致（不一致就回滚，不留脏文件） =="
 bash "$HERE/check-contract-csharp.sh"
+
+# 复核通过：解除回滚保护、清掉备份与任何临时文件
+trap - ERR
+remove_temp_files
+rm -rf "$BACKUP"
+
+if [ "${#MISSING_BEFORE[@]}" -ne 0 ]; then
+  echo "提示：以下产物刷新前不存在，本次为新增：${MISSING_BEFORE[*]}"
+fi
 
 echo ""
 echo "刷新完成。请把 contract/ 与 src/client-windows/Pim.Client.Core/Contract/ 的改动**一起提交**。"
