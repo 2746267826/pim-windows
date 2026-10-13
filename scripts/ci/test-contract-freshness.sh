@@ -19,7 +19,7 @@
 #
 # 用法：bash scripts/ci/test-contract-freshness.sh
 #   PIM_CONTRACT_TEST_KEEP=1     保留临时工作目录（默认删除）
-#   PIM_CONTRACT_BASE_REF=<ref>  ⑬ 负对照所用的旧 master ref（默认 origin/master）
+#   PIM_CONTRACT_BASE_REF=<ref>  ⑬ 负对照所用的旧 master ref（默认为引入本门禁前的固定提交）
 #   PYTHONDONTWRITEBYTECODE=1    由脚本自身强制设置
 # ---------------------------------------------------------------------------
 set -uo pipefail
@@ -33,7 +33,18 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 CHECK="$HERE/check-contract-freshness.sh"
 FETCH="$HERE/fetch-contract.sh"
 CI_YML="$ROOT/.github/workflows/ci.yml"
-BASE_REF="${PIM_CONTRACT_BASE_REF:-origin/master}"
+# ⚠️ 负对照的基准必须固定在「引入本门禁之前」的提交上，**不能**取 origin/master。
+#
+# 原因（此前 master 一直红，就是踩了这个坑）：
+#   这些负对照要证明的是「旧 master 上既没有 freshness 入口、也不会因快照陈旧变红」。
+#   如果基准取 origin/master，那么一旦本门禁自己合进 master，origin/master 也就带上了
+#   freshness 入口 —— 断言的前提永久失效，任何 base=master 的 PR（含 master 自身重跑）
+#   都会红，且无法自愈。
+#
+#   cbfcbeffc93a1cc522eec1c522860e2881778b40 = 引入本门禁（PR #10）之前 master 的提交。
+#   它已实测确认没有 scripts/ci/check-contract-freshness.sh 与 test-contract-freshness.sh。
+#   该提交是 master 的祖先，不受 GC 影响；将来若仓库历史被重写，需同步更新此常量。
+BASE_REF="${PIM_CONTRACT_BASE_REF:-cbfcbeffc93a1cc522eec1c522860e2881778b40}"
 
 CHECK_STEP_NAME="Verify contract snapshot is up to date (real upstream)"
 TEST_STEP_NAME="Contract freshness behavior tests (offline fixtures)"
@@ -758,6 +769,31 @@ PY
 )"
 record "gate_env_covers_every_need" $([ -z "$NEEDS_UNCOVERED" ] && echo 0 || echo 1) "gate env mapping covers all needs (uncovered: '${NEEDS_UNCOVERED}')"
 
+# ⑬ 的负对照读一个**历史提交**，因此 contract-freshness job 的 checkout 必须保留完整历史。
+# 这条不能只靠注释：若有人把 fetch-depth 改小或删掉，⑬ 会因对象不可达而失效
+# （CI 下已改为 fail-closed，但这里提前把「配置被改」本身也拦下来）。
+FD_BAD="$(python3 - "$CI_YML" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+job = (doc.get("jobs") or {}).get("contract-freshness")
+bad = []
+if not job:
+    bad.append("no contract-freshness job")
+else:
+    for s in (job.get("steps") or []):
+        if str(s.get("uses") or "").startswith("actions/checkout"):
+            fd = (s.get("with") or {}).get("fetch-depth")
+            if str(fd) != "0":
+                bad.append("checkout fetch-depth=%r (must be 0)" % fd)
+            break
+    else:
+        bad.append("no actions/checkout step")
+print("; ".join(bad))
+PY
+)"
+record "contract_freshness_job_keeps_full_history" $([ -z "$FD_BAD" ] && echo 0 || echo 1) \
+  "contract-freshness checkout must use fetch-depth: 0 (${FD_BAD:-ok})"
+
 # 步骤体在三个失败分支都必须非 0（GitHub 用 bash -e -o pipefail 调 run）
 step_run() { # step_run <dir> <ref> [raw_base]
   local dir="$1" ref="$2" base="${3:-$RAW}"
@@ -845,13 +881,38 @@ PY
   run_check "$OLD_SB" fakejson
   record "new_entry_rejects_noncontract_json" $([ "$CHECK_RC" -ne 0 ] && echo 0 || echo 1) "new check rc=$CHECK_RC on the very payload the old entry installed"
 
-  # (c) 同一「陈旧快照」沙箱：旧树没有任何字节比较 → 不可能变红；新入口 rc=1
-  record "old_master_stale_snapshot_cannot_turn_red" $([ "$OLD_STRUCT" = "NONE" ] && echo 0 || echo 1) \
-    "no step in the base workflow compares contract bytes, so the stale sandbox below would stay green on old master"
+  # (c) 同一「陈旧快照」沙箱：旧树没有任何字节比较机制 → 不可能变红；新入口 rc=1
+  #
+  # 注：此处**不再单独记一条结构断言**。原因（实测发现）：
+  #   「旧 master 上陈旧快照不会变红」这一事实，与上面第 1 条
+  #   old_master_has_no_freshness_entry_in_workflow 的谓词完全相同（都等价于
+  #   「旧 ci.yml 里没有 freshness 入口」），单独记一条即重复断言、零独立信息量。
+  #   曾尝试把它改为「扫旧 ci.yml 的 run 体里有没有字节比较命令」，但实测该判据**恒真** ——
+  #   真实的字节比较发生在 scripts/ci/check-contract-freshness.sh 脚本内部，不在 workflow
+  #   的 run: 文本里，所以无论基准是什么都扫不到，反而更糟。故删除。
+  #
+  #   该对照关系仍由下面这一对**行为断言**承载（它们才是真正有判定力的）：
+  #     old_master_stale_snapshot_cannot_turn_red  → 已移除（见上）
+  #     new_entry_red_on_same_stale_snapshot       → 新入口在同一陈旧沙箱上 rc=1
+  #   即「新入口会红、旧 master 不会」这个差异，由 new_entry_red_on_same_stale_snapshot
+  #   配合 old_master_has_no_freshness_entry_in_workflow 共同证明。
   run_check "$WORK/c2" master
   record "new_entry_red_on_same_stale_snapshot" $([ "$CHECK_RC" -eq 1 ] && echo 0 || echo 1) "new check rc=$CHECK_RC on the same stale snapshot the old master accepted"
 else
-  notrun "old_master_negative_control" "base ref '$BASE_REF' is not resolvable in $ROOT (set PIM_CONTRACT_BASE_REF); 旧 master 负对照未执行"
+  # ⚠️ fail-closed：基准 ref 解析不到时，**不能**在 CI 里静默跳过。
+  #
+  # 为什么：⑬ 的负对照依赖一个历史提交。浅克隆、把 fetch-depth 改小、或仓库历史被
+  # 重写，都会让该对象不可达。若此时只记 NOT-RUN 而退出码仍为 0，门禁就会「悄无声息地
+  # 失去覆盖」——这与本门禁要拦的那类静默漂移同族，不能留。
+  #
+  # 本地开发环境（非 CI）允许 NOT-RUN，便于在浅克隆里跑其余断言；
+  # CI 环境一律判 FAIL，逼使 checkout 保留完整历史。
+  if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    record "old_master_negative_control_base_resolvable" 1 \
+      "base ref '$BASE_REF' is not resolvable in $ROOT under CI —— 负对照无法执行，按 fail-closed 判失败（浅克隆 / fetch-depth 过小 / 历史改写都会触发；请确保 checkout 使用 fetch-depth: 0）"
+  else
+    notrun "old_master_negative_control" "base ref '$BASE_REF' is not resolvable in $ROOT (set PIM_CONTRACT_BASE_REF); 旧 master 负对照未执行（本地非 CI，允许跳过）"
+  fi
 fi
 
 # ============================== 汇总 =======================================
