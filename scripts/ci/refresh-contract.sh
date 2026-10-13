@@ -54,11 +54,41 @@ echo "== ② 在沙箱里用刚拉到的快照重新生成 C# 生成物（先不
 python3 "$SB/scripts/contract/generate-csharp.py" --out-dir "$SB"
 
 echo ""
-echo "== ③ 两步都成功了，才一次性安装进仓（任一步失败过，这里根本不会执行） =="
+echo "== ③ 两步都成功了，才开始安装（任一步失败过，这里根本不会执行） =="
+# 安装策略：先把全部产物写成本目录下的 .tmp-<pid>，再逐个 rename 覆盖（POSIX rename 是原子的，
+# 不会出现「写了一半的文件」）；同时留下备份，rename 阶段失败就整体回滚。
+# 残留窗口只有 rename 本身（同目录元数据操作），比逐个 install 覆盖小得多。
+BACKUP="$TMP/backup"
+mkdir -p "$BACKUP"
+INSTALLED=()
+rollback() {
+  local relative
+  for relative in "${INSTALLED[@]}"; do
+    if [ -f "$BACKUP/$relative" ]; then
+      mv -f "$BACKUP/$relative" "$ROOT/$relative"
+    else
+      rm -f "$ROOT/$relative"
+    fi
+  done
+  echo "安装阶段失败：已回滚 ${#INSTALLED[@]} 个产物，仓内保持刷新前的状态。" >&2
+}
+trap 'rollback' ERR
+
 for relative in "${ARTIFACT_RELATIVES[@]}"; do
-  install -D -m 644 "$SB/$relative" "$ROOT/$relative"
+  target="$ROOT/$relative"
+  mkdir -p "$(dirname "$target")"
+  if [ -f "$target" ]; then
+    mkdir -p "$BACKUP/$(dirname "$relative")"
+    cp -p "$target" "$BACKUP/$relative"
+  fi
+  cp -p "$SB/$relative" "$target.tmp-$$"
+  mv -f "$target.tmp-$$" "$target"
+  INSTALLED+=("$relative")
   echo "  安装 $relative"
 done
+
+trap - ERR
+trap cleanup EXIT
 
 echo ""
 echo "== ④ 复核：快照与生成物必须一致（不一致就说明这一批没做完） =="

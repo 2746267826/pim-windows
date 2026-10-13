@@ -195,7 +195,10 @@ public partial class TrayIcon : IDisposable
         try
         {
             var api = App.Services.GetRequiredService<ApiClient>();
-            var latest = await api.GetClientShellLatestAsync();
+            // 显式 5 秒超时（改造前那个独立 HttpClient 就是 5 秒；共享 ApiClient 默认是 100 秒，
+            // 用户点「检查更新」不该在弱网下静默挂 100 秒）。
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var latest = await api.GetClientShellLatestAsync(timeout.Token);
 
             if (latest?.Error != null)
             {

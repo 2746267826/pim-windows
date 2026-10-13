@@ -412,6 +412,54 @@ public class ContractBoundaryBehaviorTests
         Assert.DoesNotContain("\"StartedAt\"", json);
     }
 
+    /// <summary>
+    /// 匿名 operation（契约 `security: null`）不得被本地令牌状态牵连：令牌临期时也不触发续期、
+    /// 续期失败也不影响它发出（首轮 review 的 Important）。
+    /// </summary>
+    [Fact]
+    public async Task AnonymousShellLatest_IsNotBlockedByTokenRenewal()
+    {
+        var handler = new RecordingHandler();
+        var api = new ApiClient(() => handler);
+        var renewals = 0;
+        api.RenewTokenAsync = () =>
+        {
+            renewals++;
+            return Task.FromResult(false); // 续期会失败：若走了续期这条路，请求就发不出去
+        };
+        api.IsTokenRenewalDue = () => true;
+
+        await api.GetClientShellLatestAsync();
+
+        Assert.Equal(0, renewals);
+        var sent = Assert.Single(handler.Requests);
+        Assert.Equal("/api/client/shell/latest", sent.Path);
+    }
+
+    /// <summary>对照组：业务 operation（契约 `bearerAuth`）在令牌临期时**仍然**先续期再发。</summary>
+    [Fact]
+    public async Task BusinessOperation_StillRenewsBeforeSendingWhenDue()
+    {
+        var handler = new RecordingHandler();
+        var api = new ApiClient(() => handler);
+        var renewals = 0;
+        api.RenewTokenAsync = () =>
+        {
+            renewals++;
+            return Task.FromResult(true);
+        };
+        api.IsTokenRenewalDue = () => true;
+
+        await api.UploadTrackerEventsAsync(new TrackerEventsUploadRequest
+        {
+            DeviceId = "PC-01",
+            Events = new List<TrackerEventDto>(),
+        });
+
+        Assert.Equal(1, renewals);
+        Assert.Single(handler.Requests);
+    }
+
     // ---- helpers ------------------------------------------------------------------
 
     /// <summary>契约 required 的字段在编译期就必须给全（漏一个 = CS9035）。</summary>

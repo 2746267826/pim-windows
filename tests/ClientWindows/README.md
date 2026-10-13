@@ -9,7 +9,7 @@
 
 | 工程 | TFM | 覆盖用例 | 运行环境 |
 | --- | --- | --- | --- |
-| `../Pim.Client.Tests` | `net8.0` | 18 个文件 / 127 个用例 | Linux（`test-client-core` job） |
+| `../Pim.Client.Tests` | `net8.0` | 18 个文件 / 129 个用例 | Linux（`test-client-core` job） |
 | `../Pim.Client.App.Tests` | `net8.0-windows` | 9 个文件 | Windows（`test-client-app` job） |
 
 **为什么拆两个工程**：守护程序的核心逻辑（状态机、上报闸门、通道、keystats 等）不依赖

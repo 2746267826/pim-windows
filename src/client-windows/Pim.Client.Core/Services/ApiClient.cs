@@ -199,9 +199,17 @@ public class ApiClient
     /// <summary>
     /// <c>GET /api/client/shell/latest</c>（匿名；注意它在 <c>/api/v1</c> 之外，走 host 根路径）。
     /// 守护程序的「检查更新」用它。
+    ///
+    /// <para>
+    /// `allowTokenRenewal: false`：契约里该端点 `security: null`，**与登录状态无关**。若它跟着走
+    /// 「临期先续期」那条路，令牌失效/断网时会在请求发出前就抛异常 —— 一个不需要认证的更新检查
+    /// 会因为本地令牌状态而失败（首轮 review 的 Important）。
+    /// 注意请求仍会带上共享客户端的 Bearer（服务端忽略；与 login/register/refresh 的既有情形一致）。
+    /// </para>
     /// </summary>
     public Task<ClientShellLatestResponse?> GetClientShellLatestAsync(CancellationToken ct = default)
-        => SendAsync<ClientShellLatestResponse>(ContractOperation.GetClientShellLatest, null, null, ct);
+        => SendAsync<ClientShellLatestResponse>(
+            ContractOperation.GetClientShellLatest, null, null, ct, allowTokenRenewal: false);
 
     // -----------------------------------------------------------------------
     // 内部实现：只接受生成物里的 operation，平静态类型化的请求体

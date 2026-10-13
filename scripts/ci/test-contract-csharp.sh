@@ -447,6 +447,10 @@ reject_case "inline_root_request" "请求体根不是 \$ref（内联形状）" \
   'doc["paths"]["/api/v1/auth/login"]["post"]["requestBody"]["content"]["application/json"]["schema"] = {"type": "object", "properties": {"username": {"type": "string"}}}'
 reject_case "query_parameter" "operation 带 query 参数（生成器只表达 path 参数）" \
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "integer"}}]'
+reject_case "path_item_query_parameter" "query 参数写在 Path Item 级（不是 operation 级）" \
+  'doc["paths"]["/api/v1/endpoints"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "integer"}}]'
+reject_case "root_additional_properties" "具名对象根上带 typed additionalProperties（允许任意额外键）" \
+  'schemas["LoginRequest"]["additionalProperties"] = {"type": "string"}'
 
 section "⑭ 生成物固定 UTF-8 + LF（Windows 刷新与 Linux CI 复跑必须逐字节相同）"
 CR_CHECK="$(python3 - "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractModels.cs" "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs" <<'PYEOF'

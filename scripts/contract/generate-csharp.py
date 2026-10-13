@@ -39,7 +39,8 @@
     「一个 schema 两个方向类型」或 `JsonIgnore` 支持，生成器**拒绝产出**而不是假装没看见。
 
 不做静默降级的形状（一律 fail-closed，宁可刷新时停下来问）：内联对象属性、`allOf`/`oneOf`/
-`anyOf`/`not`、`properties` 与 `additionalProperties` 同时出现、内联 `enum`、整数枚举
+`anyOf`/`not`、`properties` 与 `additionalProperties` 同时出现、具名对象根上的 typed
+`additionalProperties`（允许任意额外键）、内联 `enum`、整数枚举
 （契约没给成员名，臆造名字等于编造接口）、字符串枚举取值无法与 C# 成员名逐字相同
 （`JsonStringEnumConverter` 按成员名上线，改名就是改线格式）、operation 请求体/响应体根
 不是 `$ref`、以及 `in: query|header|cookie` 等本生成器尚未表达的 operation 参数。
@@ -189,10 +190,15 @@ def single_ref(schema, what: str) -> str | None:
     )
 
 
-def reject_non_path_parameters(op: dict, op_path: str) -> None:
+def reject_non_path_parameters(op: dict, op_path: str, path_item: dict | None = None) -> None:
     """只支持 path 参数（由路径模板表达）：query/header/cookie 参数会被生成器丢掉，
-    丢掉的后果是「请求少带了契约要求的参数」，因此 fail-closed。"""
-    for parameter in op.get("parameters") or []:
+    丢掉的后果是「请求少带了契约要求的参数」，因此 fail-closed。
+
+    注意 OpenAPI 允许参数写在 **Path Item** 级（对同一路径的所有方法生效），
+    只检查 operation 级会漏掉它们。
+    """
+    parameters = list((path_item or {}).get("parameters") or []) + list(op.get("parameters") or [])
+    for parameter in parameters:
         location = parameter.get("in")
         if location == "path":
             continue
@@ -249,7 +255,7 @@ def schema_directions(contract: dict, operations: list[dict]) -> tuple[dict[str,
         method = str(entry["method"]).upper()
         op_path = str(entry["path"])
         op = operation_schema(contract, method, op_path)
-        reject_non_path_parameters(op, op_path)
+        reject_non_path_parameters(op, op_path, contract.get("paths", {}).get(op_path))
 
         request_schema = json_request_schema(op)
         if request_schema is not None:
@@ -501,7 +507,22 @@ def render_enum(name: str, schema: dict) -> list[str]:
     return lines
 
 
+def reject_root_additional_properties(name: str, schema: dict) -> None:
+    """根级（具名 schema）的 typed `additionalProperties` 表示「允许任意额外键」。
+
+    C# 的一个类表达不了这个语义（要么丢约束、要么丢具名字段），因此拒绝产出。
+    `additionalProperties: false`（禁止额外键）与类的形状一致，放行。
+    """
+    additional = schema.get("additionalProperties")
+    if isinstance(additional, dict) or additional is True:
+        raise GenerationError(
+            f"schema {name} 是具名对象但带 additionalProperties（允许任意额外键），"
+            "C# 类无法同时表达具名字段与该约束，生成器拒绝产出。"
+        )
+
+
 def render_class(name: str, schema: dict, directions: set[str]) -> list[str]:
+    reject_root_additional_properties(name, schema)
     lines = [f"public sealed class {name}", "{"]
     seen: dict[str, str] = {}
     for contract_name in sorted(schema.get("properties") or {}):
