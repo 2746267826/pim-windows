@@ -133,7 +133,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # 行为测试里的「旧 master 无 freshness 入口」负对照要读 origin/master。
+          # 行为测试里的「旧 master 无 freshness 入口」负对照读的是
+          # scripts/ci/test-contract-freshness.sh 里 BASE_REF 指向的**固定历史提交**
+          # （引入本门禁之前的 master），因此必须保留完整历史；
+          # 改小 fetch-depth 会让该对象不可达 → 负对照失效（CI 下按 fail-closed 判失败）。
           fetch-depth: 0
 
       # 显式准备 python：check / fetch 用 python3 校验 payload 与 provenance；

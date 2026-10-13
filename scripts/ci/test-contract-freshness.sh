@@ -769,6 +769,31 @@ PY
 )"
 record "gate_env_covers_every_need" $([ -z "$NEEDS_UNCOVERED" ] && echo 0 || echo 1) "gate env mapping covers all needs (uncovered: '${NEEDS_UNCOVERED}')"
 
+# ⑬ 的负对照读一个**历史提交**，因此 contract-freshness job 的 checkout 必须保留完整历史。
+# 这条不能只靠注释：若有人把 fetch-depth 改小或删掉，⑬ 会因对象不可达而失效
+# （CI 下已改为 fail-closed，但这里提前把「配置被改」本身也拦下来）。
+FD_BAD="$(python3 - "$CI_YML" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+job = (doc.get("jobs") or {}).get("contract-freshness")
+bad = []
+if not job:
+    bad.append("no contract-freshness job")
+else:
+    for s in (job.get("steps") or []):
+        if str(s.get("uses") or "").startswith("actions/checkout"):
+            fd = (s.get("with") or {}).get("fetch-depth")
+            if str(fd) != "0":
+                bad.append("checkout fetch-depth=%r (must be 0)" % fd)
+            break
+    else:
+        bad.append("no actions/checkout step")
+print("; ".join(bad))
+PY
+)"
+record "contract_freshness_job_keeps_full_history" $([ -z "$FD_BAD" ] && echo 0 || echo 1) \
+  "contract-freshness checkout must use fetch-depth: 0 (${FD_BAD:-ok})"
+
 # 步骤体在三个失败分支都必须非 0（GitHub 用 bash -e -o pipefail 调 run）
 step_run() { # step_run <dir> <ref> [raw_base]
   local dir="$1" ref="$2" base="${3:-$RAW}"
@@ -856,13 +881,43 @@ PY
   run_check "$OLD_SB" fakejson
   record "new_entry_rejects_noncontract_json" $([ "$CHECK_RC" -ne 0 ] && echo 0 || echo 1) "new check rc=$CHECK_RC on the very payload the old entry installed"
 
-  # (c) 同一「陈旧快照」沙箱：旧树没有任何字节比较 → 不可能变红；新入口 rc=1
-  record "old_master_stale_snapshot_cannot_turn_red" $([ "$OLD_STRUCT" = "NONE" ] && echo 0 || echo 1) \
-    "no step in the base workflow compares contract bytes, so the stale sandbox below would stay green on old master"
+  # (c) 同一「陈旧快照」沙箱：旧树没有任何**字节比较**动作 → 不可能变红；新入口 rc=1
+  #
+  # 注意与上面第 1 条的区别：第 1 条只看「有没有 freshness 相关的 step 名」，
+  # 这一条直接扫旧 ci.yml 全量 run 体里**有没有字节比较命令**（cmp/diff/git diff -q 等）。
+  # 两者曾用同一谓词（等价于重复断言、零独立信息量），此处改为独立判据。
+  OLD_BYTECMP="$(python3 - "$OLD_CI" <<'PY'
+import re, sys, yaml
+doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+pat = re.compile(r"(^|[^\w-])(cmp|diff|git\s+diff|sha256sum\s+-c)([^\w-]|$)")
+hits = []
+for job, spec in (doc.get("jobs") or {}).items():
+    for s in (spec.get("steps") or []):
+        body = (s.get("run") or "")
+        if pat.search(body):
+            hits.append("%s/%s" % (job, s.get("name")))
+print(",".join(hits) if hits else "NONE")
+PY
+)"
+  record "old_master_stale_snapshot_cannot_turn_red" $([ "$OLD_BYTECMP" = "NONE" ] && echo 0 || echo 1) \
+    "no step in the base workflow performs a byte comparison (surfaces: $OLD_BYTECMP), so the stale snapshot below would stay green on old master"
   run_check "$WORK/c2" master
   record "new_entry_red_on_same_stale_snapshot" $([ "$CHECK_RC" -eq 1 ] && echo 0 || echo 1) "new check rc=$CHECK_RC on the same stale snapshot the old master accepted"
 else
-  notrun "old_master_negative_control" "base ref '$BASE_REF' is not resolvable in $ROOT (set PIM_CONTRACT_BASE_REF); 旧 master 负对照未执行"
+  # ⚠️ fail-closed：基准 ref 解析不到时，**不能**在 CI 里静默跳过。
+  #
+  # 为什么：⑬ 的负对照依赖一个历史提交。浅克隆、把 fetch-depth 改小、或仓库历史被
+  # 重写，都会让该对象不可达。若此时只记 NOT-RUN 而退出码仍为 0，门禁就会「悄无声息地
+  # 失去覆盖」——这与本门禁要拦的那类静默漂移同族，不能留。
+  #
+  # 本地开发环境（非 CI）允许 NOT-RUN，便于在浅克隆里跑其余断言；
+  # CI 环境一律判 FAIL，逼使 checkout 保留完整历史。
+  if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    record "old_master_negative_control_base_resolvable" 1 \
+      "base ref '$BASE_REF' is not resolvable in $ROOT under CI —— 负对照无法执行，按 fail-closed 判失败（浅克隆 / fetch-depth 过小 / 历史改写都会触发；请确保 checkout 使用 fetch-depth: 0）"
+  else
+    notrun "old_master_negative_control" "base ref '$BASE_REF' is not resolvable in $ROOT (set PIM_CONTRACT_BASE_REF); 旧 master 负对照未执行（本地非 CI，允许跳过）"
+  fi
 fi
 
 # ============================== 汇总 =======================================
