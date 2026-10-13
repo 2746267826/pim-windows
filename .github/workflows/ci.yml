@@ -127,7 +127,7 @@ jobs:
   # 事件面：push(master) / pull_request(master) / workflow_dispatch 全部真实执行；
   # 无 if:、无 continue-on-error、无路径过滤 —— 快照陈旧或取不到权威源一律 fail-closed，
   # 不因「不是 PR」而放行（master 上的静默漂移正是最需要拦的场景）。
-  # 刷新入口只有 scripts/ci/fetch-contract.sh（人工），CI 只调只读 check。
+  # 刷新入口是 scripts/ci/refresh-contract.sh（人工：快照 + 生成物同批），CI 只调只读 check。
   contract-freshness:
     runs-on: ubuntu-latest
     steps:
@@ -160,6 +160,42 @@ jobs:
           set -euo pipefail
           bash scripts/ci/check-contract-freshness.sh
           echo "✅ contract/openapi.json 与 contract/provenance.json 均与 pim-api 当前上游一致"
+
+
+  # 契约生成物（required job）：客户端接口边界的第二道门禁。
+  # 事件面与 contract-freshness 相同：push(master) / pull_request / workflow_dispatch 全部真实执行；
+  # 无 if:、无 continue-on-error、无路径过滤。
+  #
+  # 两道门禁的分工：
+  #   * 本 job —— 生成物一致性：用仓内快照重新生成一次，与仓内产物**逐字节比对**；
+  #     契约变了而生成物没重生成、或有人手工改了生成物，一律 fail-closed。
+  #   * test-client-core / build-windows —— 类型约束：C# 编译器按生成类型编译，
+  #     编造端点/字段/枚举值（tests/ClientWindows/ContractBoundaryTests.cs 也在其中）直接编译失败。
+  # 离线：只用 python3 标准库，不联网、不装依赖。
+  contract-generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 行为测试用 PyYAML 从真实 ci.yml 原样抽取 step 与 gate 检查函数（与 contract-freshness 一致）。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install python dependencies for contract artifact checks
+        run: python3 -m pip install --disable-pip-version-check --quiet PyYAML
+
+      # 先跑门禁自身的行为测试（离线 fixtures + 负对照），再跑默认真实仓 check。
+      - name: Contract C# gate behavior tests (offline)
+        run: |
+          set -euo pipefail
+          bash scripts/ci/test-contract-csharp.sh
+
+      - name: Verify contract-generated C# artifacts are up to date
+        run: |
+          set -euo pipefail
+          bash scripts/ci/check-contract-csharp.sh
+          echo "✅ ContractModels.cs / ContractOperations.cs 与 contract/openapi.json 逐字节一致"
 
 
   # 发版纯逻辑（资产归一化 + version.json）在 PR 上就跑一次：
@@ -259,7 +295,7 @@ jobs:
 
   gate:
     name: CI Gate
-    needs: [resolve-version, build-windows, build-shell-windows, build-browser-extension, build-browser-extension-firefox, test-client-core, test-client-app, contract-freshness, release-assets, browser-extension-lint, pr-metadata, codeql]
+    needs: [resolve-version, build-windows, build-shell-windows, build-browser-extension, build-browser-extension-firefox, test-client-core, test-client-app, contract-freshness, contract-generated, release-assets, browser-extension-lint, pr-metadata, codeql]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -273,6 +309,7 @@ jobs:
           R_TEST_CORE: ${{ needs.test-client-core.result }}
           R_TEST_APP: ${{ needs.test-client-app.result }}
           R_CONTRACT: ${{ needs.contract-freshness.result }}
+          R_CONTRACT_GENERATED: ${{ needs.contract-generated.result }}
           R_RELEASE_ASSETS: ${{ needs.release-assets.result }}
           R_EXT_LINT: ${{ needs.browser-extension-lint.result }}
           R_PR_METADATA: ${{ needs.pr-metadata.result }}
@@ -297,6 +334,7 @@ jobs:
           check "test-client-core" "$R_TEST_CORE"
           check "test-client-app" "$R_TEST_APP"
           check "contract-freshness" "$R_CONTRACT"
+          check "contract-generated" "$R_CONTRACT_GENERATED"
           check "release-assets" "$R_RELEASE_ASSETS"
           check "browser-extension-lint" "$R_EXT_LINT"
           check "pr-metadata" "$R_PR_METADATA"

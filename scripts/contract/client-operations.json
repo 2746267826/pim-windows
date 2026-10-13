@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "contract": "contract/openapi.json",
+  "comment": [
+    "客户端实际使用的 operation 清单（METHOD + 完整契约路径 + 边界方法名）。",
+    "生成器只生成这些 operation 请求/响应 schema 的闭包，并逐个校验 operation 在契约里存在；",
+    "写了契约里没有的 METHOD/path 会让生成直接失败，而不是产出半张契约。",
+    "ApiClient 只允许调用这里声明过的 operation（tests/ClientWindows/ContractBoundaryTests.cs 会核对公共面）。",
+    "需要新接口时的正确做法：让后端在 pim-api 实现并更新契约，再刷新快照并在本文件加一条。"
+  ],
+  "operations": [
+    { "apiClient": "LoginAsync", "method": "POST", "path": "/api/v1/auth/login" },
+    { "apiClient": "RegisterAsync", "method": "POST", "path": "/api/v1/auth/register" },
+    { "apiClient": "RefreshTokenAsync", "method": "POST", "path": "/api/v1/auth/refresh" },
+    { "apiClient": "ReportDaemonHeartbeatAsync", "method": "POST", "path": "/api/v1/daemon/heartbeat" },
+    { "apiClient": "ReportPlannedOfflineAsync", "method": "POST", "path": "/api/v1/daemon/planned-offline" },
+    { "apiClient": "GetEndpointStatusesAsync", "method": "GET", "path": "/api/v1/endpoints" },
+    { "apiClient": "GetEndpointCollectionQualityAsync", "method": "GET", "path": "/api/v1/endpoints/{deviceId}/collection-quality" },
+    { "apiClient": "SendEndpointNotificationActionAsync", "method": "POST", "path": "/api/v1/endpoints/{deviceId}/notification-actions" },
+    { "apiClient": "UploadTrackerEventsAsync", "method": "POST", "path": "/api/v1/pc/tracker/upload" },
+    { "apiClient": "UploadSiteEventsAsync", "method": "POST", "path": "/api/v1/pc/browser-tt/upload" },
+    { "apiClient": "ReportTrackerHealthAsync", "method": "POST", "path": "/api/v1/pc/tracker/health" },
+    { "apiClient": "UploadKeystatsSampleAsync", "method": "POST", "path": "/api/v1/pc/keystats/samples" },
+    { "apiClient": "UploadKeystatsSnapshotAsync", "method": "POST", "path": "/api/v1/pc/keystats/upload" }
+  ]
+}
