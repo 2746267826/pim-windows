@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 88a9d30066860765d23f9f5d10cd7f829e2cf3c6a957d173b02620b812da993b)
+//   契约快照      : contract/openapi.json (sha256 61778d2d9c1aad129bace72cecc21aa23c3517d7d158b2cb22d3fc15014dd006)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -67,16 +67,16 @@ public sealed class AuthResponseApiResponse
 {
     /// <summary>契约字段 <c>code</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("code")]
-    public int Code { get; set; }
+    public required int Code { get; set; }
     /// <summary>契约字段 <c>data</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("data")]
     public AuthResponse? Data { get; set; }
     /// <summary>契约字段 <c>message</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("message")]
-    public string? Message { get; set; }
+    public required string Message { get; set; }
     /// <summary>契约字段 <c>timestamp</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
-    public System.DateTimeOffset Timestamp { get; set; }
+    public required System.DateTimeOffset Timestamp { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.ClientShellLatestResponse</c>（response）。</summary>
@@ -169,16 +169,16 @@ public sealed class DaemonHeartbeatDtoApiResponse
 {
     /// <summary>契约字段 <c>code</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("code")]
-    public int Code { get; set; }
+    public required int Code { get; set; }
     /// <summary>契约字段 <c>data</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("data")]
     public DaemonHeartbeatDto? Data { get; set; }
     /// <summary>契约字段 <c>message</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("message")]
-    public string? Message { get; set; }
+    public required string Message { get; set; }
     /// <summary>契约字段 <c>timestamp</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
-    public System.DateTimeOffset Timestamp { get; set; }
+    public required System.DateTimeOffset Timestamp { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.DaemonHeartbeatRequest</c>（request）。</summary>
@@ -260,16 +260,16 @@ public sealed class EndpointCollectionQualityDtoApiResponse
 {
     /// <summary>契约字段 <c>code</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("code")]
-    public int Code { get; set; }
+    public required int Code { get; set; }
     /// <summary>契约字段 <c>data</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("data")]
     public EndpointCollectionQualityDto? Data { get; set; }
     /// <summary>契约字段 <c>message</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("message")]
-    public string? Message { get; set; }
+    public required string Message { get; set; }
     /// <summary>契约字段 <c>timestamp</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
-    public System.DateTimeOffset Timestamp { get; set; }
+    public required System.DateTimeOffset Timestamp { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.EndpointNotificationActionRequest</c>（request）。</summary>
@@ -311,16 +311,16 @@ public sealed class EndpointNotificationActionResponseApiResponse
 {
     /// <summary>契约字段 <c>code</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("code")]
-    public int Code { get; set; }
+    public required int Code { get; set; }
     /// <summary>契约字段 <c>data</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("data")]
     public EndpointNotificationActionResponse? Data { get; set; }
     /// <summary>契约字段 <c>message</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("message")]
-    public string? Message { get; set; }
+    public required string Message { get; set; }
     /// <summary>契约字段 <c>timestamp</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
-    public System.DateTimeOffset Timestamp { get; set; }
+    public required System.DateTimeOffset Timestamp { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.EndpointStatusDto</c>（response）。</summary>
@@ -354,16 +354,16 @@ public sealed class EndpointStatusDtoIReadOnlyListApiResponse
 {
     /// <summary>契约字段 <c>code</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("code")]
-    public int Code { get; set; }
+    public required int Code { get; set; }
     /// <summary>契约字段 <c>data</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("data")]
     public System.Collections.Generic.List<EndpointStatusDto>? Data { get; set; }
     /// <summary>契约字段 <c>message</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("message")]
-    public string? Message { get; set; }
+    public required string Message { get; set; }
     /// <summary>契约字段 <c>timestamp</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
-    public System.DateTimeOffset Timestamp { get; set; }
+    public required System.DateTimeOffset Timestamp { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.Int32ApiResponse</c>（response）。</summary>
@@ -371,16 +371,16 @@ public sealed class Int32ApiResponse
 {
     /// <summary>契约字段 <c>code</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("code")]
-    public int Code { get; set; }
+    public required int Code { get; set; }
     /// <summary>契约字段 <c>data</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("data")]
-    public int Data { get; set; }
+    public required int Data { get; set; }
     /// <summary>契约字段 <c>message</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("message")]
-    public string? Message { get; set; }
+    public required string Message { get; set; }
     /// <summary>契约字段 <c>timestamp</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
-    public System.DateTimeOffset Timestamp { get; set; }
+    public required System.DateTimeOffset Timestamp { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.KeystatsSampleUploadRequest</c>（request）。</summary>
@@ -413,12 +413,12 @@ public sealed class KeystatsSampleUploadRequest
     /// <summary>契约字段 <c>mouseDistance</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("mouseDistance")]
     public required double MouseDistance { get; set; }
-    /// <summary>契约字段 <c>peakCPS</c>。</summary>
-    [System.Text.Json.Serialization.JsonPropertyName("peakCPS")]
-    public int PeakCPS { get; set; }
-    /// <summary>契约字段 <c>peakKPS</c>。</summary>
-    [System.Text.Json.Serialization.JsonPropertyName("peakKPS")]
-    public int PeakKPS { get; set; }
+    /// <summary>契约字段 <c>peakCps</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("peakCps")]
+    public required int PeakCps { get; set; }
+    /// <summary>契约字段 <c>peakKps</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("peakKps")]
+    public required int PeakKps { get; set; }
     /// <summary>契约字段 <c>pimDeviceId</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("pimDeviceId")]
     public required string PimDeviceId { get; set; }
@@ -578,16 +578,16 @@ public sealed class StringApiResponse
 {
     /// <summary>契约字段 <c>code</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("code")]
-    public int Code { get; set; }
+    public required int Code { get; set; }
     /// <summary>契约字段 <c>data</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("data")]
     public string? Data { get; set; }
     /// <summary>契约字段 <c>message</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("message")]
-    public string? Message { get; set; }
+    public required string Message { get; set; }
     /// <summary>契约字段 <c>timestamp</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
-    public System.DateTimeOffset Timestamp { get; set; }
+    public required System.DateTimeOffset Timestamp { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.TrackerEventDto</c>（request）。</summary>
@@ -727,7 +727,7 @@ public sealed class UserInfo
 {
     /// <summary>契约字段 <c>displayName</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("displayName")]
-    public required string DisplayName { get; set; }
+    public string? DisplayName { get; set; }
     /// <summary>契约字段 <c>id</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("id")]
     public required string Id { get; set; }
