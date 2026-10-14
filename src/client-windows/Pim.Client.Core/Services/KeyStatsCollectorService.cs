@@ -116,8 +116,9 @@ public sealed class KeyStatsCollectorService : IDisposable
             }
 
             // 上报用的两个请求体都是**契约生成类型**：字段名/类型/必填性来自 contract/openapi.json。
-            // 注意契约里这两条路径的字段名本来就不一致（KeystatsSampleUploadRequest 用 peakKPS，
-            // KeystatsUploadRequest 用 peakKps），生成物如实照搬 —— 客户端不再自己发明大小写。
+            // 契约曾让这两条路径的 peak 字段拼写不一致（samples 用 peakKPS/peakCPS，upload 用
+            // peakKps/peakCps）；pim-api#419 已统一为 camelCase，生成物随之更新 —— 客户端照生成物写，
+            // 不自己发明大小写。
             var wireAppStats = ToWireAppStats(stats.AppStats);
             var sample = new KeystatsSampleUploadRequest
             {
@@ -133,8 +134,8 @@ public sealed class KeyStatsCollectorService : IDisposable
                 SideForwardClicks = stats.SideForwardClicks,
                 MouseDistance = stats.MouseDistance,
                 ScrollDistance = stats.ScrollDistance,
-                PeakKPS = stats.PeakKps,
-                PeakCPS = stats.PeakCps,
+                PeakKps = stats.PeakKps,
+                PeakCps = stats.PeakCps,
                 FormattedMouseDistance = stats.FormattedMouseDistance,
                 FormattedScrollDistance = stats.FormattedScrollDistance,
                 AppStats = wireAppStats,
