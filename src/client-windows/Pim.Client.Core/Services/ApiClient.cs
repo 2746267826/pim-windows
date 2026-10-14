@@ -165,6 +165,21 @@ public class ApiClient
             null,
             ct);
 
+    /// <summary>
+    /// <c>POST /api/v1/endpoints/{deviceId}/heartbeat</c>。
+    /// 端点页（<c>GET /api/v1/endpoints</c>）的唯一数据来源；<c>last_heartbeat_at</c> 由服务端按收到时刻写入，
+    /// 本仓不发送时间戳 —— 客户端无法、也不应该伪造"最后活着的时间"。
+    /// </summary>
+    public Task<EndpointStatusDtoApiResponse?> ReportEndpointHeartbeatAsync(
+        string deviceId,
+        EndpointHeartbeatRequest request,
+        CancellationToken ct = default)
+        => SendAsync<EndpointStatusDtoApiResponse>(
+            ContractOperation.ReportEndpointHeartbeat,
+            [("deviceId", deviceId)],
+            request,
+            ct);
+
     /// <summary><c>POST /api/v1/endpoints/{deviceId}/notification-actions</c>。</summary>
     public Task<EndpointNotificationActionResponseApiResponse?> SendEndpointNotificationActionAsync(
         string deviceId,

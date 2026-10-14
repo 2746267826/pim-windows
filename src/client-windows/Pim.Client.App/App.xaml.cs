@@ -365,6 +365,22 @@ public partial class App : Application
                 });
             await reporter.ReportAsync(heartbeat, ct);
             Logger.Info("Daemon heartbeat reported");
+
+            // 端点心跳（工单 06 / G1）：端点页此前恒为空，是因为没有任何客户端调过这个接口。
+            // 复用本循环（2 分钟一拍）、同一 ApiClient/令牌、同一 deviceId（Environment.MachineName）。
+            // 失败不抛异常，只把连续失败次数与原因记到 EndpointHeartbeatReporter 上（状态窗口读它）；
+            // 这里再写一行主日志，运维不必去翻 tracker 日志也能看到"连续失败了几次"。
+            var endpointReporter = Services.GetRequiredService<EndpointHeartbeatReporter>();
+            var endpointSnapshot = EndpointHeartbeatReporter.ForLocalMachine(
+                version,
+                tracker?.LastError ?? ks.LastUploadError,
+                (tracker?.EventsUploaded ?? 0) > 0 || ks.LastUploadTime is not null,
+                tracker?.PendingUploadCount);
+            if (!await endpointReporter.ReportAsync(endpointSnapshot, ct))
+            {
+                Logger.Warn(
+                    $"Endpoint heartbeat failed (consecutive {endpointReporter.ConsecutiveFailures}): {endpointReporter.LastError}");
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

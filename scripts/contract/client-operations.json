@@ -45,6 +45,11 @@
       "path": "/api/v1/endpoints/{deviceId}/collection-quality"
     },
     {
+      "apiClient": "ReportEndpointHeartbeatAsync",
+      "method": "POST",
+      "path": "/api/v1/endpoints/{deviceId}/heartbeat"
+    },
+    {
       "apiClient": "SendEndpointNotificationActionAsync",
       "method": "POST",
       "path": "/api/v1/endpoints/{deviceId}/notification-actions"

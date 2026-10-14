@@ -194,6 +194,15 @@
                                    Margin="0,4,0,12"
                                    Foreground="{StaticResource PimMutedTextBrush}"/>
 
+                        <TextBlock Text="端点心跳"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource PimTextBrush}"/>
+                        <TextBlock x:Name="EndpointHeartbeatText"
+                                   Text="—"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,12"
+                                   Foreground="{StaticResource PimMutedTextBrush}"/>
+
                         <TextBlock Text="KeyStats 最近上传"
                                    FontWeight="SemiBold"
                                    Foreground="{StaticResource PimTextBrush}"/>

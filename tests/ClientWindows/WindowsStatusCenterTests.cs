@@ -31,6 +31,11 @@ public class WindowsStatusCenterTests
         Assert.Contains("KeyStatsRestartButton.IsEnabled", code);
         Assert.Contains("SyncNowAsync", code);
         Assert.Contains("fix-keystats-session.ps1", code);
+
+        // 工单 06 / G1.3：端点心跳必须在状态窗口里可见 —— 上报失败不许静默。
+        Assert.Contains("端点心跳", xaml);
+        Assert.Contains("EndpointHeartbeatText", xaml);
+        Assert.Contains("EndpointHeartbeatReporter", code);
     }
 
     [Theory]

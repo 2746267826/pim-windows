@@ -87,6 +87,12 @@ public sealed class NativeTrackerService : IDisposable
     public long SiteEventsDropped => _bridge.SiteEventsDropped;
     public long SiteEventsUploaded { get { lock (_siteStatsLock) return _siteEventsUploaded; } }
     public long SiteUploadFailures { get { lock (_siteStatsLock) return _siteUploadFailures; } }
+    /// <summary>
+    /// 本地已采集、尚未上传成功的事件条数（轨迹队列 + 站点队列）。
+    /// 端点心跳的 <c>collectionCacheCount</c> 用它：服务端把 &gt;0 当作"有离线缓存积压"的信号。
+    /// 只读计数，不做任何推断。
+    /// </summary>
+    public int PendingUploadCount => _uploadQueue.Count + _siteUploadQueue.Count;
     public string? SiteLastError { get { lock (_siteStatsLock) return _siteLastError; } }
     public double? SiteLastEventAgeSeconds
     {
