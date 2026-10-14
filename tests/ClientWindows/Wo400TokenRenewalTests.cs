@@ -291,7 +291,7 @@ public sealed class Wo400TokenRenewalTests : IDisposable
                 lock (_lock) { SuccessfulUploads++; UploadBodies.Add(body); }
             }
 
-            return Json(HttpStatusCode.OK, "{\"code\":0,\"message\":\"\",\"data\":0}");
+            return Json(HttpStatusCode.OK, "{\"code\":0,\"message\":\"\",\"data\":0,\"timestamp\":\"2026-10-14T00:00:00Z\"}");
         }
 
         private HttpResponseMessage IssueTokens()
@@ -308,6 +308,7 @@ public sealed class Wo400TokenRenewalTests : IDisposable
             {
                 code = 0,
                 message = "",
+                timestamp = "2026-10-14T00:00:00Z",
                 data = new
                 {
                     accessToken = token,

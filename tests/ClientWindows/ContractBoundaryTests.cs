@@ -214,7 +214,7 @@ public class ContractBoundaryBehaviorTests
 
         foreach (var testCase in cases)
         {
-            var handler = new RecordingHandler();
+            var handler = new RecordingHandler(testCase.ResponseBody);
             var api = new ApiClient(() => handler);
 
             await testCase.Invoke(api, testCase.Request);
@@ -275,7 +275,7 @@ public class ContractBoundaryBehaviorTests
     public async Task SiteEvents_DoNotSendFieldsAbsentFromTheContract()
     {
         // 本机桥接类型 SiteEventDto 带一个契约里没有的 at；上线前必须被挡在边界之外。
-        var handler = new RecordingHandler();
+        var handler = new RecordingHandler(IntEnvelopeBody);
         var api = new ApiClient(() => handler);
 
         await api.UploadSiteEventsAsync(new SiteEventsUploadRequest
@@ -293,8 +293,9 @@ public class ContractBoundaryBehaviorTests
     [Fact]
     public async Task KeystatsUpload_UsesTheContractFieldNamesForThatPath()
     {
-        // 契约在这两条路径上本来就不一致：samples 用 peakKPS/peakCPS，upload 用 peakKps/peakCps。
-        // 客户端不再自己发明大小写 —— 生成物照搬契约，两条路径各自与自己那条契约一致。
+        // pim-api#419 之前这两条路径的 peak 字段拼写不一致（samples 用 peakKPS/peakCPS）；
+        // 现在已统一为 camelCase，两条路径都必须是 peakKps/peakCps。
+        // 客户端不自己发明大小写 —— 生成物照搬契约，这里逐字核对发出去的 body。
         var handler = new RecordingHandler();
         var api = new ApiClient(() => handler);
 
@@ -311,9 +312,9 @@ public class ContractBoundaryBehaviorTests
         Assert.DoesNotContain("\"peakCPS\"", legacyBody);
         Assert.DoesNotContain("formattedMouseDistance", legacyBody);
 
-        Assert.Contains("\"peakKPS\"", sampleBody);
-        Assert.Contains("\"peakCPS\"", sampleBody);
-        Assert.DoesNotContain("\"peakKps\"", sampleBody);
+        Assert.Contains("\"peakKps\"", sampleBody);
+        Assert.Contains("\"peakCps\"", sampleBody);
+        Assert.DoesNotContain("\"peakKPS\"", sampleBody);
         Assert.Contains("formattedMouseDistance", sampleBody);
     }
 
@@ -440,7 +441,7 @@ public class ContractBoundaryBehaviorTests
     [Fact]
     public async Task BusinessOperation_StillRenewsBeforeSendingWhenDue()
     {
-        var handler = new RecordingHandler();
+        var handler = new RecordingHandler(IntEnvelopeBody);
         var api = new ApiClient(() => handler);
         var renewals = 0;
         api.RenewTokenAsync = () =>
@@ -476,9 +477,11 @@ public class ContractBoundaryBehaviorTests
         SideForwardClicks = 0,
         MouseDistance = 1,
         ScrollDistance = 1,
+        PeakKps = 1,
+        PeakCps = 1,
     };
 
-    /// <summary>同上；注意这条路径的契约字段是小写 peakKps/peakCps。</summary>
+    /// <summary>同上；注意这两条路径的 peak 字段现在都是小写 peakKps/peakCps。</summary>
     private static KeystatsUploadRequest SnapshotRequest() => new()
     {
         DeviceId = "PC-01",
@@ -495,11 +498,23 @@ public class ContractBoundaryBehaviorTests
         PeakCps = 1,
     };
 
+    /// <summary>契约要求的信封必填字段（code/message/timestamp）；data 在多数信封里可空。</summary>
+    private const string EnvelopeBody =
+        "{\"code\":0,\"message\":\"\",\"timestamp\":\"2026-10-14T00:00:00Z\"}";
+
+    /// <summary>
+    /// <c>Int32ApiResponse</c> 的 <c>data</c> 在契约里是**非可空整数**（服务端 200 路径总是带回真实计数），
+    /// 所以桩响应必须带上它，否则严格反序列化会判缺字段。
+    /// </summary>
+    private const string IntEnvelopeBody =
+        "{\"code\":0,\"data\":0,\"message\":\"\",\"timestamp\":\"2026-10-14T00:00:00Z\"}";
+
     private sealed record OperationCase(
         string Method,
         string Path,
         object? Request,
-        Func<ApiClient, object?, Task> Invoke);
+        Func<ApiClient, object?, Task> Invoke,
+        string ResponseBody = EnvelopeBody);
 
     private static List<OperationCase> OperationCases() => new()
     {
@@ -554,14 +569,16 @@ public class ContractBoundaryBehaviorTests
                     },
                 },
             },
-            (api, req) => api.UploadTrackerEventsAsync((TrackerEventsUploadRequest)req!)),
+            (api, req) => api.UploadTrackerEventsAsync((TrackerEventsUploadRequest)req!),
+            IntEnvelopeBody),
         new("POST", "/api/v1/pc/browser-tt/upload",
             new SiteEventsUploadRequest
             {
                 DeviceId = "PC-01",
                 Events = new List<SiteEventUploadDto> { new() { Kind = "focus", Host = "github.com" } },
             },
-            (api, req) => api.UploadSiteEventsAsync((SiteEventsUploadRequest)req!)),
+            (api, req) => api.UploadSiteEventsAsync((SiteEventsUploadRequest)req!),
+            IntEnvelopeBody),
         new("POST", "/api/v1/pc/tracker/health",
             new TrackerHealthRequest
             {
@@ -646,6 +663,10 @@ public class ContractBoundaryBehaviorTests
 
     private sealed class RecordingHandler : System.Net.Http.HttpMessageHandler
     {
+        private readonly string _responseBody;
+
+        public RecordingHandler(string responseBody = EnvelopeBody) => _responseBody = responseBody;
+
         public List<(string Method, string Path, string? Body)> Requests { get; } = new();
 
         protected override async Task<System.Net.Http.HttpResponseMessage> SendAsync(
@@ -657,11 +678,12 @@ public class ContractBoundaryBehaviorTests
 
             Requests.Add((request.Method.Method, request.RequestUri!.AbsolutePath, body));
 
-            // 信封本身没有 required 字段，因此这个最小响应体对所有 operation 都合法。
+            // 契约给信封标了必填字段（code/message/timestamp），所以桩响应必须带上它们 ——
+            // 这才是服务端真实会发出的形状。个别 operation 的 data 非可空，由调用方传入专用 body。
             return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
                 Content = new System.Net.Http.StringContent(
-                    "{\"code\":0,\"message\":\"\"}", System.Text.Encoding.UTF8, "application/json"),
+                    _responseBody, System.Text.Encoding.UTF8, "application/json"),
             };
         }
     }
