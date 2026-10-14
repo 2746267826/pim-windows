@@ -39,10 +39,21 @@
 
 ## 怎么刷新
 
-后端契约更新后（用户告知，或你发现契约里缺了已有字段）：
+**正常情况下不需要人工执行**：`pim-api` 的 CI 在 `contract/openapi.json` 变化（且通过了它的
+契约硬校验）后会向本仓发 `repository_dispatch`，本仓的 `Contract sync` workflow 收到后
+自动刷新并开一个 PR（`.github/workflows/contract-sync.yml` + `scripts/ci/contract-sync-pr.sh`）。
+**PR 需要人工 review 后才合并**，机器人不会自动合并；同一份契约重复触发不会产生空提交。
+（本仓的刷新命令 `scripts/ci/refresh-contract.sh` 已把**快照与生成物绑在一起**：先拉快照与
+provenance，再重新生成 `Contract/ContractModels.cs` 与 `ContractOperations.cs`。生成物头部嵌有
+快照的 sha256，**只换快照会让 `contract-generated` 门禁变红**，所以两者必须同批提交。）
+
+需要人工刷新时（例如通知没收到、或要指定某个上游 commit）：
 
 ```bash
 scripts/ci/refresh-contract.sh
+
+# 精确取某个上游 commit 的字节：
+PIM_CONTRACT_REF=<40 位 SHA> scripts/ci/refresh-contract.sh
 ```
 
 这是**唯一的一键刷新入口**：它先跑 `fetch-contract.sh` 拉快照与 provenance，再跑
