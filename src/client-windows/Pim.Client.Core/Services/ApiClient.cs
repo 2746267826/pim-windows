@@ -2,11 +2,26 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using Pim.Client.Core;
-using Pim.Client.Core.Models;
+using Pim.Client.Core.Contract;
 
 namespace Pim.Client.Core.Services;
 
+/// <summary>
+/// 与 <c>pim-api</c> 的 HTTP 边界。
+///
+/// <para>
+/// 本类**只暴露显式方法签名**：每个方法对应一个契约里的 operation（方法、路径、请求体类型、
+/// 响应类型全部来自 <see cref="ContractOperation"/> 与 <c>Pim.Client.Core.Contract</c> 里的生成类型）。
+/// 裸字符串 endpoint / <c>object</c> 请求体的公共入口已经不存在 —— 那是「AI 随手编一个路径和
+/// 对象塞进去、编译期完全发现不了」的来源。
+/// </para>
+///
+/// <para>
+/// 想加接口？按 <c>AGENTS.md</c>「接口契约与门禁」把需求交给后端：先让 <c>pim-api</c> 实现并更新
+/// 契约，刷新本仓快照、在 <c>scripts/contract/client-operations.json</c> 里加一条、重新生成，
+/// 再在这里加一个方法。<b>不要在本仓造路径、字段或类型。</b>
+/// </para>
+/// </summary>
 public class ApiClient
 {
     private HttpClient _httpClient;
@@ -74,11 +89,6 @@ public class ApiClient
 
     public string CurrentBaseUrl => _httpClient.BaseAddress?.ToString().TrimEnd('/') ?? "";
 
-    private string Resolve(string endpoint)
-    {
-        return endpoint.TrimStart('/');
-    }
-
     public static string NormalizeServerUrl(string baseUrl)
     {
         var trimmed = baseUrl.Trim().TrimEnd('/');
@@ -108,71 +118,139 @@ public class ApiClient
         _httpClient.DefaultRequestHeaders.Authorization = null;
     }
 
-    public Task<ApiResponse<List<EndpointStatusDto>>?> GetEndpointStatusesAsync(CancellationToken ct = default)
-        => GetAsync<ApiResponse<List<EndpointStatusDto>>>("/endpoints", ct);
+    // -----------------------------------------------------------------------
+    // 接口边界：每个方法 = 契约里的一个 operation
+    //
+    // 路径来自 ContractOperations（生成物，CI 逐字节对照契约复核），请求/响应类型来自
+    // Contract 命名空间下的生成类型。方法名与 operation 的对应关系登记在
+    // scripts/contract/client-operations.json，tests/ClientWindows/ContractBoundaryTests.cs 会核对。
+    // -----------------------------------------------------------------------
 
-    public Task<ApiResponse<EndpointCollectionQualityDto>?> GetEndpointCollectionQualityAsync(
+    /// <summary><c>POST /api/v1/auth/login</c>（匿名）。</summary>
+    public Task<AuthResponseApiResponse?> LoginAsync(LoginRequest request, CancellationToken ct = default)
+        => SendJsonAsync<AuthResponseApiResponse>(ContractOperation.Login, request, ct);
+
+    /// <summary><c>POST /api/v1/auth/register</c>（匿名）。</summary>
+    public Task<AuthResponseApiResponse?> RegisterAsync(RegisterRequest request, CancellationToken ct = default)
+        => SendJsonAsync<AuthResponseApiResponse>(ContractOperation.Register, request, ct);
+
+    /// <summary>
+    /// <c>POST /api/v1/auth/refresh</c>（匿名）。
+    /// 与其它方法一样不触发任何令牌续期：否则会出现
+    /// 「续期 → 发 /auth/refresh → 令牌仍临期 → 触发续期 → 单飞复用自己 → 自等待」的死锁
+    /// （WO-ISSUES-396-400-20261007 REQ-5 / issue #400）。
+    /// </summary>
+    public Task<AuthResponseApiResponse?> RefreshTokenAsync(RefreshRequest request, CancellationToken ct = default)
+        => SendJsonAsync<AuthResponseApiResponse>(ContractOperation.RefreshToken, request, ct, allowTokenRenewal: false);
+
+    /// <summary><c>POST /api/v1/daemon/heartbeat</c>。响应体由服务端回执，本仓不作处理。</summary>
+    public Task<DaemonHeartbeatDtoApiResponse?> ReportDaemonHeartbeatAsync(DaemonHeartbeatRequest request, CancellationToken ct = default)
+        => SendJsonAsync<DaemonHeartbeatDtoApiResponse>(ContractOperation.ReportDaemonHeartbeat, request, ct);
+
+    /// <summary><c>POST /api/v1/daemon/planned-offline</c>。响应体由服务端回执，本仓不作处理。</summary>
+    public Task<DaemonHeartbeatDtoApiResponse?> ReportPlannedOfflineAsync(PlannedOfflineRequest request, CancellationToken ct = default)
+        => SendJsonAsync<DaemonHeartbeatDtoApiResponse>(ContractOperation.ReportPlannedOffline, request, ct);
+
+    /// <summary><c>GET /api/v1/endpoints</c>。</summary>
+    public Task<EndpointStatusDtoIReadOnlyListApiResponse?> GetEndpointStatusesAsync(CancellationToken ct = default)
+        => SendAsync<EndpointStatusDtoIReadOnlyListApiResponse>(ContractOperation.GetEndpointStatuses, null, null, ct);
+
+    /// <summary><c>GET /api/v1/endpoints/{deviceId}/collection-quality</c>。</summary>
+    public Task<EndpointCollectionQualityDtoApiResponse?> GetEndpointCollectionQualityAsync(
         string deviceId,
         CancellationToken ct = default)
-        => GetAsync<ApiResponse<EndpointCollectionQualityDto>>(
-            $"/endpoints/{Uri.EscapeDataString(deviceId)}/collection-quality",
+        => SendAsync<EndpointCollectionQualityDtoApiResponse>(
+            ContractOperation.GetEndpointCollectionQuality,
+            [("deviceId", deviceId)],
+            null,
             ct);
 
-    public Task<ApiResponse<EndpointNotificationActionResponseDto>?> SendEndpointNotificationActionAsync(
+    /// <summary><c>POST /api/v1/endpoints/{deviceId}/notification-actions</c>。</summary>
+    public Task<EndpointNotificationActionResponseApiResponse?> SendEndpointNotificationActionAsync(
         string deviceId,
-        EndpointNotificationActionRequestDto request,
+        EndpointNotificationActionRequest request,
         CancellationToken ct = default)
-        => PostAsync<ApiResponse<EndpointNotificationActionResponseDto>>(
-            $"/endpoints/{Uri.EscapeDataString(deviceId)}/notification-actions",
+        => SendAsync<EndpointNotificationActionResponseApiResponse>(
+            ContractOperation.SendEndpointNotificationAction,
+            [("deviceId", deviceId)],
             request,
             ct);
 
-    public static string BuildConfirmationDetailPath(string confirmationId)
-        => $"/confirmations/{Uri.EscapeDataString(confirmationId)}";
+    /// <summary><c>POST /api/v1/pc/tracker/upload</c>。</summary>
+    public Task<Int32ApiResponse?> UploadTrackerEventsAsync(TrackerEventsUploadRequest request, CancellationToken ct = default)
+        => SendJsonAsync<Int32ApiResponse>(ContractOperation.UploadTrackerEvents, request, ct);
 
-    public async Task<T?> GetAsync<T>(string endpoint, CancellationToken ct = default)
-    {
-        return await SendWithAuthRetryAsync<T>(
-            () => _httpClient.GetAsync(Resolve(endpoint), ct), ct);
-    }
+    /// <summary><c>POST /api/v1/pc/browser-tt/upload</c>。</summary>
+    public Task<Int32ApiResponse?> UploadSiteEventsAsync(SiteEventsUploadRequest request, CancellationToken ct = default)
+        => SendJsonAsync<Int32ApiResponse>(ContractOperation.UploadSiteEvents, request, ct);
 
-    public async Task<T?> PostAsync<T>(string endpoint, object body, CancellationToken ct = default)
-    {
-        return await SendWithAuthRetryAsync<T>(
-            () => _httpClient.PostAsJsonAsync(Resolve(endpoint), body, ct), ct);
-    }
+    /// <summary><c>POST /api/v1/pc/tracker/health</c>。</summary>
+    public Task<StringApiResponse?> ReportTrackerHealthAsync(TrackerHealthRequest request, CancellationToken ct = default)
+        => SendJsonAsync<StringApiResponse>(ContractOperation.ReportTrackerHealth, request, ct);
+
+    /// <summary><c>POST /api/v1/pc/keystats/samples</c>。</summary>
+    public Task<StringApiResponse?> UploadKeystatsSampleAsync(KeystatsSampleUploadRequest request, CancellationToken ct = default)
+        => SendJsonAsync<StringApiResponse>(ContractOperation.UploadKeystatsSample, request, ct);
+
+    /// <summary><c>POST /api/v1/pc/keystats/upload</c>。</summary>
+    public Task<StringApiResponse?> UploadKeystatsSnapshotAsync(KeystatsUploadRequest request, CancellationToken ct = default)
+        => SendJsonAsync<StringApiResponse>(ContractOperation.UploadKeystatsSnapshot, request, ct);
 
     /// <summary>
-    /// 与 <see cref="PostAsync{T}"/> 相同，但**不触发任何令牌续期**（到期前主动续期与 401 被动续期都不触发）。
+    /// <c>GET /api/client/shell/latest</c>（匿名；注意它在 <c>/api/v1</c> 之外，走 host 根路径）。
+    /// 守护程序的「检查更新」用它。
     ///
-    /// 续期接口自身必须走这条路径（WO-ISSUES-396-400-20261007 REQ-5 / issue #400）：
-    /// 否则会出现「续期 → 发 /auth/refresh → 此时令牌仍然临期 → 又触发续期 → 单飞复用自己 → 自等待」的死锁。
-    /// 直接调用 RefreshAsync 的路径（例如启动时用已过期的令牌恢复会话）正是这样踩进去的。
+    /// <para>
+    /// `allowTokenRenewal: false`：契约里该端点 `security: null`，**与登录状态无关**。若它跟着走
+    /// 「临期先续期」那条路，令牌失效/断网时会在请求发出前就抛异常 —— 一个不需要认证的更新检查
+    /// 会因为本地令牌状态而失败（首轮 review 的 Important）。
+    /// 注意请求仍会带上共享客户端的 Bearer（服务端忽略；与 login/register/refresh 的既有情形一致）。
+    /// </para>
     /// </summary>
-    public async Task<T?> PostWithoutTokenRenewalAsync<T>(string endpoint, object body, CancellationToken ct = default)
+    public Task<ClientShellLatestResponse?> GetClientShellLatestAsync(CancellationToken ct = default)
+        => SendAsync<ClientShellLatestResponse>(
+            ContractOperation.GetClientShellLatest, null, null, ct, allowTokenRenewal: false);
+
+    // -----------------------------------------------------------------------
+    // 内部实现：只接受生成物里的 operation，平静态类型化的请求体
+    // -----------------------------------------------------------------------
+
+    private Task<TResponse?> SendJsonAsync<TResponse>(
+        ContractOperation operation,
+        object body,
+        CancellationToken ct,
+        bool allowTokenRenewal = true)
+        => SendAsync<TResponse>(operation, null, body, ct, allowTokenRenewal);
+
+    private async Task<TResponse?> SendAsync<TResponse>(
+        ContractOperation operation,
+        (string Name, string Value)[]? routeValues,
+        object? body,
+        CancellationToken ct,
+        bool allowTokenRenewal = true)
     {
-        return await SendWithAuthRetryAsync<T>(
-            () => _httpClient.PostAsJsonAsync(Resolve(endpoint), body, ct), ct, allowTokenRenewal: false);
+        var relativePath = operation.Resolve(routeValues ?? []);
+
+        return await SendWithAuthRetryAsync<TResponse>(
+            () => SendHttpAsync(operation, relativePath, body, ct), ct, allowTokenRenewal);
     }
 
-    public async Task<T?> PutAsync<T>(string endpoint, object body, CancellationToken ct = default)
-    {
-        return await SendWithAuthRetryAsync<T>(
-            () => _httpClient.PutAsJsonAsync(Resolve(endpoint), body, ct), ct);
-    }
-
-    public async Task DeleteAsync(string endpoint, CancellationToken ct = default)
-    {
-        await SendWithAuthRetryAsync<IgnoreResult>(
-            () => _httpClient.DeleteAsync(Resolve(endpoint), ct), ct);
-    }
-
-    public async Task<T?> PostStringAsync<T>(string endpoint, string content, CancellationToken ct = default)
-    {
-        return await SendWithAuthRetryAsync<T>(
-            () => _httpClient.PostAsync(Resolve(endpoint),
-                new StringContent(content, System.Text.Encoding.UTF8, "text/calendar"), ct), ct);
-    }
+    private Task<HttpResponseMessage> SendHttpAsync(
+        ContractOperation operation,
+        string relativePath,
+        object? body,
+        CancellationToken ct)
+        => operation.HttpMethod switch
+        {
+            "GET" => _httpClient.GetAsync(relativePath, ct),
+            "POST" => body is null
+                ? _httpClient.PostAsync(relativePath, null, ct)
+                : _httpClient.PostAsJsonAsync(relativePath, body, ct),
+            "PUT" => _httpClient.PutAsJsonAsync(relativePath, body, ct),
+            "DELETE" => _httpClient.DeleteAsync(relativePath, ct),
+            _ => throw new NotSupportedException(
+                $"{operation.HttpMethod} {operation.PathTemplate}：本仓的 HTTP 边界尚未支持该方法"),
+        };
 
     private async Task<T?> SendWithAuthRetryAsync<T>(
         Func<Task<HttpResponseMessage>> request, CancellationToken ct, bool allowTokenRenewal = true)
@@ -211,9 +289,6 @@ public class ApiClient
         }
 
         response.EnsureSuccessStatusCode();
-
-        if (typeof(T) == typeof(IgnoreResult))
-            return default;
 
         return await response.Content.ReadFromJsonAsync<T>(ct);
     }
@@ -317,6 +392,4 @@ public class ApiClient
             _tokenRenewalGate.Release();
         }
     }
-
-    private sealed class IgnoreResult { }
 }

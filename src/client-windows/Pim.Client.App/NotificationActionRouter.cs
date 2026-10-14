@@ -1,4 +1,4 @@
-using Pim.Client.Core.Models;
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Services;
 
 namespace Pim.Client.App;
@@ -26,7 +26,7 @@ public sealed class NotificationActionRouter
 
     public async Task<NotificationActionRoute> RouteToastActionAsync(
         string deviceId,
-        EndpointNotificationActionRequestDto request,
+        EndpointNotificationActionRequest request,
         CancellationToken ct = default)
     {
         var route = Route(

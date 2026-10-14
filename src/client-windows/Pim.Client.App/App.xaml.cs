@@ -5,6 +5,7 @@ using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
 using Pim.Client.App.Services;
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Models;
 using Pim.Client.Core.Services;
 
@@ -288,6 +289,19 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// 本机 keystats 健康探测给出的状态串（内部模型，取值由 <c>KeyStatsHealthProbe</c> 产出）→ 契约枚举。
+    /// 契约枚举（<see cref="DaemonSourceState"/>）里没有的取值一律按 Unknown 处理：
+    /// 上报链路上**不允许**凭空造一个契约里没有的状态串。
+    /// </summary>
+    private static DaemonSourceState ToDaemonSourceState(string? state) => state switch
+    {
+        "Available" => DaemonSourceState.Available,
+        "Unavailable" => DaemonSourceState.Unavailable,
+        "Paused" => DaemonSourceState.Paused,
+        _ => DaemonSourceState.Unknown,
+    };
+
     private static async Task ReportHeartbeatOnceAsync(CancellationToken ct)
     {
         var app = (App)Current;
@@ -299,11 +313,11 @@ public partial class App : Application
             var tracker = Services.GetService<NativeTrackerService>();
             var ks = Services.GetRequiredService<KeyStatsCollectorService>();
 
-            var trackerState = tracker is null ? "Unknown"
-                : tracker.LastError is null && tracker.EventsUploaded > 0 ? "Available"
-                : tracker.LastError is null ? "Unknown" : "Unavailable";
+            var trackerState = tracker is null ? DaemonSourceState.Unknown
+                : tracker.LastError is null && tracker.EventsUploaded > 0 ? DaemonSourceState.Available
+                : tracker.LastError is null ? DaemonSourceState.Unknown : DaemonSourceState.Unavailable;
             var ksHealth = ks.LastHealth;
-            var ksState = ksHealth?.DaemonSourceState ?? "Unknown";
+            var ksState = ToDaemonSourceState(ksHealth?.DaemonSourceState);
 
             var authService = Services.GetRequiredService<AuthService>();
             if (!authService.IsAuthenticated && authService.HasSavedToken)

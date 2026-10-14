@@ -24,6 +24,7 @@ PIM 的 Windows 端：守护程序采集前台应用、窗口与键鼠活跃度�
 | `release-assets` | 发版纯逻辑（资产名 + `version.json`）在 PR 上真实执行 |
 | `browser-extension-lint` | 浏览器插件 Prettier 检查（原来写在永不执行的嵌套目录里） |
 | `contract-freshness` | 契约快照与权威 `pim-api` 对比（需要网络，不需要凭据） |
+| `contract-generated` | 契约 C# 生成物重新生成后逐字节比对（离线；接口边界的第二道门禁） |
 | `codeql` | CodeQL 静态安全扫描（fork PR 的 upload 为 never，作为发版前置参与门禁） |
 | `pr-metadata` | 只在 `pull_request` 上校验双语四段与分支命名（`push` 到 master 不要求 PR body） |
 
@@ -38,16 +39,36 @@ bash scripts/ci/test-resolve-version.sh
 EVENT_NAME=push node scripts/ci/check-pr-metadata.mjs
 PR_TITLE='…' PR_BODY='…' HEAD_REF='…' node scripts/ci/check-pr-metadata.mjs
 
-# contract-freshness：行为测试（离线对照）当前在 master 上为红 —— 4 条负对照在
-# `contract/` 快照刷新后自失效（master 既存问题，另有独立工作项负责），
-# 因此 check-contract-freshness.sh 这一步在修好之前跑不到。
 bash scripts/ci/test-contract-freshness.sh
+
+# contract-generated：门禁自身的行为测试（离线；含「契约变了但生成物没重生成」等负对照）
+bash scripts/ci/test-contract-csharp.sh
+
+# 接口边界生成物：重新生成 / 只读校验（CI 调的是后者）
+bash scripts/ci/generate-contract-csharp.sh
+bash scripts/ci/check-contract-csharp.sh
 ```
 
 > 尚未纳入本门禁的审计守卫（`check-audit-guards.mjs` / `test-audit-guards.mjs`、
 > `check-dependency-hygiene.sh`、`test-contract-coverage.mjs`、`test-orphan-test-coverage.mjs`、
 > `test-probe-page-syntax.mjs`）依赖尚未落地的客户端改动，落地后随 `ci-scripts` job 一并提交；
 > 在此之前**不删除、不降级、不加 `--exclude`**。
+
+## 接口边界（契约生成 + 编译期约束）
+
+`pim-api` 的接口形状由 `contract/openapi.json` 决定，客户端侧不再手写接口类型：
+
+| 产物 | 内容 | 谁生成 |
+| --- | --- | --- |
+| `src/client-windows/Pim.Client.Core/Contract/ContractModels.cs` | 契约 DTO（含枚举） | `scripts/contract/generate-csharp.py` |
+| `src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs` | 用到的 operation（方法 + 路径） | 同上 |
+
+- 用到的 operation 登记在 `scripts/contract/client-operations.json`；生成器会逐个核对它在契约里存在，
+  声明了契约里没有的 METHOD/path 会让生成**直接失败**。
+- `ApiClient` 只暴露显式方法签名，路径只能取自生成的 `ContractOperation`（构造函数私有），
+  请求/响应类型都是生成的 DTO —— 写错路径、字段名、枚举值**编译期就报错**。
+- 契约更新后一键刷新：`bash scripts/ci/refresh-contract.sh`（快照 + 生成物同批）。
+- 详见 [`contract/README.md`](contract/README.md) 与 `AGENTS.md`「接口契约与门禁」。
 
 ## 构建与测试
 

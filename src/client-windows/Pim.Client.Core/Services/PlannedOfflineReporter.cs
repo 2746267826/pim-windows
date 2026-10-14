@@ -1,4 +1,4 @@
-using Pim.Client.Core.Models;
+using Pim.Client.Core.Contract;
 
 namespace Pim.Client.Core.Services;
 
@@ -13,11 +13,17 @@ public sealed class PlannedOfflineReporter
 
     public async Task ReportAsync(PlannedOfflineRequest request, CancellationToken ct = default)
     {
-        await _api.PostAsync<object>("daemon/planned-offline", request, ct);
+        await _api.ReportPlannedOfflineAsync(request, ct);
     }
 
     public static PlannedOfflineRequest BuildRequest(string deviceId, string reason, DateTimeOffset occurredAt)
     {
-        return new PlannedOfflineRequest(deviceId, "windows", reason, occurredAt);
+        return new PlannedOfflineRequest
+        {
+            DeviceId = deviceId,
+            DaemonKind = "windows",
+            Reason = reason,
+            OccurredAt = occurredAt,
+        };
     }
 }

@@ -9,7 +9,7 @@ This repository is shared by multiple agent conversations. Keep `master` useful 
 - 本仓与 `pim-api` 的接口以 `contract/openapi.json` 为准（快照随本仓提交，说明见 `contract/README.md`）。
 - **不要凭猜测调用接口**：不得手写或臆测契约里不存在的路径、字段、枚举值。改动涉及接口时，先对照契约确认形状。
 - **需要新接口时不要自己造**：把需求写给用户转交后端实现 —— 说明用途、请求方法与路径、请求字段、响应字段、示例。后端在 `pim-api` 实现并更新契约后，本仓再刷新快照并接入。
-- 后端契约更新后，用 `scripts/ci/fetch-contract.sh` 刷新本仓快照再提交。快照落后不影响本仓 CI（不阻塞），但接入新字段前必须先刷新。
+- 后端契约更新后，用 `scripts/ci/refresh-contract.sh` 刷新本仓快照**并重新生成客户端产物**（一键：快照 + 生成物必须同批，生成物里嵌有快照的 sha256）。快照落后会让 `contract-freshness` 门禁变红。
 
 ### 门禁怎么过
 - 四个公开仓（api / web / android / windows）的 `master` 有两把锁：**`CI Gate`** 与 **`PIM Independent Acceptance`**。
@@ -18,7 +18,9 @@ This repository is shared by multiple agent conversations. Keep `master` useful 
   **不要重试、不要绕过、不要为了让门禁变绿去改 ruleset 或 `.github/workflows/*`。**
 
 ### 本仓特有的一条
-- 客户端模型为**手写**。改任何与后端交互的代码前，必须对照本仓 `contract/openapi.json` 核对字段名、类型与可空性 —— 写错不会编译报错，只会在运行时失败。
+- 客户端接口模型**由契约生成**（`src/client-windows/Pim.Client.Core/Contract/`，见 `scripts/contract/generate-csharp.py`）。**生成物不可手工修改**：CI 的 `contract-generated` job 会重新生成并逐字节比对。
+- **HTTP 边界只暴露显式方法签名**（`ApiClient` 上每个方法 = 契约里的一个 operation，路径来自生成物、请求/响应类型来自生成类型）。裸字符串 endpoint / `object` 请求体的公共入口已经不存在 —— 想加接口就必须先让后端在 `pim-api` 实现、刷新契约、在 `scripts/contract/client-operations.json` 里声明，再重新生成。
+- 业务层内部模型（本机状态、浏览器桥协议、本地服务）仍在 `Models/` 手写，**不在契约范围内**。
 
 ## Communication And Planning
 

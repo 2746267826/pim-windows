@@ -9,7 +9,7 @@
 
 | 工程 | TFM | 覆盖用例 | 运行环境 |
 | --- | --- | --- | --- |
-| `../Pim.Client.Tests` | `net8.0` | 20 个文件 / 116 个用例 | Linux（`test-client-core` job） |
+| `../Pim.Client.Tests` | `net8.0` | 18 个文件 / 129 个用例 | Linux（`test-client-core` job） |
 | `../Pim.Client.App.Tests` | `net8.0-windows` | 9 个文件 | Windows（`test-client-app` job） |
 
 **为什么拆两个工程**：守护程序的核心逻辑（状态机、上报闸门、通道、keystats 等）不依赖
@@ -19,6 +19,10 @@ WPF/WinForms，保持 `net8.0` 就能在 Linux runner 上跑——这些正是�
 
 **两个工程的 `Compile` 项都是显式列的**：清单即范围。新增用例文件后必须显式加入工程，
 否则它会静静地不参与编译与执行——这正是本次要修掉的老问题。
+
+`ContractBoundaryTests.cs`（接口边界契约化）在 `Pim.Client.Tests` 里：它用桩传输层真实装配 `ApiClient`，
+逐个 operation 核对「HTTP 方法 + 路径 + 请求体字段集合」与 `contract/openapi.json` 一致，
+并用反射/源码形态断言 `ApiClient` 不再暴露裸字符串 endpoint 或 `object` 请求体。
 
 ## 尚未纳入的 4 个文件
 

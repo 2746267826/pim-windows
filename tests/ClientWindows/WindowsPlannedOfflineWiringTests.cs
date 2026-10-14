@@ -87,8 +87,19 @@ public class WindowsPlannedOfflineWiringTests
     [Fact]
     public void CoreReporterTargetsPlannedOfflineEndpoint()
     {
+        // 接口边界契约化后，接口路径**只存在于契约生成物里**：PlannedOfflineReporter 不再持有
+        // 裸字符串路径，它调用的是按 operation 命名的边界方法。因此这里核对的是三处联动：
+        //   上报器 → 边界方法名 → operation 清单（METHOD + path）→ 生成物里的同一条路径。
+        // 运行期「确实请求到了这个路径」由 ContractBoundaryTests 用桩传输层实证。
         var reporter = File.ReadAllText(RepoPath("src", "client-windows", "Pim.Client.Core", "Services", "PlannedOfflineReporter.cs"));
-        Assert.Contains("daemon/planned-offline", reporter);
+        Assert.Contains("ReportPlannedOfflineAsync", reporter);
+
+        var manifest = File.ReadAllText(RepoPath("scripts", "contract", "client-operations.json"));
+        Assert.Contains("\"apiClient\": \"ReportPlannedOfflineAsync\"", manifest);
+        Assert.Contains("\"path\": \"/api/v1/daemon/planned-offline\"", manifest);
+
+        var operations = File.ReadAllText(RepoPath("src", "client-windows", "Pim.Client.Core", "Contract", "ContractOperations.cs"));
+        Assert.Contains("\"/api/v1/daemon/planned-offline\"", operations);
     }
 
     private static string RepoPath(params string[] parts)

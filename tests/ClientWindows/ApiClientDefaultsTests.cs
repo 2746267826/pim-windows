@@ -87,9 +87,10 @@ public class ApiClientDefaultsTests
     }
 
     [Fact]
-    public void KeyStatsSnapshot_MapsFormattedDistanceFieldsFromApi()
+    public void KeyStatsLocalSnapshot_MapsFormattedDistanceFieldsFromApi()
     {
-        var type = typeof(KeyStatsCollectorService).GetNestedType("KeyStatsSnapshot", BindingFlags.NonPublic);
+        // 本机 keystats 服务（不是 pim-api）返回的形状；上报给 pim-api 的请求体已改为契约生成类型。
+        var type = typeof(KeyStatsCollectorService).GetNestedType("KeyStatsLocalSnapshot", BindingFlags.NonPublic);
 
         AssertJsonProperty(type, "FormattedMouseDistance", "formattedMouseDistance");
         AssertJsonProperty(type, "FormattedScrollDistance", "formattedScrollDistance");

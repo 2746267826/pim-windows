@@ -6,9 +6,9 @@
 #   contract/openapi.json      （上游契约原始字节）
 #   contract/provenance.json   （确定性来源记录：repo/ref/resolvedRef/sourcePath/bytes/sha256）
 #
-# 本仓没有生成产物：客户端模型是**手写**的（见 AGENTS.md「接口契约与门禁」），
-# 因此这里不生成任何代码 —— 只刷新快照与来源记录，模型与契约的差异由
-# contract/model-consistency.md / .detail.json 的报告承载。
+# 本脚本只刷新**快照与来源记录**。客户端的 C# 生成物（ContractModels.cs / ContractOperations.cs）
+# 由 scripts/contract/generate-csharp.py 从快照生成，**必须与本快照同批更新** ——
+# 因此日常请用一键入口 scripts/ci/refresh-contract.sh（它先调本脚本，再重新生成，最后自我复核）。
 #
 # 只读校验请用 scripts/ci/check-contract-freshness.sh（CI 用的是它）。
 #

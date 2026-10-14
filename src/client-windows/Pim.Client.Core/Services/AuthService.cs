@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Models;
 
 namespace Pim.Client.Core.Services;
@@ -66,8 +67,11 @@ public class AuthService
 
     public async Task<bool> LoginAsync(string username, string password)
     {
-        var result = await _apiClient.PostAsync<ApiResponse<AuthResponse>>("/auth/login",
-            new { username, password });
+        var result = await _apiClient.LoginAsync(new LoginRequest
+        {
+            Username = username,
+            Password = password,
+        });
 
         if (result?.Data is null) return false;
 
@@ -79,8 +83,13 @@ public class AuthService
     public async Task<string?> RegisterAsync(
         string username, string email, string password, string? displayName)
     {
-        var result = await _apiClient.PostAsync<ApiResponse<AuthResponse>>("/auth/register",
-            new { username, email, password, displayName });
+        var result = await _apiClient.RegisterAsync(new RegisterRequest
+        {
+            Username = username,
+            Email = email,
+            Password = password,
+            DisplayName = displayName,
+        });
 
         if (result is { Code: 0, Data: not null })
         {
@@ -241,12 +250,10 @@ public class AuthService
         _refreshToken = data.RefreshToken;
         _accessTokenExpiry = data.ExpiresAt;
 
-        if (data.UserInfo is not null)
-        {
-            CurrentUserId = data.UserInfo.Id;
-            CurrentUsername = data.UserInfo.Username;
-            CurrentDisplayName = data.UserInfo.DisplayName;
-        }
+        // 契约 `AuthResponse.user` 是 required：服务端一定会给。
+        CurrentUserId = data.User.Id;
+        CurrentUsername = data.User.Username;
+        CurrentDisplayName = data.User.DisplayName;
 
         _apiClient.SetAccessToken(_accessToken);
         _apiClient.RenewTokenAsync = RefreshAsync;
@@ -277,9 +284,12 @@ public class AuthService
 
         try
         {
-            // 走"不触发续期"的那条路径：续期接口自己再触发续期会自等待（见 ApiClient.PostWithoutTokenRenewalAsync）。
-            var result = await _apiClient.PostWithoutTokenRenewalAsync<ApiResponse<AuthResponse>>("/auth/refresh",
-                new { refreshToken = _refreshToken });
+            // 续期接口自身走的是"不触发续期"的那条路径（ApiClient.RefreshTokenAsync）：
+            // 续期接口自己再触发续期会自等待（见 ApiClient 的 InsideTokenRenewal 说明）。
+            var result = await _apiClient.RefreshTokenAsync(new RefreshRequest
+            {
+                RefreshToken = _refreshToken,
+            });
 
             if (result?.Data is null) return false;
 

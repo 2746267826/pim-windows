@@ -252,7 +252,7 @@ HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 if not os.path.isfile(prov_path):
-    print("contract/provenance.json 不存在：刷新来源不可复核，请运行 scripts/ci/fetch-contract.sh 并提交结果")
+    print("contract/provenance.json 不存在：刷新来源不可复核，请运行 scripts/ci/refresh-contract.sh 并提交结果")
     sys.exit(1)
 try:
     with open(prov_path, encoding="utf-8") as fh:
