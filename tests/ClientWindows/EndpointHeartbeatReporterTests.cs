@@ -111,7 +111,7 @@ public class EndpointHeartbeatReporterTests
     {
         var snapshot = EndpointHeartbeatReporter.ForLocalMachine(
             "1.2.3",
-            new EndpointUploadSignals(null, 1, null, 0, null, null, false),
+            new EndpointUploadSignals(null, 1, null, 0, null, null, KeyStatsUploadOutcome.Unknown),
             0);
 
         Assert.Equal(Environment.MachineName, snapshot.DeviceId);
@@ -145,7 +145,7 @@ public class EndpointHeartbeatReporterTests
             SiteEventsUploaded: 0,
             KeyStatsLastUploadError: null,
             KeyStatsLastUploadTime: null,
-            KeyStatsLastAttemptWasSkipped: false);
+            KeyStatsLastUploadOutcome: KeyStatsUploadOutcome.Unknown);
         Assert.Equal("Warning", EndpointHeartbeatReporter.ResolveUploadStatus(
             siteFailing.ResolveLastError(), siteFailing.HasCompletedUpload));
 
@@ -164,17 +164,53 @@ public class EndpointHeartbeatReporterTests
             SiteEventsUploaded: 0,
             KeyStatsLastUploadError: "KeyStats API 可达但计数全 0 或不增长",
             KeyStatsLastUploadTime: null,
-            KeyStatsLastAttemptWasSkipped: true);
+            KeyStatsLastUploadOutcome: KeyStatsUploadOutcome.Skipped);
         Assert.Null(keyStatsSkipped.ResolveLastError());
         Assert.False(keyStatsSkipped.HasCompletedUpload);
         Assert.Equal("Unknown", EndpointHeartbeatReporter.ResolveUploadStatus(
             keyStatsSkipped.ResolveLastError(), keyStatsSkipped.HasCompletedUpload));
 
-        // KeyStats 真的失败（不是跳过）：必须 Warning。
-        var keyStatsFailed = keyStatsSkipped with { KeyStatsLastAttemptWasSkipped = false };
-        Assert.Equal("KeyStats API 可达但计数全 0 或不增长", keyStatsFailed.ResolveLastError());
+        // KeyStats 真的失败：必须 Warning。
+        var keyStatsFailed = keyStatsSkipped with
+        {
+            KeyStatsLastUploadError = "HTTP 500 boom",
+            KeyStatsLastUploadOutcome = KeyStatsUploadOutcome.Failed,
+        };
+        Assert.Equal("HTTP 500 boom", keyStatsFailed.ResolveLastError());
         Assert.Equal("Warning", EndpointHeartbeatReporter.ResolveUploadStatus(
             keyStatsFailed.ResolveLastError(), keyStatsFailed.HasCompletedUpload));
+
+        // 上传成功过之后又失败：仍然 Warning（成功记录不会掩盖当前失败）。
+        Assert.Equal("Warning", EndpointHeartbeatReporter.ResolveUploadStatus(
+            keyStatsFailed.ResolveLastError(), keyStatsFailed.HasCompletedUpload));
+    }
+
+    /// <summary>
+    /// 独立 review 的 Important：**跳过不能证明上传已经恢复**。
+    /// 判定必须由采集器自己记账的结果给出，而不是用可能过期的 health 反推。
+    /// </summary>
+    [Fact]
+    public void KeyStatsSkipNeverErasesAnEarlierFailure()
+    {
+        // 先真的失败 → 之后按策略跳过：结果仍然是 Failed。
+        var afterFailureThenSkip = KeyStatsCollectorService.NextUploadOutcome(
+            KeyStatsUploadOutcome.Failed, skipped: true, uploaded: false);
+        Assert.Equal(KeyStatsUploadOutcome.Failed, afterFailureThenSkip);
+
+        // 真正上传成功才恢复。
+        Assert.Equal(
+            KeyStatsUploadOutcome.Uploaded,
+            KeyStatsCollectorService.NextUploadOutcome(afterFailureThenSkip, skipped: false, uploaded: true));
+
+        // 从没结论 → 跳过 = Skipped（不是失败，也不是"上传过"）。
+        Assert.Equal(
+            KeyStatsUploadOutcome.Skipped,
+            KeyStatsCollectorService.NextUploadOutcome(KeyStatsUploadOutcome.Unknown, skipped: true, uploaded: false));
+
+        // 既没跳过也没成功 = 失败。
+        Assert.Equal(
+            KeyStatsUploadOutcome.Failed,
+            KeyStatsCollectorService.NextUploadOutcome(KeyStatsUploadOutcome.Uploaded, skipped: false, uploaded: false));
     }
 
     // ---- 上报行为 ------------------------------------------------------------
@@ -201,6 +237,28 @@ public class EndpointHeartbeatReporterTests
         Assert.Equal(0, reporter.ConsecutiveFailures);
         Assert.Null(reporter.LastError);
         Assert.Equal("Healthy", reporter.LastReportedUploadStatus);
+    }
+
+    /// <summary>
+    /// 成功时刻取的是**响应返回之后**的时间（review 的 Minor）：用固定时钟的话，
+    /// "请求前取时间"的旧实现也会通过，因此这里在响应期间把时钟向前推。
+    /// </summary>
+    [Fact]
+    public async Task SuccessTimestampIsTakenAfterTheResponse()
+    {
+        var start = new DateTimeOffset(2026, 10, 14, 12, 0, 0, TimeSpan.Zero);
+        var clock = new MutableClock(start);
+        var handler = new StubHandler(_ =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(7)); // 请求本身耗时 7 秒
+            return Response(HttpStatusCode.OK, OkEnvelope);
+        });
+        var reporter = new EndpointHeartbeatReporter(new ApiClient(() => handler), null, clock);
+
+        Assert.True(await reporter.ReportAsync(Snapshot()));
+
+        Assert.Equal(start, reporter.LastAttemptAt);
+        Assert.Equal(start.AddSeconds(7), reporter.LastSuccessAt);
     }
 
     /// <summary>时刻来自注入的时钟（B1：测试不依赖真实时间）。</summary>
@@ -392,11 +450,13 @@ public class EndpointHeartbeatReporterTests
         // 两条通道互相隔离地执行（守护进程心跳失败不会跳过端点心跳）。
         Assert.Contains("HeartbeatTickRunner.RunAsync", onceBody);
 
-        // 这一拍确实由既有循环驱动（每 2 分钟一次）。
-        Assert.Contains("RunHeartbeatLoopAsync", app);
+        // 这一拍确实由既有循环驱动（每 2 分钟一次）。同样切到方法边界为止：
+        // 一路读到文件末尾时，删掉循环里的调用它仍然会通过（review 的 Minor）。
         var loopStart = app.IndexOf("private async Task RunHeartbeatLoopAsync", StringComparison.Ordinal);
         Assert.True(loopStart >= 0, "App.xaml.cs 里找不到 RunHeartbeatLoopAsync");
-        Assert.Contains("ReportHeartbeatOnceAsync", app[loopStart..]);
+        var loopEnd = app.IndexOf("\n    private ", loopStart + 10, StringComparison.Ordinal);
+        Assert.True(loopEnd > loopStart, "App.xaml.cs 里找不到 RunHeartbeatLoopAsync 的方法边界");
+        Assert.Contains("ReportHeartbeatOnceAsync", app[loopStart..loopEnd]);
     }
 
     // ---- helpers -------------------------------------------------------------
@@ -435,6 +495,18 @@ public class EndpointHeartbeatReporterTests
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+
+    /// <summary>可推进的时钟：用来区分"请求前"与"响应后"两个时刻。</summary>
+    private sealed class MutableClock : TimeProvider
+    {
+        private DateTimeOffset _now;
+
+        public MutableClock(DateTimeOffset now) => _now = now;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan delta) => _now = _now.Add(delta);
     }
 
     /// <summary>只读时钟：让"什么时候被记为上报过"可断言，而不是看上真实时间。</summary>

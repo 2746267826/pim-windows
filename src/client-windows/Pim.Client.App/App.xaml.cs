@@ -369,14 +369,14 @@ public partial class App : Application
             var uploadSignals = new EndpointUploadSignals(
                 // 窗口轨迹与站点事件是**两条独立**的上传链路，任一条失败都必须体现出来；
                 // KeyStats 在"本轮按策略跳过"时也会往 LastUploadError 写说明文案（例如 stale-zero），
-                // 那是正常节流，因此用 LastHealth.CanUpload 把它与真正的失败区分开。
+                // 那是正常节流 —— 用采集器自己记账的 LastUploadOutcome 区分，而不是用可能过期的 health 反推。
                 TrackerLastError: tracker?.LastError,
                 TrackerEventsUploaded: tracker?.EventsUploaded ?? 0,
                 SiteLastError: tracker?.SiteLastError,
                 SiteEventsUploaded: tracker?.SiteEventsUploaded ?? 0,
                 KeyStatsLastUploadError: ks.LastUploadError,
                 KeyStatsLastUploadTime: ks.LastUploadTime,
-                KeyStatsLastAttemptWasSkipped: ks.LastHealth is { CanUpload: false });
+                KeyStatsLastUploadOutcome: ks.LastUploadOutcome);
             var endpointSnapshot = EndpointHeartbeatReporter.ForLocalMachine(
                 version,
                 uploadSignals,

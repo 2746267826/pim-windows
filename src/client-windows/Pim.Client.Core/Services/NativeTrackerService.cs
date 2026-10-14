@@ -275,6 +275,9 @@ public sealed class NativeTrackerService : IDisposable
 
             if (batch.Count == 0) break;
 
+            // 停机/休眠前的刷队同样要计入"在途"：出队 ≠ 上传成功。
+            using var inFlight = new InFlightScope(this, batch.Count);
+
             var req = new TrackerEventsUploadRequest
             {
                 DeviceId = Environment.MachineName,

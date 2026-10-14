@@ -19,9 +19,10 @@ namespace Pim.Client.Core.Services;
 /// <param name="SiteEventsUploaded">站点事件累计成功上传条数。</param>
 /// <param name="KeyStatsLastUploadError">KeyStats 最近一次留痕文案（失败原因**或**跳过原因）。</param>
 /// <param name="KeyStatsLastUploadTime">KeyStats 最近一次成功上传时刻。</param>
-/// <param name="KeyStatsLastAttemptWasSkipped">
-/// 最近一次 KeyStats 采集是否**按策略跳过**（<c>CanUpload == false</c>）。
-/// 为真时 <paramref name="KeyStatsLastUploadError"/> 是跳过说明，不能当成上传失败。
+/// <param name="KeyStatsLastUploadOutcome">
+/// KeyStats **最近一次真实上传**的结果（由 <see cref="KeyStatsCollectorService"/> 自己记账）。
+/// 不能用 <c>LastHealth.CanUpload</c> 反推本轮是否跳过：上传失败时 health 不会被更新，
+/// 于是"旧 health 说跳过 + 本轮其实失败"会把真实失败洗成正常（独立 review 的 Important）。
 /// </param>
 public sealed record EndpointUploadSignals(
     string? TrackerLastError,
@@ -30,13 +31,13 @@ public sealed record EndpointUploadSignals(
     long SiteEventsUploaded,
     string? KeyStatsLastUploadError,
     DateTime? KeyStatsLastUploadTime,
-    bool KeyStatsLastAttemptWasSkipped)
+    KeyStatsUploadOutcome KeyStatsLastUploadOutcome)
 {
     /// <summary>三条通道里"当前仍然成立"的上传错误；没有就是 null。</summary>
     public string? ResolveLastError()
         => TrackerLastError
            ?? SiteLastError
-           ?? (KeyStatsLastAttemptWasSkipped ? null : KeyStatsLastUploadError);
+           ?? (KeyStatsLastUploadOutcome == KeyStatsUploadOutcome.Failed ? KeyStatsLastUploadError : null);
 
     /// <summary>是否**成功上传过**至少一批（三条通道任一）。</summary>
     public bool HasCompletedUpload
