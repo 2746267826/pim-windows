@@ -25,6 +25,7 @@
     <Compile Include="../ClientWindows/BrowserBridgeServiceTests.cs" />
     <Compile Include="../ClientWindows/ContractBoundaryTests.cs" />
     <Compile Include="../ClientWindows/EndpointHeartbeatReporterTests.cs" />
+    <Compile Include="../ClientWindows/HeartbeatTickRunnerTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsCollectorUploadGateTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsFixAdvisorTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsHealthProbeTests.cs" />

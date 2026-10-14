@@ -3,6 +3,47 @@ using Pim.Client.Core.Contract;
 namespace Pim.Client.Core.Services;
 
 /// <summary>
+/// 采集上传的**原始信号**（生产来源：<see cref="NativeTrackerService"/> 与 <see cref="KeyStatsCollectorService"/>）。
+///
+/// <para>
+/// 单独抽出来是因为 <c>uploadStatus</c> 的口径不能只看一条通道：守护程序有两条互不相干的上传链路
+/// （窗口轨迹 <c>LastError</c> / 站点事件 <c>SiteLastError</c>），而 KeyStats 的
+/// <c>LastUploadError</c> 在"本轮按策略跳过"（例如 <c>stale-zero</c>）时也会被写上说明文案 ——
+/// 那是正常节流，不是失败。这里把这三种情况分开表达，并由
+/// <see cref="ResolveLastError"/> 给出"到底算不算错误"的唯一答案。
+/// </para>
+/// </summary>
+/// <param name="TrackerLastError">窗口轨迹最近一次上传错误。</param>
+/// <param name="TrackerEventsUploaded">窗口轨迹累计成功上传条数。</param>
+/// <param name="SiteLastError">站点事件最近一次上传错误（与轨迹是两条独立通道）。</param>
+/// <param name="SiteEventsUploaded">站点事件累计成功上传条数。</param>
+/// <param name="KeyStatsLastUploadError">KeyStats 最近一次留痕文案（失败原因**或**跳过原因）。</param>
+/// <param name="KeyStatsLastUploadTime">KeyStats 最近一次成功上传时刻。</param>
+/// <param name="KeyStatsLastAttemptWasSkipped">
+/// 最近一次 KeyStats 采集是否**按策略跳过**（<c>CanUpload == false</c>）。
+/// 为真时 <paramref name="KeyStatsLastUploadError"/> 是跳过说明，不能当成上传失败。
+/// </param>
+public sealed record EndpointUploadSignals(
+    string? TrackerLastError,
+    long TrackerEventsUploaded,
+    string? SiteLastError,
+    long SiteEventsUploaded,
+    string? KeyStatsLastUploadError,
+    DateTime? KeyStatsLastUploadTime,
+    bool KeyStatsLastAttemptWasSkipped)
+{
+    /// <summary>三条通道里"当前仍然成立"的上传错误；没有就是 null。</summary>
+    public string? ResolveLastError()
+        => TrackerLastError
+           ?? SiteLastError
+           ?? (KeyStatsLastAttemptWasSkipped ? null : KeyStatsLastUploadError);
+
+    /// <summary>是否**成功上传过**至少一批（三条通道任一）。</summary>
+    public bool HasCompletedUpload
+        => TrackerEventsUploaded > 0 || SiteEventsUploaded > 0 || KeyStatsLastUploadTime is not null;
+}
+
+/// <summary>
 /// 端点心跳的**观测输入**：只放客户端真实持有的值，不放任何"希望服务端看到"的常量。
 ///
 /// <para>
@@ -93,15 +134,17 @@ public sealed class EndpointHeartbeatReporter
     /// </summary>
     public static EndpointHeartbeatSnapshot ForLocalMachine(
         string? appVersion,
-        string? lastUploadError,
-        bool hasCompletedUpload,
+        EndpointUploadSignals signals,
         int? collectionCacheCount)
-        => new(
+    {
+        ArgumentNullException.ThrowIfNull(signals);
+        return new(
             Environment.MachineName,
             appVersion,
-            lastUploadError,
-            hasCompletedUpload,
+            signals.ResolveLastError(),
+            signals.HasCompletedUpload,
             collectionCacheCount);
+    }
 
     /// <summary>
     /// 上传状态口径（服务端只在两种取值上做判断：<c>Healthy</c>/<c>Unknown</c> 不算问题，其余算问题）：
@@ -147,7 +190,14 @@ public sealed class EndpointHeartbeatReporter
 
         try
         {
-            await _api.ReportEndpointHeartbeatAsync(snapshot.DeviceId, request, ct).ConfigureAwait(false);
+            var response = await _api.ReportEndpointHeartbeatAsync(snapshot.DeviceId, request, ct).ConfigureAwait(false);
+            if (response is null)
+            {
+                // 200 + 空/null 正文：服务端没有给出端点回执，这次不算成功 ——
+                // 否则一次"其实没落库"的请求会被记成"刚上报过"（与既有上传链路的 null 回执口径一致）。
+                throw new InvalidOperationException(
+                    "Upload returned null response (the endpoint status was not confirmed by the server)");
+            }
 
             int previousFailures;
             lock (_lock)
@@ -155,7 +205,8 @@ public sealed class EndpointHeartbeatReporter
                 previousFailures = _consecutiveFailures;
                 _consecutiveFailures = 0;
                 _lastError = null;
-                _lastSuccessAt = now;
+                // 成功时刻在**请求返回之后**取：用发起前的时间会让"最后一次成功"偏早。
+                _lastSuccessAt = _timeProvider.GetUtcNow();
                 _lastUploadStatus = request.UploadStatus;
             }
 

@@ -42,6 +42,7 @@ public sealed class NativeTrackerService : IDisposable
     private long _uploadFailures;
     private long _siteEventsUploaded;
     private long _siteUploadFailures;
+    private long _inFlightUploadCount;
     private string? _lastError;
     private string? _siteLastError;
     private bool _hookActive = true;
@@ -88,11 +89,29 @@ public sealed class NativeTrackerService : IDisposable
     public long SiteEventsUploaded { get { lock (_siteStatsLock) return _siteEventsUploaded; } }
     public long SiteUploadFailures { get { lock (_siteStatsLock) return _siteUploadFailures; } }
     /// <summary>
-    /// 本地已采集、尚未上传成功的事件条数（轨迹队列 + 站点队列）。
-    /// 端点心跳的 <c>collectionCacheCount</c> 用它：服务端把 &gt;0 当作"有离线缓存积压"的信号。
-    /// 只读计数，不做任何推断。
+    /// 本地**已采集、尚未确认上传成功**的事件条数，端点心跳的 <c>collectionCacheCount</c> 用它。
+    ///
+    /// <para>
+    /// 四个来源相加，缺一都会少报：
+    /// <list type="number">
+    ///   <item><description>轨迹上传队列 <c>_uploadQueue</c>；</description></item>
+    ///   <item><description>站点上传队列 <c>_siteUploadQueue</c>；</description></item>
+    ///   <item><description><b>正在上传中</b>的批次 <see cref="InFlightUploadCount"/> ——
+    ///     批次在发请求前就已出队，不补这一项时"正在上传"会显示为 0；</description></item>
+    ///   <item><description>浏览器桥**已接收但还没搬运**的站点事件
+    ///     <see cref="BrowserBridgeService.SiteEventsPendingInChannel"/> —— 它们已经在本机、也还没上传成功。</description></item>
+    /// </list>
+    /// 这是快照时刻的瞬时值，不是累计值。
+    /// </para>
     /// </summary>
-    public int PendingUploadCount => _uploadQueue.Count + _siteUploadQueue.Count;
+    public int PendingUploadCount =>
+        _uploadQueue.Count
+        + _siteUploadQueue.Count
+        + (int)Interlocked.Read(ref _inFlightUploadCount)
+        + _bridge.SiteEventsPendingInChannel;
+
+    /// <summary>正在上传中（已出队、尚未确认结果）的事件数。</summary>
+    public long InFlightUploadCount => Interlocked.Read(ref _inFlightUploadCount);
     public string? SiteLastError { get { lock (_siteStatsLock) return _siteLastError; } }
     public double? SiteLastEventAgeSeconds
     {
@@ -708,6 +727,9 @@ public sealed class NativeTrackerService : IDisposable
 
                 if (batch.Count == 0) continue;
 
+                // 批次已经出队：在结果确认（成功/重排/丢弃）之前，它仍然属于"本机未上传成功的事件"。
+                using var inFlight = new InFlightScope(this, batch.Count);
+
                 var req = new TrackerEventsUploadRequest
                 {
                     DeviceId = Environment.MachineName,
@@ -817,6 +839,9 @@ public sealed class NativeTrackerService : IDisposable
                 while (batch.Count < _config.UploadBatchSize && _siteUploadQueue.TryDequeue(out var ev))
                     batch.Add(ev);
                 if (batch.Count == 0) continue;
+
+                // 同上：出队≠上传成功，结果确认前仍计入本地待上传条数。
+                using var inFlight = new InFlightScope(this, batch.Count);
 
                 // 日期归属在本机推导（focus/tick 取结束时间的本地日期，visit 取当天），
                 // 避免服务器时区不同导致按日聚合错位。
@@ -946,6 +971,22 @@ public sealed class NativeTrackerService : IDisposable
         _cts.Dispose();
         _bridge.Dispose();
         _logger.Dispose();
+    }
+
+    /// <summary>上传批次的"在途"作用域：无论成功、重排还是抛异常，退出时都会把计数还原。</summary>
+    private readonly struct InFlightScope : IDisposable
+    {
+        private readonly NativeTrackerService _owner;
+        private readonly int _count;
+
+        public InFlightScope(NativeTrackerService owner, int count)
+        {
+            _owner = owner;
+            _count = count;
+            Interlocked.Add(ref owner._inFlightUploadCount, count);
+        }
+
+        public void Dispose() => Interlocked.Add(ref _owner._inFlightUploadCount, -_count);
     }
 
     private static class Win32Hook

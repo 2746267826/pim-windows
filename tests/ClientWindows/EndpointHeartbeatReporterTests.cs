@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Pim.Client.Core.Contract;
+using Pim.Client.Core.Models;
 using Pim.Client.Core.Services;
 using Xunit;
 
@@ -99,19 +100,81 @@ public class EndpointHeartbeatReporterTests
 
     /// <summary>
     /// AC-4：端点心跳用的设备标识必须与守护程序其它接口一致。
-    /// 本机快照只有一个来源（<see cref="Environment.MachineName"/>），调用点无法自己造一个 ID。
+    ///
+    /// 这里刻意**不**写"把 Environment.MachineName 传进去、再断言它等于 Environment.MachineName"那种恒真断言
+    /// （review 指出过）。真正要守住的是两条结构性事实：
+    ///  1. 调用方**没有机会**自己造一个 ID —— 上报入口与快照构造都不接受 deviceId 参数；
+    ///  2. 唯一的来源就是守护程序其它通道用的那个表达式。
     /// </summary>
     [Fact]
-    public void ForLocalMachine_UsesTheSameDeviceIdAsEveryOtherChannel()
+    public void DeviceIdHasASingleSourceAndNoCallerSuppliedOverride()
     {
-        var snapshot = EndpointHeartbeatReporter.ForLocalMachine("1.2.3", null, true, 0);
+        var snapshot = EndpointHeartbeatReporter.ForLocalMachine(
+            "1.2.3",
+            new EndpointUploadSignals(null, 1, null, 0, null, null, false),
+            0);
 
         Assert.Equal(Environment.MachineName, snapshot.DeviceId);
 
-        // 同一个表达式构造的守护程序心跳：两条通道的设备标识必须逐字相同。
-        var daemonHeartbeat = DaemonHeartbeatReporter.BuildHeartbeat(
-            Environment.MachineName, "1.2.3", "http://127.0.0.1:5858", null, null, null);
-        Assert.Equal(daemonHeartbeat.DeviceId, snapshot.DeviceId);
+        // 生产源码里，本机快照的设备标识只能来自 Environment.MachineName。
+        var source = RepoSource("src", "client-windows", "Pim.Client.Core", "Services", "EndpointHeartbeatReporter.cs");
+        var factoryStart = source.IndexOf("public static EndpointHeartbeatSnapshot ForLocalMachine", StringComparison.Ordinal);
+        Assert.True(factoryStart >= 0);
+        Assert.Contains("Environment.MachineName", source[factoryStart..]);
+
+        // 调用方无法传入 deviceId：入口方法只有 (快照, ct)，快照工厂没有 deviceId 形参。
+        Assert.DoesNotContain("string deviceId", source);
+
+        // 与守护程序心跳同源：那边用的也是 Environment.MachineName（App.xaml.cs 的调用点）。
+        var app = RepoSource("src", "client-windows", "Pim.Client.App", "App.xaml.cs");
+        Assert.Contains("DaemonHeartbeatReporter.BuildHeartbeat(\n                Environment.MachineName", app);
+    }
+
+    /// <summary>
+    /// `uploadStatus` 的输入必须覆盖**每一条**上传通道，并且不能把 KeyStats 的"正常跳过"当成失败
+    /// （review 的两条 Important：站点通道被漏掉 → 持续失败却报 Healthy；stale-zero 正常节流 → 长期误报 Warning）。
+    /// </summary>
+    [Fact]
+    public void UploadSignalsCoverEveryChannelAndSeparateSkipsFromFailures()
+    {
+        // 只有站点通道失败：必须 Warning（不能因为轨迹正常就报 Healthy）。
+        var siteFailing = new EndpointUploadSignals(
+            TrackerLastError: null,
+            TrackerEventsUploaded: 10,
+            SiteLastError: "HTTP 500 boom",
+            SiteEventsUploaded: 0,
+            KeyStatsLastUploadError: null,
+            KeyStatsLastUploadTime: null,
+            KeyStatsLastAttemptWasSkipped: false);
+        Assert.Equal("Warning", EndpointHeartbeatReporter.ResolveUploadStatus(
+            siteFailing.ResolveLastError(), siteFailing.HasCompletedUpload));
+
+        // 只有站点通道成功过：算"上传过"，不是 Unknown。
+        var siteOnly = siteFailing with { SiteLastError = null, SiteEventsUploaded = 5 };
+        Assert.Null(siteOnly.ResolveLastError());
+        Assert.True(siteOnly.HasCompletedUpload);
+        Assert.Equal("Healthy", EndpointHeartbeatReporter.ResolveUploadStatus(
+            siteOnly.ResolveLastError(), siteOnly.HasCompletedUpload));
+
+        // KeyStats 按策略跳过（stale-zero）：LastUploadError 里是说明文案，但不是失败。
+        var keyStatsSkipped = new EndpointUploadSignals(
+            TrackerLastError: null,
+            TrackerEventsUploaded: 0,
+            SiteLastError: null,
+            SiteEventsUploaded: 0,
+            KeyStatsLastUploadError: "KeyStats API 可达但计数全 0 或不增长",
+            KeyStatsLastUploadTime: null,
+            KeyStatsLastAttemptWasSkipped: true);
+        Assert.Null(keyStatsSkipped.ResolveLastError());
+        Assert.False(keyStatsSkipped.HasCompletedUpload);
+        Assert.Equal("Unknown", EndpointHeartbeatReporter.ResolveUploadStatus(
+            keyStatsSkipped.ResolveLastError(), keyStatsSkipped.HasCompletedUpload));
+
+        // KeyStats 真的失败（不是跳过）：必须 Warning。
+        var keyStatsFailed = keyStatsSkipped with { KeyStatsLastAttemptWasSkipped = false };
+        Assert.Equal("KeyStats API 可达但计数全 0 或不增长", keyStatsFailed.ResolveLastError());
+        Assert.Equal("Warning", EndpointHeartbeatReporter.ResolveUploadStatus(
+            keyStatsFailed.ResolveLastError(), keyStatsFailed.HasCompletedUpload));
     }
 
     // ---- 上报行为 ------------------------------------------------------------
@@ -185,6 +248,23 @@ public class EndpointHeartbeatReporterTests
         Assert.Null(reporter.LastSuccessAt);
     }
 
+    /// <summary>
+    /// 200 + 空/null 正文：服务端没有确认落库，**不能**记成成功（否则"没上报"会被显示成"刚上报"）。
+    /// </summary>
+    [Fact]
+    public async Task NullResponseIsRecordedAsFailure()
+    {
+        var handler = new StubHandler(_ => Response(HttpStatusCode.OK, "null"));
+        var reporter = new EndpointHeartbeatReporter(new ApiClient(() => handler));
+
+        Assert.False(await reporter.ReportAsync(Snapshot()));
+
+        Assert.Equal(1, reporter.ConsecutiveFailures);
+        Assert.Contains("null", reporter.LastError!, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(reporter.LastSuccessAt);
+        Assert.Null(reporter.LastReportedUploadStatus);
+    }
+
     /// <summary>传输层异常（断网/未启动）：同样可见，且不把队列/循环炸掉。</summary>
     [Fact]
     public async Task ReportAsync_OnTransportFailure_RecordsVisibleFailure()
@@ -249,6 +329,41 @@ public class EndpointHeartbeatReporterTests
         Assert.Null(server.LastError);
     }
 
+    /// <summary>
+    /// `collectionCacheCount` 的来源必须覆盖"桥已接收、还没上传成功"的事件
+    /// （review 的 Important：只数两个上传队列会漏掉这部分，让"还有多少没传上去"少报）。
+    ///
+    /// 这里用真实 HTTP 把一批站点事件推进**没有**守护程序搬运的桥里：事件停在那儿，
+    /// <see cref="NativeTrackerService.PendingUploadCount"/> 必须把它算进去。
+    /// </summary>
+    [Fact]
+    public async Task PendingUploadCountIncludesEventsWaitingInTheBridgeChannel()
+    {
+        var port = FreePort();
+        using var bridge = new BrowserBridgeService(port);
+        bridge.Start();
+        using var tracker = new NativeTrackerService(
+            new ApiClient(() => new StubHandler(_ => Response(HttpStatusCode.OK, OkEnvelope))),
+            new TrackerConfig { Enabled = true, BrowserBridgePort = port },
+            bridge: bridge);
+
+        using var http = new HttpClient();
+        var payload = """
+            {"events":[
+              {"kind":"focus","host":"github.com","startMs":1000,"endMs":6000},
+              {"kind":"tick","host":"github.com","startMs":2000,"durationMs":30000}
+            ]}
+            """;
+        var response = await http.PostAsync(
+            $"http://localhost:{port}/browser/site/heartbeat",
+            new StringContent(payload, Encoding.UTF8, "application/json"));
+
+        Assert.True(response.IsSuccessStatusCode, $"site batch rejected: {response.StatusCode}");
+        Assert.Equal(2, bridge.SiteEventsReceived);
+        Assert.Equal(2, bridge.SiteEventsPendingInChannel);
+        Assert.Equal(2, tracker.PendingUploadCount);
+    }
+
     // ---- 装配（这条缺陷本身就是"接口在、生产路径没人调"）----------------------
 
     /// <summary>
@@ -265,15 +380,17 @@ public class EndpointHeartbeatReporterTests
         Assert.Contains("EndpointHeartbeatReporter.ForLocalMachine", app);
 
         // 上报点必须落在既有循环里那"一拍"的方法内部（RunHeartbeatLoopAsync 每 2 分钟调它一次），
-        // 而不是装配在别处、或者只在启动时打一枪。
+        // 而不是装配在别处、或者只在启动时打一枪。切片到方法结束（下一个成员声明）为止，
+        // 不能一路读到文件末尾 —— 那样"字符串存在"证明不了它在这条可执行路径上（review 指出过）。
         const string onceMarker = "private static async Task ReportHeartbeatOnceAsync";
         var onceStart = app.IndexOf(onceMarker, StringComparison.Ordinal);
         Assert.True(onceStart >= 0, "App.xaml.cs 里找不到 ReportHeartbeatOnceAsync");
-        var onceEnd = app.IndexOf("private static async Task ReportHeartbeatOnceAsync", onceStart + 1, StringComparison.Ordinal);
-        var onceBody = onceEnd > 0
-            ? app[onceStart..onceEnd]
-            : app[onceStart..];
+        var onceEnd = app.IndexOf("\n    private static DateTime? MaxTime", onceStart, StringComparison.Ordinal);
+        Assert.True(onceEnd > onceStart, "App.xaml.cs 里找不到 ReportHeartbeatOnceAsync 的方法边界");
+        var onceBody = app[onceStart..onceEnd];
         Assert.Contains("endpointReporter.ReportAsync", onceBody);
+        // 两条通道互相隔离地执行（守护进程心跳失败不会跳过端点心跳）。
+        Assert.Contains("HeartbeatTickRunner.RunAsync", onceBody);
 
         // 这一拍确实由既有循环驱动（每 2 分钟一次）。
         Assert.Contains("RunHeartbeatLoopAsync", app);
