@@ -50,12 +50,14 @@ BASE_BRANCH="master"
 # 本仓目前的产物是「快照 + provenance」两个（仓内没有契约生成物）。将来引入生成物后
 # 必须把生成步骤也绑进这条命令 —— 生成物头部通常嵌有快照 sha256，只换快照会让
 # 一致性门禁变红。
-REFRESH_CMD="bash scripts/ci/fetch-contract.sh"
+REFRESH_CMD="bash scripts/ci/refresh-contract.sh"
 PAYLOAD_SHA256=""
 # 契约来源 ref（默认 master）；会被导出成 PIM_CONTRACT_REF 交给刷新命令。
 CONTRACT_REF="master"
 # 产物路径：只暂存这些路径，绝不 `git add -A`。
-ARTIFACT_PATHS=("contract/openapi.json" "contract/provenance.json")
+ARTIFACT_PATHS=("contract/openapi.json" "contract/provenance.json"
+  "src/client-windows/Pim.Client.Core/Contract/ContractModels.cs"
+  "src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs")
 # PR 正文「测试」一节里逐条列出的、真正跑在本 PR 上的门禁（各仓不同，不要照抄别的仓）。
 GATE_NOTES="$(cat <<'NOTES'
 - `contract-freshness`（`CI Gate` 的一环）：把仓内快照与**上游 `master` 当时的**字节

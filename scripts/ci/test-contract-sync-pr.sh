@@ -65,9 +65,11 @@ G="git -C $WORK"
 $G config user.email "dev@pim.local"
 $G config user.name "PIM Dev"
 $G config commit.gpgsign false
-mkdir -p "$WORK/contract"
+mkdir -p "$WORK/contract" "$WORK/src/client-windows/Pim.Client.Core/Contract"
 printf '{\n  "openapi": "3.0.1",\n  "paths": {"/a": {}}\n}\n' > "$WORK/contract/openapi.json"
 OLD_SHA="$(sha256sum "$WORK/contract/openapi.json" | cut -d' ' -f1)"
+printf '// no codegen yet\n' > "$WORK/src/client-windows/Pim.Client.Core/Contract/ContractModels.cs"
+printf '// no codegen yet\n' > "$WORK/src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs"
 cat > "$WORK/contract/provenance.json" <<EOF
 {
   "schemaVersion": 1,
@@ -100,6 +102,8 @@ export PATH="$TMP/bin:$PATH"
 # 并记录刷新命令看到的 PIM_CONTRACT_REF。MARKER 决定内容，方便造出"又变了"的场景。
 REFRESH_TEMPLATE='printf "{\n  \"openapi\": \"3.0.1\",\n  \"paths\": {\"/MARKER\": {}}\n}\n" > contract/openapi.json
 NEW_SHA=$(sha256sum contract/openapi.json | cut -d" " -f1)
+printf "// generated %s\n" "$NEW_SHA" > src/client-windows/Pim.Client.Core/Contract/ContractModels.cs
+printf "// generated %s\n" "$NEW_SHA" > src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs
 NEW_BYTES=$(wc -c < contract/openapi.json | tr -d " ")
 printf "{\n  \"schemaVersion\": 1,\n  \"repo\": \"2746267826/pim-api\",\n  \"ref\": \"master\",\n  \"resolvedRef\": \"4088bc446d4d98bbe20bee8b9241be2dfeabe78f\",\n  \"resolvedRefSource\": \"git-ls-remote\",\n  \"sourcePath\": \"contract/openapi.json\",\n  \"bytes\": %s,\n  \"sha256\": \"%s\"\n}\n" "$NEW_BYTES" "$NEW_SHA" > contract/provenance.json
 printf "%s" "$PIM_CONTRACT_REF" > "@REFSEEN@"
@@ -131,9 +135,15 @@ check "首次刷新 → result=pr-opened" "pr-opened" "$(result)"
 check "首次刷新 → 刷新命令收到的是通知里的 ref（不被默认 master 覆盖）" "$PROBE_REF" "$(cat "$REF_SEEN" 2>/dev/null)"
 contains "脚本声明的工作仓就是 fixture（防止跑错仓）" "工作仓：$WORK" "$OUT"
 check "首次刷新 → 分支真的推到 origin 了" "ok" "$([ "$(branch_sha)" != "none" ] && echo ok || echo none)"
-ARTIFACT_RE='^(contract/openapi.json|contract/provenance.json)$'
+ARTIFACT_RE='^(contract/openapi.json|contract/provenance.json|src/client-windows/Pim\.Client\.Core/Contract/ContractModels\.cs|src/client-windows/Pim\.Client\.Core/Contract/ContractOperations\.cs)$'
 check "首次刷新 → 提交里只有契约产物，没有无关文件" "0" \
   "$(git -C "$ORIGIN_DIR" show --name-only --format= "refs/heads/$BRANCH" | grep -vE "$ARTIFACT_RE" | grep -c . || true)"
+# 默认刷新命令必须是「快照 + 生成物」的一键入口（refresh-contract.sh）而不是只拉快照的
+# fetch-contract.sh —— 否则真实同步会刷出新快照却不重新生成 C# 产物，让必过的
+# contract-generated 门禁变红，而上面的用例因为用 --refresh-cmd 覆盖了命令，察觉不到。
+DEFAULT_REFRESH="$(sed -n 's/^REFRESH_CMD="\(.*\)"$/\1/p' "$SCRIPT" | head -1)"
+contains "默认刷新命令是 refresh-contract.sh（快照与生成物同批）" "refresh-contract.sh" "$DEFAULT_REFRESH"
+
 contains "PR 标题双语（含中文）" "刷新契约快照" "$(grep 'pr create' "$GH_LOG")"
 contains "PR 标题双语（含英文）" "refresh contract snapshot" "$(grep 'pr create' "$GH_LOG")"
 contains "PR 基于 master、head 是刷新分支" "--base master --head $BRANCH" "$(grep 'pr create' "$GH_LOG")"

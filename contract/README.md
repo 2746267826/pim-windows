@@ -43,8 +43,9 @@
 契约硬校验）后会向本仓发 `repository_dispatch`，本仓的 `Contract sync` workflow 收到后
 自动刷新并开一个 PR（`.github/workflows/contract-sync.yml` + `scripts/ci/contract-sync-pr.sh`）。
 **PR 需要人工 review 后才合并**，机器人不会自动合并；同一份契约重复触发不会产生空提交。
-（本仓目前没有契约生成物；将来引入生成物后，必须把它一起绑进刷新命令 —— 生成物头部通常
-嵌有快照的 sha256，只换快照会让一致性门禁变红。）
+（本仓的刷新命令 `scripts/ci/refresh-contract.sh` 已把**快照与生成物绑在一起**：先拉快照与
+provenance，再重新生成 `Contract/ContractModels.cs` 与 `ContractOperations.cs`。生成物头部嵌有
+快照的 sha256，**只换快照会让 `contract-generated` 门禁变红**，所以两者必须同批提交。）
 
 需要人工刷新时（例如通知没收到、或要指定某个上游 commit）：
 
