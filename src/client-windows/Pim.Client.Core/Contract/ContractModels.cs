@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 326efecb2fb6a9320d4883869255fa94b5cefb00935fbe61c002762b495c987a)
+//   契约快照      : contract/openapi.json (sha256 33cd6346e8375f4f06e4c07125f8d1470104eb4a1e91296569f386df9413a732)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
