@@ -126,16 +126,16 @@ public partial class StatusWindow : Window
             ApiConnectivityText.Text = apiDiag.Summary;
             _trackerState = trackerState;
             AwSummaryText.Text = bridgeConnected ? "Tracker 浏览器已连接" : trackerProbe.Ok ? "Tracker 桥接正常" : "Tracker 浏览器未连接";
-            var siteConnected = _tracker?.SiteConnected ?? _bridge?.IsSiteConnected ?? false;
-            var siteAge = _tracker?.SiteLastEventAgeSeconds;
+            // 工单 06 / AC-5：站点通道拆成两条**独立事实**，不再把"入站新鲜度"与"上传结果"压进一句
+            // 「站点通道」（已连接/未连接）那一句（根因见 SiteChannelStatusFormatter 的类注释）。
+            var siteChannel = BuildSiteChannelStatus();
             AwDetailText.Text =
                 $"URL: {trackerUrl}\n" +
                 $"Status: {trackerProbe.StatusLine}\n" +
                 $"Message: {trackerProbe.Message}\n" +
                 $"Bridge: {(bridgeConnected ? "已连接" : "未连接")}\n" +
-                $"站点通道: {(siteConnected ? "已连接" : "未连接")} 收={_tracker?.SiteEventsReceived ?? 0} 传={_tracker?.SiteEventsUploaded ?? 0} 弃={_tracker?.SiteEventsDropped ?? 0}" +
-                (siteAge is { } age ? $" 最近={age:F0}s前" : "") +
-                ($" 错误={_tracker?.SiteLastError ?? "无"}") + "\n" +
+                $"{siteChannel.Inbound.Text}\n" +
+                $"{siteChannel.Upload.Text}\n" +
                 $"Polls: {_tracker?.PollCount ?? 0} Sessions: {_tracker?.SessionsCreated ?? 0} Hook: {_tracker?.HookActive}\n" +
                 $"Time: {timestamp}";
             _ksSkipReason = ksSkipReasonLocal;
@@ -332,6 +332,32 @@ public partial class StatusWindow : Window
     }
 
     /// <summary>
+    /// 站点通道的两条独立事实（工单 06 / AC-5）：入站新鲜度 + 出站账目。
+    /// 状态窗口与诊断报告都走这一个来源，避免两处各写一份口径。
+    /// </summary>
+    private (SiteChannelInboundStatus Inbound, SiteChannelUploadStatus Upload) BuildSiteChannelStatus()
+    {
+        var tracker = _tracker;
+        if (tracker is null)
+        {
+            return (
+                new SiteChannelInboundStatus(false, null, "站点接收: 守护程序未运行（没有站点通道数据）"),
+                SiteChannelStatusFormatter.DescribeUpload(0, 0, 0, null));
+        }
+
+        return (
+            SiteChannelStatusFormatter.DescribeInbound(
+                tracker.SiteLastEventAgeSeconds,
+                tracker.BrowserConnected,
+                tracker.BrowserHeartbeatAgeSeconds),
+            SiteChannelStatusFormatter.DescribeUpload(
+                tracker.SiteEventsReceived,
+                tracker.SiteEventsUploaded,
+                tracker.SiteEventsDropped,
+                tracker.SiteLastError));
+    }
+
+    /// <summary>
     /// 端点心跳的可见状态（工单 06 / G1.3）：端点页为空时，这里是"客户端到底有没有在报、
     /// 报失败了几次、为什么失败"的第一现场。失败不被静默吞掉。
     /// </summary>
@@ -389,6 +415,12 @@ public partial class StatusWindow : Window
         sb.AppendLine($"KS LastUpload: {_keyStatsCollector.LastUploadTime?.ToString("O") ?? "none"}");
         sb.AppendLine($"KS LastError: {_keyStatsCollector.LastUploadError ?? "none"}");
         sb.AppendLine($"KS LastSkip: {_keyStatsCollector.LastSkipReason ?? "none"}");
+        var siteChannel = BuildSiteChannelStatus();
+        sb.AppendLine($"SiteChannelInbound: {siteChannel.Inbound.Text}");
+        sb.AppendLine($"SiteChannelUpload: {siteChannel.Upload.Text}");
+        sb.AppendLine(
+            $"SiteChannelWindow: {SiteChannelStatusFormatter.InboundActivityWindowSeconds:F0}s "
+            + "(依据：真机实测 fork 扩展刷批节拍 10–30 秒的 4–12 倍余量；超过窗口=浏览器侧当前无活动，不是故障)");
         sb.AppendLine($"EndpointHeartbeat: attempt={FormatFullTimestamp(_endpointHeartbeat?.LastAttemptAt)} success={FormatFullTimestamp(_endpointHeartbeat?.LastSuccessAt)} status={_endpointHeartbeat?.LastReportedUploadStatus ?? "none"} consecutiveFailures={_endpointHeartbeat?.ConsecutiveFailures} error={_endpointHeartbeat?.LastError ?? "none"}");
         sb.AppendLine($"InstallDir: {AppDomain.CurrentDomain.BaseDirectory}");
         return sb.ToString();

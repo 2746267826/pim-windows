@@ -35,6 +35,7 @@
     <Compile Include="../ClientWindows/NativeTrackerTimelineTests.cs" />
     <Compile Include="../ClientWindows/SiteChannelEndToEndTests.cs" />
     <Compile Include="../ClientWindows/SiteChannelTests.cs" />
+    <Compile Include="../ClientWindows/SiteChannelStatusTests.cs" />
     <Compile Include="../ClientWindows/TrackerPageAttributionTests.cs" />
     <Compile Include="../ClientWindows/TrackerStateManagerTests.cs" />
     <Compile Include="../ClientWindows/WindowsNotificationActionRouterTests.cs" />
