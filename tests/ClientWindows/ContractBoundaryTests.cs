@@ -206,7 +206,7 @@ public class ContractBoundaryBehaviorTests
         var contract = JsonDocument.Parse(File.ReadAllText(RepoPath("contract", "openapi.json")));
         var cases = OperationCases();
 
-        // 13 个 operation 全部覆盖：少一个就说明边界与清单脱节。
+        // 清单里的 operation 全部覆盖：少一个就说明边界与清单脱节。
         var declared = DeclaredOperations();
         Assert.Equal(
             declared.OrderBy(x => x, StringComparer.Ordinal).ToList(),
@@ -547,6 +547,15 @@ public class ContractBoundaryBehaviorTests
             (api, _) => api.GetEndpointStatusesAsync()),
         new("GET", "/api/v1/endpoints/{deviceId}/collection-quality", null,
             (api, _) => api.GetEndpointCollectionQualityAsync("PC-01")),
+        new("POST", "/api/v1/endpoints/{deviceId}/heartbeat",
+            new EndpointHeartbeatRequest
+            {
+                Platform = "windows",
+                AppVersion = "1.0.0",
+                UploadStatus = "Healthy",
+                CollectionCacheCount = 0,
+            },
+            (api, req) => api.ReportEndpointHeartbeatAsync("PC-01", (EndpointHeartbeatRequest)req!)),
         new("POST", "/api/v1/endpoints/{deviceId}/notification-actions",
             new EndpointNotificationActionRequest { Action = "open", RiskLevel = "low" },
             (api, req) => api.SendEndpointNotificationActionAsync("PC-01", (EndpointNotificationActionRequest)req!)),

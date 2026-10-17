@@ -123,6 +123,8 @@ public sealed class ContractOperation
         new("GET", "/api/v1/endpoints", "endpoints");
     public static readonly ContractOperation GetEndpointCollectionQuality =
         new("GET", "/api/v1/endpoints/{deviceId}/collection-quality", "endpoints/{deviceId}/collection-quality");
+    public static readonly ContractOperation ReportEndpointHeartbeat =
+        new("POST", "/api/v1/endpoints/{deviceId}/heartbeat", "endpoints/{deviceId}/heartbeat");
     public static readonly ContractOperation SendEndpointNotificationAction =
         new("POST", "/api/v1/endpoints/{deviceId}/notification-actions", "endpoints/{deviceId}/notification-actions");
     public static readonly ContractOperation UploadTrackerEvents =

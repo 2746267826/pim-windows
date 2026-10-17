@@ -24,6 +24,8 @@
     <Compile Include="../ClientWindows/AwBucketSelectionTests.cs" />
     <Compile Include="../ClientWindows/BrowserBridgeServiceTests.cs" />
     <Compile Include="../ClientWindows/ContractBoundaryTests.cs" />
+    <Compile Include="../ClientWindows/EndpointHeartbeatReporterTests.cs" />
+    <Compile Include="../ClientWindows/HeartbeatTickRunnerTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsCollectorUploadGateTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsFixAdvisorTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsHealthProbeTests.cs" />
@@ -33,6 +35,7 @@
     <Compile Include="../ClientWindows/NativeTrackerTimelineTests.cs" />
     <Compile Include="../ClientWindows/SiteChannelEndToEndTests.cs" />
     <Compile Include="../ClientWindows/SiteChannelTests.cs" />
+    <Compile Include="../ClientWindows/SiteChannelStatusTests.cs" />
     <Compile Include="../ClientWindows/TrackerPageAttributionTests.cs" />
     <Compile Include="../ClientWindows/TrackerStateManagerTests.cs" />
     <Compile Include="../ClientWindows/WindowsNotificationActionRouterTests.cs" />

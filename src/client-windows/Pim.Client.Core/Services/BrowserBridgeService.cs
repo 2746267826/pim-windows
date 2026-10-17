@@ -52,6 +52,12 @@ public sealed class BrowserBridgeService : IDisposable
     public long SiteEventsDropped { get { lock (_siteStatsLock) return _siteEventsDropped; } }
     /// <summary>Time of the last accepted site batch; public setter is a test hook.</summary>
     public DateTimeOffset? SiteLastBatchTime { get; set; }
+    /// <summary>
+    /// 桥**已接收**、但守护程序还没搬进上传统队列的站点事件数。
+    /// 站点通道是**有界**通道（100_000，见构造函数），因此 <c>CanCount</c> 为真；
+    /// 无界通道（浏览器心跳）不在这里，避免对无界通道取 <c>Count</c> 抛异常。
+    /// </summary>
+    public int SiteEventsPendingInChannel => _siteChannel.Reader.CanCount ? _siteChannel.Reader.Count : 0;
     /// <summary>Site channel liveness: a batch within the last 120s.</summary>
     public bool IsSiteConnected =>
         SiteLastBatchTime is { } t && (DateTimeOffset.UtcNow - t).TotalSeconds < DisconnectAfterSeconds;

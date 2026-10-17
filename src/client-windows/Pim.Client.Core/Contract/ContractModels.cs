@@ -272,6 +272,23 @@ public sealed class EndpointCollectionQualityDtoApiResponse
     public required System.DateTimeOffset Timestamp { get; set; }
 }
 
+/// <summary>契约 <c>components.schemas.EndpointHeartbeatRequest</c>（request）。</summary>
+public sealed class EndpointHeartbeatRequest
+{
+    /// <summary>契约字段 <c>appVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("appVersion")]
+    public string? AppVersion { get; set; }
+    /// <summary>契约字段 <c>collectionCacheCount</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("collectionCacheCount")]
+    public int? CollectionCacheCount { get; set; }
+    /// <summary>契约字段 <c>platform</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("platform")]
+    public required string Platform { get; set; }
+    /// <summary>契约字段 <c>uploadStatus</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("uploadStatus")]
+    public string? UploadStatus { get; set; }
+}
+
 /// <summary>契约 <c>components.schemas.EndpointNotificationActionRequest</c>（request）。</summary>
 public sealed class EndpointNotificationActionRequest
 {
@@ -347,6 +364,23 @@ public sealed class EndpointStatusDto
     /// <summary>契约字段 <c>uploadStatus</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("uploadStatus")]
     public required string UploadStatus { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.EndpointStatusDtoApiResponse</c>（response）。</summary>
+public sealed class EndpointStatusDtoApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public EndpointStatusDto? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.EndpointStatusDtoIReadOnlyListApiResponse</c>（response）。</summary>

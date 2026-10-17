@@ -19,6 +19,7 @@ public sealed class KeyStatsCollectorService : IDisposable
     private string? _lastUploadError;
     private KeyStatsHealthResult? _lastHealth;
     private string? _lastSkipReason;
+    private KeyStatsUploadOutcome _lastUploadOutcome = KeyStatsUploadOutcome.Unknown;
     private KeyStatsCounterSnapshot? _previousSnapshot;
 
     public Action<string>? Log { get; set; }
@@ -27,7 +28,43 @@ public sealed class KeyStatsCollectorService : IDisposable
     public KeyStatsHealthResult? LastHealth { get { lock (LockObj) return _lastHealth; } }
     public string? LastSkipReason { get { lock (LockObj) return _lastSkipReason; } }
 
+    /// <summary>
+    /// **最近一次真实上传的结果**（不是"最近一次采集动作"的结果）。
+    ///
+    /// <para>
+    /// 之所以必须有这个字段：<see cref="LastUploadError"/> 在"按策略跳过"时也会被写上说明文案
+    /// （例如 <c>stale-zero</c>），而 <see cref="LastHealth"/> 是**上一次探测**的结果 ——
+    /// 上传失败时它不会被更新，于是"旧 health.CanUpload == false + 本轮其实上传失败"
+    /// 会让下游把真实失败误判成正常跳过（独立 review 的 Important）。
+    /// 跳过**不能证明上传已经恢复**，所以 Failed 一直保留到下一次真正上传成功。
+    /// </para>
+    /// </summary>
+    public KeyStatsUploadOutcome LastUploadOutcome { get { lock (LockObj) return _lastUploadOutcome; } }
+
     public static bool ShouldUpload(KeyStatsHealthResult health) => health.CanUpload;
+
+    /// <summary>
+    /// "最近一次真实上传结果"的状态转移（纯函数，便于逐条验证）。
+    ///
+    /// <para>
+    /// 关键规则：**按策略跳过不会把既有的失败洗掉** —— 跳过只说明"这轮没有新数据可传"，
+    /// 不构成"上传已经恢复"的证据。只有真正上传成功（<paramref name="uploaded"/>）才回到 Uploaded。
+    /// </para>
+    /// </summary>
+    public static KeyStatsUploadOutcome NextUploadOutcome(
+        KeyStatsUploadOutcome previous,
+        bool skipped,
+        bool uploaded)
+    {
+        if (skipped)
+        {
+            return previous == KeyStatsUploadOutcome.Failed
+                ? KeyStatsUploadOutcome.Failed
+                : KeyStatsUploadOutcome.Skipped;
+        }
+
+        return uploaded ? KeyStatsUploadOutcome.Uploaded : KeyStatsUploadOutcome.Failed;
+    }
 
     public KeyStatsCollectorService(ApiClient api, KeyStatsProcessManager? processManager = null)
     {
@@ -110,7 +147,11 @@ public sealed class KeyStatsCollectorService : IDisposable
 
             if (!ShouldUpload(health))
             {
-                lock (LockObj) { _lastUploadError = health.SummaryZh; }
+                lock (LockObj)
+                {
+                    _lastUploadError = health.SummaryZh;
+                    _lastUploadOutcome = NextUploadOutcome(_lastUploadOutcome, skipped: true, uploaded: false);
+                }
                 Log?.Invoke($"[KeyStatsCollector] Skip upload: {health.SummaryZh} (reason: {health.SkipReason})");
                 return;
             }
@@ -169,23 +210,36 @@ public sealed class KeyStatsCollectorService : IDisposable
                 {
                     _lastUploadTime = DateTime.Now;
                     _lastUploadError = healthMessage;
+                    _lastUploadOutcome = NextUploadOutcome(_lastUploadOutcome, skipped: false, uploaded: true);
                 }
                 Log?.Invoke($"[KeyStatsCollector] Uploaded snapshot for {stats.Date} (sample: {FormatUploadResult(sampleResult)}, legacy: {FormatUploadResult(legacyResult)})");
             }
             else
             {
-                lock (LockObj) { _lastUploadError = healthMessage; }
+                lock (LockObj)
+                {
+                    _lastUploadError = healthMessage;
+                    _lastUploadOutcome = NextUploadOutcome(_lastUploadOutcome, skipped: false, uploaded: false);
+                }
                 Log?.Invoke($"[KeyStatsCollector] {healthMessage}");
             }
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            lock (LockObj) { _lastUploadError = ex.Message; }
+            lock (LockObj)
+            {
+                _lastUploadError = ex.Message;
+                _lastUploadOutcome = NextUploadOutcome(_lastUploadOutcome, skipped: false, uploaded: false);
+            }
             Log?.Invoke($"[KeyStatsCollector] Unavailable: {ex.Message}");
         }
         catch (Exception ex)
         {
-            lock (LockObj) { _lastUploadError = ex.Message; }
+            lock (LockObj)
+            {
+                _lastUploadError = ex.Message;
+                _lastUploadOutcome = NextUploadOutcome(_lastUploadOutcome, skipped: false, uploaded: false);
+            }
             Log?.Invoke($"[KeyStatsCollector] Error: {ex.Message}");
         }
     }
@@ -336,4 +390,20 @@ public sealed class KeyStatsCollectorService : IDisposable
         public double ScrollDistance { get; set; }
     }
 
+}
+
+/// <summary>KeyStats 最近一次**真实上传**的结果。</summary>
+public enum KeyStatsUploadOutcome
+{
+    /// <summary>还没有任何真实上传（或按策略跳过且此前没有结论）。</summary>
+    Unknown,
+
+    /// <summary>本轮按策略跳过（没有新数据可传）。</summary>
+    Skipped,
+
+    /// <summary>至少一条上传路径成功。</summary>
+    Uploaded,
+
+    /// <summary>上传失败（服务端拒绝或传输异常）。</summary>
+    Failed,
 }

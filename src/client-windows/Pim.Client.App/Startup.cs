@@ -31,6 +31,11 @@ public static class Startup
         services.AddSingleton<KeyStatsCollectorService>();
         services.AddSingleton<DaemonHeartbeatReporter>();
         services.AddSingleton<PlannedOfflineReporter>();
+        // 端点心跳（工单 06 / G1）：与守护进程心跳同一循环驱动，失败状态由状态窗口读取。
+        services.AddSingleton<EndpointHeartbeatReporter>(sp =>
+            new EndpointHeartbeatReporter(
+                sp.GetRequiredService<ApiClient>(),
+                sp.GetRequiredService<TrackerLogger>()));
         services.AddSingleton<Pim.Client.Core.Services.NotificationActionRouter>();
         services.AddSingleton<EndpointCollectionBoundaryService>();
         services.AddSingleton<NotificationActionRouter>();

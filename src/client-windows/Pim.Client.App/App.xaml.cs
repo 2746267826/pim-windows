@@ -363,8 +363,50 @@ public partial class App : Application
                     trackerHookActive = tracker?.HookActive ?? false,
                     trackerBrowserConnected = tracker?.BrowserConnected ?? false
                 });
-            await reporter.ReportAsync(heartbeat, ct);
-            Logger.Info("Daemon heartbeat reported");
+            // 端点心跳（工单 06 / G1）：端点页此前恒为空，是因为没有任何客户端调过这个接口。
+            // 复用本循环（2 分钟一拍）、同一 ApiClient/令牌、同一 deviceId（Environment.MachineName）。
+            var endpointReporter = Services.GetRequiredService<EndpointHeartbeatReporter>();
+            var uploadSignals = new EndpointUploadSignals(
+                // 窗口轨迹与站点事件是**两条独立**的上传链路，任一条失败都必须体现出来；
+                // KeyStats 在"本轮按策略跳过"时也会往 LastUploadError 写说明文案（例如 stale-zero），
+                // 那是正常节流 —— 用采集器自己记账的 LastUploadOutcome 区分，而不是用可能过期的 health 反推。
+                TrackerLastError: tracker?.LastError,
+                TrackerEventsUploaded: tracker?.EventsUploaded ?? 0,
+                SiteLastError: tracker?.SiteLastError,
+                SiteEventsUploaded: tracker?.SiteEventsUploaded ?? 0,
+                KeyStatsLastUploadError: ks.LastUploadError,
+                KeyStatsLastUploadTime: ks.LastUploadTime,
+                KeyStatsLastUploadOutcome: ks.LastUploadOutcome);
+            var endpointSnapshot = EndpointHeartbeatReporter.ForLocalMachine(
+                version,
+                uploadSignals,
+                tracker?.PendingUploadCount);
+
+            // 两条通道**互相隔离**：守护进程心跳 401/500 抛出的异常绝不能把端点心跳一起跳过
+            // （本工单的原始故障形态就是"接口早就存在，但生产路径走不到"）。
+            var tick = await HeartbeatTickRunner.RunAsync(
+                tickCt => reporter.ReportAsync(heartbeat, tickCt),
+                tickCt => endpointReporter.ReportAsync(endpointSnapshot, tickCt),
+                ct);
+
+            if (tick.DaemonHeartbeatSucceeded)
+            {
+                Logger.Info("Daemon heartbeat reported");
+            }
+            else
+            {
+                Logger.Warn($"Daemon heartbeat failed: {tick.DaemonHeartbeatError}");
+            }
+
+            if (tick.EndpointHeartbeatError is not null)
+            {
+                Logger.Warn($"Endpoint heartbeat unexpected error: {tick.EndpointHeartbeatError}");
+            }
+            else if (!tick.EndpointHeartbeatSucceeded)
+            {
+                Logger.Warn(
+                    $"Endpoint heartbeat failed (consecutive {endpointReporter.ConsecutiveFailures}): {endpointReporter.LastError}");
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
