@@ -22,6 +22,7 @@
   <ItemGroup>
     <!-- 显式列出用例文件：清单即范围，新增文件时必须显式加入 -->
     <Compile Include="../ClientWindows/BootstrapLogTests.cs" />
+    <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/DaemonLoggerShutdownTests.cs" />
     <Compile Include="../ClientWindows/ScheduledTaskServiceTests.cs" />
     <Compile Include="../ClientWindows/SingleInstanceGuardTests.cs" />

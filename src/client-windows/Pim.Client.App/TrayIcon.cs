@@ -12,6 +12,16 @@ public partial class TrayIcon : IDisposable
 {
     private System.Windows.Forms.NotifyIcon? _notifyIcon;
 
+    /// <summary>安全告警气泡（登录凭据保存失败等）。NotifyIcon 未就绪时静默，由调用方日志兜底。</summary>
+    public void NotifyWarning(string text)
+    {
+        _notifyIcon?.ShowBalloonTip(
+            timeout: 5000,
+            tipTitle: "PIM 守护程序",
+            text,
+            System.Windows.Forms.ToolTipIcon.Warning);
+    }
+
     public void Show()
     {
         if (_notifyIcon is { Visible: true })
