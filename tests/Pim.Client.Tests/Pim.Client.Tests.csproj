@@ -21,6 +21,7 @@
     <!-- 显式列出用例文件：清单即范围，新增文件时必须显式加入（避免"悄悄不被执行"） -->
     <Compile Include="../ClientWindows/ApiClientDefaultsTests.cs" />
     <Compile Include="../ClientWindows/AuthServiceTests.cs" />
+    <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/AwBucketSelectionTests.cs" />
     <Compile Include="../ClientWindows/BrowserBridgeServiceTests.cs" />
     <Compile Include="../ClientWindows/ContractBoundaryTests.cs" />

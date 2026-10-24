@@ -168,6 +168,21 @@ public partial class App : Application
             AutoStartManager.Set(config.AutoStart);
             var apiClient = Services.GetRequiredService<ApiClient>();
             var authService = Services.GetRequiredService<AuthService>();
+            // 后台续期/迁移的持久化失败也必须可见（不只启动时检查一次）。
+            authService.TokenSaveFailed += status =>
+            {
+                var text = TokenSaveUserMessage(status);
+                Logger.Warn(text);
+                BootstrapLog.Write(text);
+                try
+                {
+                    _trayIcon?.NotifyWarning(text);
+                }
+                catch
+                {
+                    // 通知失败不影响主流程；日志已落。
+                }
+            };
             if (!string.IsNullOrEmpty(config.ServerUrl))
             {
                 var serverUrl = ApiClient.NormalizeServerUrl(config.ServerUrl);
@@ -197,11 +212,13 @@ public partial class App : Application
             {
                 Logger.Info($"Authenticated as {authService.CurrentUsername} (token restored)");
                 BootstrapLog.Write("Token restored; already authenticated");
+                WarnIfTokenSaveFailed(authService, "token restore");
             }
             else if (restoreResult == TokenRestoreResult.PendingNetwork)
             {
                 Logger.Info($"Saved token found for {authService.CurrentUsername}, but network unreachable at startup; daemon will refresh in background");
                 BootstrapLog.Write("Token saved but network unreachable; will refresh in background");
+                WarnIfTokenSaveFailed(authService, "token restore");
             }
             else
             {
@@ -213,6 +230,7 @@ public partial class App : Application
                 {
                     Logger.Info($"Authenticated as {authService.CurrentUsername}");
                     BootstrapLog.Write("Authenticated after login");
+                    WarnIfTokenSaveFailed(authService, "login");
                 }
                 else
                 {
@@ -517,6 +535,40 @@ public partial class App : Application
             }
         }
     }
+
+    /// <summary>
+    /// 令牌持久化失败必须可见：登录/恢复的成功状态只代表认证成功，
+    /// 「token 未加密/未落盘」不得被静默吞掉。消息不含 token/JSON 内容。
+    /// </summary>
+    private void WarnIfTokenSaveFailed(AuthService authService, string phase)
+    {
+        // NotAttempted = 本次没有写文件诉求（如正常加载已加密的 token），不是失败。
+        if (authService.LastSaveStatus is TokenSaveStatus.SavedEncrypted
+            or TokenSaveStatus.SavedPlaintext
+            or TokenSaveStatus.NotAttempted)
+        {
+            return;
+        }
+
+        var text = $"登录凭据保存失败（{phase}）：{TokenSaveUserMessage(authService.LastSaveStatus)}";
+        Logger.Warn(text);
+        BootstrapLog.Write(text);
+        try
+        {
+            _trayIcon?.NotifyWarning(text);
+        }
+        catch
+        {
+            // 通知失败不影响主流程；日志已落。
+        }
+    }
+
+    private static string TokenSaveUserMessage(TokenSaveStatus status) => status switch
+    {
+        TokenSaveStatus.EncryptionFailed => "Windows 加密失败，已拒绝写入明文凭据；本次登录可能无法在重启后恢复",
+        TokenSaveStatus.Failed => "凭据文件写入失败，已保留现有文件；本次登录可能无法在重启后恢复",
+        _ => "凭据持久化失败",
+    };
 
     protected override void OnExit(ExitEventArgs e)
     {
