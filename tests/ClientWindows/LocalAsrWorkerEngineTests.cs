@@ -115,18 +115,10 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
     public async Task ContentDigestMismatch_FailsBeforeExecutionAndSendsFailedAcks()
     {
         var bytes = new[] { "actual-segment-bytes"u8.ToArray() };
-        var claim = CreateClaim(bytes);
-        claim = claim with
+        var transport = new FakeTransport(CreateClaim(bytes), bytes)
         {
-            Segments = new[]
-            {
-                claim.Segments[0] with
-                {
-                    ContentSha256 = new string('a', 64),
-                },
-            },
+            ContentSha256Override = new string('a', 64),
         };
-        var transport = new FakeTransport(claim, bytes);
         var adapter = new FakeRuntimeAdapter("must-not-run");
         var engine = CreateEngine(transport, adapter, GoodSnapshot());
 
@@ -140,6 +132,137 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
         Assert.Equal(2, acks.Count);
         Assert.Equal(LocalAsrAckKind.SegmentFailed, acks[0].Kind);
         Assert.Equal(LocalAsrAckKind.AttemptFailed, acks[1].Kind);
+    }
+
+    [Fact]
+    public async Task InputManifestSourceAndActualContentDigests_AreKeptDistinct()
+    {
+        var bytes = "actual-binary-segment"u8.ToArray();
+        var claim = CreateClaim(new[] { bytes });
+        claim = claim with
+        {
+            Segments = new[]
+            {
+                claim.Segments[0] with { SourceSha256 = new string('d', 64) },
+            },
+        };
+        var segment = Assert.Single(claim.Segments);
+
+        Assert.Equal(new string('c', 64), claim.InputManifestSha256);
+        Assert.NotEqual(claim.InputManifestSha256, segment.SourceSha256);
+        Assert.NotEqual(segment.SourceSha256, Sha256(bytes));
+
+        var result = await CreateEngine(
+                new FakeTransport(claim, new[] { bytes }),
+                new FakeRuntimeAdapter("digest-separated"),
+                GoodSnapshot())
+            .ProcessOnceAsync(Scope, LocalAsrWorkTrigger.Automatic);
+
+        Assert.Equal(LocalAsrWorkerRunStatus.Completed, result.Status);
+    }
+
+    [Fact]
+    public async Task SparsePendingSegments_ExecuteOnlyTheClaimedSubset()
+    {
+        var bytes = new[]
+        {
+            "segment-one"u8.ToArray(),
+            "segment-two"u8.ToArray(),
+        };
+        var claim = CreateClaim(bytes);
+        claim = claim with
+        {
+            ExpectedSegments = 3,
+            Segments = new[]
+            {
+                claim.Segments[0] with { SegmentIndex = 1 },
+                claim.Segments[1] with { SegmentIndex = 2 },
+            },
+        };
+        var transport = new FakeTransport(claim, bytes);
+        var adapter = new FakeRuntimeAdapter("sparse");
+        var engine = CreateEngine(transport, adapter, GoodSnapshot());
+
+        var result = await engine.ProcessOnceAsync(Scope, LocalAsrWorkTrigger.Automatic);
+
+        Assert.Equal(LocalAsrWorkerRunStatus.Completed, result.Status);
+        Assert.Equal(new[] { 1, 2 }, result.Segments.Select(segment => segment.SegmentIndex));
+        Assert.Equal(2, adapter.CallCount);
+        Assert.Equal(
+            new[] { 1, 2, -1 },
+            transport.GetAcks().Select(ack => ack.SegmentIndex ?? -1));
+    }
+
+    [Fact]
+    public async Task EmptyPendingSegments_FailClosedWithoutRuntimeOrAck()
+    {
+        var claim = CreateClaim(new[] { "unused"u8.ToArray() }) with
+        {
+            Segments = Array.Empty<LocalAsrInputSegment>(),
+        };
+        var transport = new FakeTransport(claim, Array.Empty<byte[]>());
+        var adapter = new FakeRuntimeAdapter("must-not-run");
+        var engine = CreateEngine(transport, adapter, GoodSnapshot());
+
+        var result = await engine.ProcessOnceAsync(Scope, LocalAsrWorkTrigger.Automatic);
+
+        Assert.Equal(LocalAsrWorkerRunStatus.NoWork, result.Status);
+        Assert.Equal(LocalRuntimeReasonCodes.NoPendingSegments, result.ReasonCode);
+        Assert.False(result.TerminalAcknowledged);
+        Assert.Equal(0, adapter.CallCount);
+        Assert.Equal(0, transport.ContentOpenCount);
+        Assert.Empty(transport.GetAcks());
+    }
+
+    [Theory]
+    [InlineData(2, 2)]
+    [InlineData(0, 1)]
+    public async Task InvalidSparseSegmentIndex_IsRejected(int expectedSegments, int segmentIndex)
+    {
+        var bytes = new[] { "audio"u8.ToArray() };
+        var claim = CreateClaim(bytes);
+        claim = claim with
+        {
+            ExpectedSegments = expectedSegments,
+            Segments = new[]
+            {
+                claim.Segments[0] with { SegmentIndex = segmentIndex },
+            },
+        };
+        var transport = new FakeTransport(claim, bytes);
+        var adapter = new FakeRuntimeAdapter("must-not-run");
+        var engine = CreateEngine(transport, adapter, GoodSnapshot());
+
+        var result = await engine.ProcessOnceAsync(Scope, LocalAsrWorkTrigger.Automatic);
+
+        Assert.Equal(LocalAsrWorkerRunStatus.InvalidClaim, result.Status);
+        Assert.Equal(0, transport.ContentOpenCount);
+        Assert.Equal(0, adapter.CallCount);
+    }
+
+    [Fact]
+    public async Task DuplicateSparseSegmentIndex_IsRejectedBeforeContentRead()
+    {
+        var bytes = new[] { "audio"u8.ToArray() };
+        var claim = CreateClaim(bytes);
+        claim = claim with
+        {
+            ExpectedSegments = 3,
+            Segments = new[]
+            {
+                claim.Segments[0] with { SegmentIndex = 1 },
+                claim.Segments[0] with { SegmentIndex = 1 },
+            },
+        };
+        var transport = new FakeTransport(claim, new[] { bytes[0], bytes[0] });
+        var adapter = new FakeRuntimeAdapter("must-not-run");
+        var engine = CreateEngine(transport, adapter, GoodSnapshot());
+
+        var result = await engine.ProcessOnceAsync(Scope, LocalAsrWorkTrigger.Automatic);
+
+        Assert.Equal(LocalAsrWorkerRunStatus.InvalidClaim, result.Status);
+        Assert.Equal(0, transport.ContentOpenCount);
+        Assert.Equal(0, adapter.CallCount);
     }
 
     [Fact]
@@ -165,6 +288,35 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
         Assert.Equal(
             LocalAsrAckKind.AttemptFailed,
             Assert.Single(transport.GetAcks()).Kind);
+    }
+
+    [Fact]
+    public async Task ActualContentBeyondBound_FailsWithoutRuntimeEvenWhenClaimOmitsSize()
+    {
+        var bytes = "12345"u8.ToArray();
+        var claim = CreateClaim(new[] { bytes });
+        claim = claim with
+        {
+            Segments = new[]
+            {
+                claim.Segments[0] with { ExpectedContentBytes = null },
+            },
+        };
+        var transport = new FakeTransport(claim, new[] { bytes });
+        var adapter = new FakeRuntimeAdapter("must-not-run");
+        var engine = CreateEngine(
+            transport,
+            adapter,
+            GoodSnapshot(),
+            maxSegmentContentBytes: 4,
+            maxTotalContentBytes: 4);
+
+        var result = await engine.ProcessOnceAsync(Scope, LocalAsrWorkTrigger.Automatic);
+
+        Assert.Equal(LocalAsrWorkerRunStatus.Failed, result.Status);
+        Assert.Equal(LocalRuntimeReasonCodes.InputInvalid, result.ReasonCode);
+        Assert.Equal(0, adapter.CallCount);
+        Assert.True(result.TerminalAcknowledged);
     }
 
     [Fact]
@@ -265,12 +417,94 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task SameHostDifferentBasePath_CancelsRunAndWithdrawsOldScope()
+    {
+        var audio = new[] { "audio"u8.ToArray() };
+        var scopeA = new LocalAccountScope("https://api.example.test/tenant-a", "account-a");
+        var scopeB = new LocalAccountScope("https://api.example.test/tenant-b", "account-a");
+        var claim = CreateClaim(audio);
+        var transport = new FakeTransport(claim, audio);
+        var started = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var adapter = new FakeRuntimeAdapter(async (_, token) =>
+        {
+            started.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            throw new InvalidOperationException("unreachable");
+        });
+        var engine = CreateEngine(transport, adapter, GoodSnapshot());
+
+        var run = engine.ProcessOnceAsync(scopeA, LocalAsrWorkTrigger.Automatic);
+        await started.Task;
+        var switched = await engine.SwitchScopeAsync(scopeB);
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(LocalAsrWorkerRunStatus.ScopeChanged, result.Status);
+        Assert.True(switched.AccountSwitch.ActiveRunCancelled);
+        Assert.True(switched.AccountSwitch.CapabilityRevoked);
+        Assert.True(Assert.Single(transport.GetWithdrawals()).Scope.Matches(scopeA));
+        Assert.Empty(transport.GetAcks());
+    }
+
+    [Fact]
+    public async Task SameHostDifferentBasePath_UsesIndependentBackoffAndCheckpoint()
+    {
+        var scopeA = new LocalAccountScope("https://api.example.test/tenant-a", "account-a");
+        var scopeB = new LocalAccountScope("https://api.example.test/tenant-b", "account-a");
+        var backoff = new RuntimeBackoffStore(
+            Path.Combine(_root, "backoff-shared"),
+            new RuntimeBackoffPolicy(
+                MaxAutoAttempts: 2,
+                BaseDelaySeconds: 30,
+                MaxDelaySeconds: 60));
+        var unknown = new MutableResourceProvider(
+            ResourceSnapshot.Unknown(DateTimeOffset.UtcNow));
+        var engineA = CreateEngine(
+            new FakeTransport(new LocalAsrClaimResult(LocalAsrClaimStatus.NoWork, null)),
+            new FakeRuntimeAdapter("unused"),
+            () => unknown.Snapshot,
+            backoff);
+        var engineB = CreateEngine(
+            new FakeTransport(new LocalAsrClaimResult(LocalAsrClaimStatus.NoWork, null)),
+            new FakeRuntimeAdapter("unused"),
+            () => unknown.Snapshot,
+            backoff);
+
+        var firstA = await engineA.ProcessOnceAsync(scopeA, LocalAsrWorkTrigger.Automatic);
+        var firstB = await engineB.ProcessOnceAsync(scopeB, LocalAsrWorkTrigger.Automatic);
+        var secondA = await engineA.ProcessOnceAsync(scopeA, LocalAsrWorkTrigger.Automatic);
+
+        Assert.Equal(LocalAsrWorkerRunStatus.ResourceBlocked, firstA.Status);
+        Assert.Equal(LocalAsrWorkerRunStatus.ResourceBlocked, firstB.Status);
+        Assert.Equal(LocalAsrWorkerRunStatus.BackoffDeferred, secondA.Status);
+
+        var stateStore = CreateStateStore();
+        await stateStore.SaveAsync(new LocalAsrWorkerPersistedState(
+            scopeA.ServerBaseAddress,
+            scopeA.OwnerIdentity,
+            "node-a",
+            "attempt-a",
+            "lease-a",
+            7,
+            LocalAsrPersistedStage.Running,
+            null,
+            null,
+            DateTimeOffset.UtcNow));
+
+        Assert.NotNull(await stateStore.LoadAsync(scopeA, "node-a"));
+        Assert.Null(await stateStore.LoadAsync(scopeB, "node-a"));
+        Assert.Equal(
+            LocalAsrRestartRecoveryStatus.NoPriorState,
+            (await stateStore.RecoverAfterRestartAsync(scopeB, "node-a")).Status);
+    }
+
+    [Fact]
     public async Task Restart_ConvertsRunningLeaseToUnknownWithoutClaimingOrExecuting()
     {
         var now = DateTimeOffset.UtcNow;
         var stateStore = CreateStateStore();
         await stateStore.SaveAsync(new LocalAsrWorkerPersistedState(
-            Scope.ServerOrigin,
+            Scope.ServerBaseAddress,
             Scope.OwnerIdentity,
             "node-a",
             "attempt-old",
@@ -436,8 +670,8 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
                 index,
                 sourceOffset,
                 samples,
-                bytes.LongLength,
-                Sha256(bytes)));
+                ExpectedContentBytes: bytes.LongLength,
+                SourceSha256: Sha256(bytes)));
             sourceOffset = checked(sourceOffset + samples);
         }
 
@@ -461,6 +695,7 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
             Sha256("model"u8.ToArray()),
             new string('c', 64),
             sourceOffset,
+            segmentBytes.Count,
             segments,
             lease);
     }
@@ -590,6 +825,7 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
         private readonly List<LocalAsrAckRequest> _acks = new();
         private readonly List<LocalAsrWithdrawRequest> _withdrawals = new();
         private readonly List<LocalAsrSegmentContent> _contentStreams = new();
+        private readonly Dictionary<int, string> _contentSha256 = new();
 
         public FakeTransport(
             LocalAsrClaimedTask task,
@@ -599,7 +835,11 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
             Assert.Equal(task.Segments.Count, content.Count);
             _content = task.Segments
                 .Select((segment, index) => (segment.SegmentIndex, content[index]))
-                .ToDictionary(item => item.SegmentIndex, item => item.Item2);
+                .GroupBy(item => item.SegmentIndex)
+                .ToDictionary(group => group.Key, group => group.First().Item2);
+            _contentSha256 = _content.ToDictionary(
+                item => item.Key,
+                item => Sha256(item.Value));
         }
 
         public FakeTransport(LocalAsrClaimResult noWork)
@@ -612,6 +852,8 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
         public LocalAsrClaimResult? NoWork { get; }
 
         public string? ContentOriginOverride { get; set; }
+
+        public string? ContentSha256Override { get; set; }
 
         public Func<LocalAsrLease, CancellationToken, Task<LocalAsrRenewResult>>? RenewHandler { get; set; }
 
@@ -652,10 +894,10 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
                 lease.LeaseId,
                 lease.FencingToken,
                 segment.SegmentIndex,
-                _task.SourceSha256,
+                segment.SourceSha256 ?? string.Empty,
                 segment.SourceOffsetSamples,
                 segment.Samples,
-                segment.ContentSha256);
+                ContentSha256Override ?? _contentSha256[segment.SegmentIndex]);
             _contentStreams.Add(new LocalAsrSegmentContent(
                 new MemoryStream(
                     _content[segment.SegmentIndex],

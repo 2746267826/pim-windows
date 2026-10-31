@@ -101,8 +101,15 @@ public sealed record LocalAsrInputSegment(
     int SegmentIndex,
     long SourceOffsetSamples,
     long Samples,
-    long ContentBytes,
-    string ContentSha256);
+    int SourceFileIndex = 0,
+    string? SourceSha256 = null,
+    // 仅当服务端/测试明确声明时才比对；实际字节数/摘要以二进制响应为准。
+    long? ExpectedContentBytes = null,
+    string? ExpectedContentSha256 = null,
+    string? LeaseId = null,
+    string? AttemptId = null,
+    string? VersionId = null,
+    long? FencingToken = null);
 
 public sealed record LocalAsrClaimedTask(
     string AttemptId,
@@ -113,8 +120,11 @@ public sealed record LocalAsrClaimedTask(
     string ModelId,
     string ModelRevision,
     string ModelSha256,
-    string SourceSha256,
-    long SourceSamples,
+    // claim 里的 execution.InputSha256 是输入 manifest 哈希，不是 source 文件哈希。
+    string InputManifestSha256,
+    // 多文件输入没有可推导的单一总采样数；仅在服务端明确提供时用于边界校验。
+    long? SourceSamples,
+    int ExpectedSegments,
     IReadOnlyList<LocalAsrInputSegment> Segments,
     LocalAsrLease Lease);
 
@@ -195,6 +205,24 @@ public interface ILocalAsrNodeTransport
 
     Task<LocalAsrWithdrawResult> WithdrawAsync(
         LocalAsrWithdrawRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// App-facing worker seam. It exposes only the already bounded internal state
+/// machine; the generated ApiClient adapter is supplied later through
+/// <see cref="ILocalAsrNodeTransport"/>.
+/// </summary>
+public interface ILocalAsrWorkerRunner
+{
+    Task<LocalAsrWorkerRunResult> ProcessOnceAsync(
+        LocalAccountScope scope,
+        LocalAsrWorkTrigger trigger,
+        string? idempotencyKey = null,
+        CancellationToken cancellationToken = default);
+
+    Task<LocalAsrScopeSwitchResult> SwitchScopeAsync(
+        LocalAccountScope? newScope,
         CancellationToken cancellationToken = default);
 }
 

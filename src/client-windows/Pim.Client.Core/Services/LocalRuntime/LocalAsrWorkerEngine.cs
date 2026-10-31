@@ -12,7 +12,7 @@ namespace Pim.Client.Core.Services.LocalRuntime;
 /// owns resource gating, bounded input validation, process execution and durable
 /// account/lease lifecycle evidence.
 /// </summary>
-public sealed class LocalAsrWorkerEngine
+public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
 {
     private const int MaximumIdLength = 256;
     private const int MaximumLeaseTokenLength = 4096;
@@ -314,6 +314,19 @@ public sealed class LocalAsrWorkerEngine
         CancellationToken accountToken,
         CancellationToken callerToken)
     {
+        // 空 pending 子集表示“服务端没有返回待处理分片”，不是“零段执行成功”。
+        // 先 fail-closed no-work：不得伪造完成 ACK，也不得启动运行时。
+        if (task.Segments.Count == 0)
+        {
+            return new LocalAsrWorkerRunResult(
+                LocalAsrWorkerRunStatus.NoWork,
+                task.AttemptId,
+                LocalRuntimeReasonCodes.NoPendingSegments,
+                "claim returned an empty pending segment set",
+                Array.Empty<LocalAsrSegmentRunResult>(),
+                TerminalAcknowledged: false);
+        }
+
         using var abort = new CancellationTokenSource();
         using var linkedRun = CancellationTokenSource.CreateLinkedTokenSource(
             callerToken,
@@ -326,6 +339,7 @@ public sealed class LocalAsrWorkerEngine
         var control = new RunControl(task.Lease, _now());
         var renewTask = RenewLoopAsync(task, control, abort, linkedRenewal.Token);
         var segmentResults = new List<LocalAsrSegmentRunResult>(task.Segments.Count);
+        long totalContentBytes = 0;
         string? runDirectory = null;
         try
         {
@@ -339,6 +353,7 @@ public sealed class LocalAsrWorkerEngine
                         task,
                         segment,
                         runDirectory,
+                        _options.MaxTotalContentBytes - totalContentBytes,
                         linkedRun.Token)
                     .ConfigureAwait(false);
                 if (!materialized.Succeeded)
@@ -382,6 +397,8 @@ public sealed class LocalAsrWorkerEngine
                             linkedRun.Token)
                         .ConfigureAwait(false);
                 }
+
+                totalContentBytes = checked(totalContentBytes + materialized.BytesWritten);
 
                 LocalSpeechExecutionResult execution;
                 try
@@ -598,6 +615,7 @@ public sealed class LocalAsrWorkerEngine
         LocalAsrClaimedTask task,
         LocalAsrInputSegment segment,
         string runDirectory,
+        long remainingTotalBudget,
         CancellationToken cancellationToken)
     {
         var identity = new ApiContentIdentityBinding(
@@ -606,7 +624,7 @@ public sealed class LocalAsrWorkerEngine
             control.CurrentLease.LeaseId,
             control.CurrentLease.FencingToken,
             segment.SegmentIndex,
-            task.SourceSha256,
+            segment.SourceSha256 ?? string.Empty,
             segment.SourceOffsetSamples,
             segment.Samples);
 
@@ -683,12 +701,14 @@ public sealed class LocalAsrWorkerEngine
                     }
 
                     bytesWritten += read;
-                    if (bytesWritten > segment.ContentBytes
-                        || bytesWritten > _options.MaxSegmentContentBytes)
+                    if (bytesWritten > _options.MaxSegmentContentBytes
+                        || bytesWritten > remainingTotalBudget
+                        || (segment.ExpectedContentBytes is { } expected
+                            && bytesWritten > expected))
                     {
                         return MaterializedSegment.Failed(
                             LocalRuntimeReasonCodes.InputInvalid,
-                            "segment content exceeded its declared byte budget");
+                            "segment content exceeded its byte budget");
                     }
 
                     hash.AppendData(buffer, 0, read);
@@ -715,11 +735,11 @@ public sealed class LocalAsrWorkerEngine
                 ex.Message);
         }
 
-        if (bytesWritten != segment.ContentBytes)
+        if (segment.ExpectedContentBytes is { } declaredBytes && bytesWritten != declaredBytes)
         {
             return MaterializedSegment.Failed(
                 LocalRuntimeReasonCodes.SizeMismatch,
-                $"expected {segment.ContentBytes} bytes, received {bytesWritten}");
+                $"expected {declaredBytes} bytes, received {bytesWritten}");
         }
 
         var actualSha = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
@@ -730,7 +750,7 @@ public sealed class LocalAsrWorkerEngine
                 "actual segment bytes do not match the declared content digest");
         }
 
-        return MaterializedSegment.Success(destination);
+        return MaterializedSegment.Success(destination, bytesWritten);
     }
 
     private async Task RenewLoopAsync(
@@ -1023,7 +1043,7 @@ public sealed class LocalAsrWorkerEngine
     {
         await _stateStore.SaveAsync(
                 new LocalAsrWorkerPersistedState(
-                    scope.ServerOrigin,
+                    scope.ServerBaseAddress,
                     scope.OwnerIdentity,
                     _options.NodeId,
                     task.AttemptId,
@@ -1136,14 +1156,21 @@ public sealed class LocalAsrWorkerEngine
         }
 
         if (!LanguagePattern.IsMatch(task.Language)
-            || !LocalModelManifest.IsValidSha256(task.SourceSha256)
-            || task.SourceSamples <= 0)
+            || !LocalModelManifest.IsValidSha256(task.InputManifestSha256)
+            || task.SourceSamples is <= 0)
         {
             return "claim language or source identity is invalid";
         }
 
+        // ExpectedSegments 是 attempt 的全部固定分片总数；Segments 可能只是
+        // 「尚未成功」的稀疏子集（例如 total=3, segments=[1,2]）。
+        if (task.ExpectedSegments <= 0
+            || task.ExpectedSegments > _options.MaxSegmentCount)
+        {
+            return "claim expected segment count is outside the configured bound";
+        }
+
         if (task.Segments is null
-            || task.Segments.Count == 0
             || task.Segments.Count > _options.MaxSegmentCount)
         {
             return "claim segment count is outside the configured bound";
@@ -1154,24 +1181,32 @@ public sealed class LocalAsrWorkerEngine
         foreach (var segment in task.Segments)
         {
             if (segment.SegmentIndex < 0
+                || segment.SegmentIndex >= task.ExpectedSegments
                 || !indexes.Add(segment.SegmentIndex)
                 || segment.SourceOffsetSamples < 0
                 || segment.Samples <= 0
-                || segment.ContentBytes <= 0
-                || segment.ContentBytes > _options.MaxSegmentContentBytes
-                || !LocalModelManifest.IsValidSha256(segment.ContentSha256)
-                || segment.SourceOffsetSamples > task.SourceSamples - segment.Samples)
+                || segment.SourceFileIndex < 0
+                || !LocalModelManifest.IsValidSha256(segment.SourceSha256)
+                || segment.ExpectedContentBytes is <= 0
+                || segment.ExpectedContentBytes > _options.MaxSegmentContentBytes
+                || (segment.ExpectedContentSha256 is not null
+                    && !LocalModelManifest.IsValidSha256(segment.ExpectedContentSha256))
+                || (task.SourceSamples is { } sourceSamples
+                    && segment.SourceOffsetSamples > sourceSamples - segment.Samples))
             {
                 return "claim segment identity, sizes or digest is invalid";
             }
 
-            try
+            if (segment.ExpectedContentBytes is { } declaredBytes)
             {
-                totalBytes = checked(totalBytes + segment.ContentBytes);
-            }
-            catch (OverflowException)
-            {
-                return "claim total content size overflowed";
+                try
+                {
+                    totalBytes = checked(totalBytes + declaredBytes);
+                }
+                catch (OverflowException)
+                {
+                    return "claim total content size overflowed";
+                }
             }
 
             if (totalBytes > _options.MaxTotalContentBytes)
@@ -1188,7 +1223,7 @@ public sealed class LocalAsrWorkerEngine
         var accountRoot = Path.Combine(
             Path.GetFullPath(_options.StagingRoot),
             "accounts",
-            PathSafety.HashAccountKey(scope.ServerOrigin + "\n" + scope.OwnerIdentity),
+            PathSafety.HashAccountKey(scope.ServerBaseAddress + "\n" + scope.OwnerIdentity),
             "asr-worker");
         var runDirectory = Path.Combine(accountRoot, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(runDirectory);
@@ -1283,7 +1318,7 @@ public sealed class LocalAsrWorkerEngine
     private LocalAccountScope? CurrentScope()
     {
         var account = _accountGuard.CurrentAccountId;
-        var origin = _accountGuard.CurrentServerOrigin;
+        var origin = _accountGuard.CurrentServerBaseAddress;
         return account is null || origin is null
             ? null
             : new LocalAccountScope(origin, account);
@@ -1348,7 +1383,7 @@ public sealed class LocalAsrWorkerEngine
         !string.IsNullOrWhiteSpace(value) && value.Length <= MaximumLeaseTokenLength;
 
     private static string BackoffKey(LocalAccountScope scope) =>
-        PathSafety.HashAccountKey(scope.ServerOrigin + "\n" + scope.OwnerIdentity);
+        PathSafety.HashAccountKey(scope.ServerBaseAddress + "\n" + scope.OwnerIdentity);
 
     private sealed class RunControl
     {
@@ -1440,13 +1475,14 @@ public sealed class LocalAsrWorkerEngine
         bool Succeeded,
         string? Path,
         string? ErrorCode,
-        string? Detail)
+        string? Detail,
+        long BytesWritten)
     {
-        public static MaterializedSegment Success(string path) =>
-            new(true, path, null, null);
+        public static MaterializedSegment Success(string path, long bytesWritten) =>
+            new(true, path, null, null, bytesWritten);
 
         public static MaterializedSegment Failed(string? errorCode, string? detail) =>
-            new(false, null, errorCode, detail);
+            new(false, null, errorCode, detail, 0);
     }
 
     private sealed record RunAbortOutcome(

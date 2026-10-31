@@ -77,6 +77,66 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
     }
 
     [Fact]
+    public async Task InstalledVerifier_RejectsMetadataOnlyAndExactVersionDrift()
+    {
+        var model = CreateModelManifest();
+        var runtime = CreateRuntimeManifestFromHelper();
+        var modelStore = new ModelInstallStore(
+            _root,
+            new FakeDownloader(ModelBytes),
+            new FakeDiskSpaceProbe());
+        var runtimeStore = new RuntimeInstallStore(
+            _root,
+            new FakeDownloader(runtime.ArchiveBytes),
+            new FakeDiskSpaceProbe(),
+            stagingMarginBytes: 0);
+        var scope = Scope;
+        var verifier = new InstalledLocalAsrArtifactVerifier(
+            () => scope,
+            runtimeStore,
+            modelStore);
+
+        Assert.False(await verifier.VerifyAsync(runtime.Manifest, model.Manifest));
+
+        await modelStore.InstallAsync(model.Manifest, scope.OwnerIdentity);
+        await runtimeStore.InstallAsync(runtime.Manifest, scope.OwnerIdentity);
+
+        Assert.True(await verifier.VerifyAsync(runtime.Manifest, model.Manifest));
+        Assert.False(await verifier.VerifyAsync(
+            runtime.Manifest,
+            model.Manifest with { Revision = "metadata-only-mismatch" }));
+    }
+
+    [Fact]
+    public async Task InstalledVerifier_RehashesModelBeforeRegistrationProof()
+    {
+        var model = CreateModelManifest();
+        var runtime = CreateRuntimeManifestFromHelper();
+        var modelStore = new ModelInstallStore(
+            _root,
+            new FakeDownloader(ModelBytes),
+            new FakeDiskSpaceProbe());
+        var runtimeStore = new RuntimeInstallStore(
+            _root,
+            new FakeDownloader(runtime.ArchiveBytes),
+            new FakeDiskSpaceProbe(),
+            stagingMarginBytes: 0);
+        await modelStore.InstallAsync(model.Manifest, Scope.OwnerIdentity);
+        await runtimeStore.InstallAsync(runtime.Manifest, Scope.OwnerIdentity);
+        var verifier = new InstalledLocalAsrArtifactVerifier(
+            () => Scope,
+            runtimeStore,
+            modelStore);
+        Assert.True(await verifier.VerifyAsync(runtime.Manifest, model.Manifest));
+
+        var installedModel = Assert.Single(
+            Directory.EnumerateFiles(_root, "model.bin", SearchOption.AllDirectories));
+        await File.WriteAllTextAsync(installedModel, "tampered-model");
+
+        Assert.False(await verifier.VerifyAsync(runtime.Manifest, model.Manifest));
+    }
+
+    [Fact]
     public async Task Execute_TamperedRuntimeDll_IsRejectedBeforeLaunch()
     {
         var model = CreateModelManifest();

@@ -6,33 +6,44 @@ public sealed record LocalAccountScope
 {
     public LocalAccountScope(string serverOrigin, string ownerIdentity)
     {
-        ServerOrigin = NormalizeServerOrigin(serverOrigin);
+        (ServerOrigin, BasePath) = NormalizeServerScope(serverOrigin);
         OwnerIdentity = NormalizeOwnerIdentity(ownerIdentity);
     }
 
     public string ServerOrigin { get; }
 
+    /// <summary>
+    /// API 部署子路径（没有子路径时为空串）。ApiClient 的 base URL 必须保留它；
+    /// 仅把 origin 当作作用域会把同主机不同子路径误判为同一账号边界。
+    /// </summary>
+    public string BasePath { get; }
+
+    public string ServerBaseAddress =>
+        BasePath.Length == 0 ? ServerOrigin : ServerOrigin + BasePath;
+
     public string OwnerIdentity { get; }
 
     public bool Matches(LocalAccountScope other) =>
         string.Equals(ServerOrigin, other.ServerOrigin, StringComparison.Ordinal)
+        && string.Equals(BasePath, other.BasePath, StringComparison.Ordinal)
         && string.Equals(OwnerIdentity, other.OwnerIdentity, StringComparison.Ordinal);
 
-    private static string NormalizeServerOrigin(string serverOrigin)
+    private static (string Origin, string BasePath) NormalizeServerScope(string serverOrigin)
     {
         if (!Uri.TryCreate(serverOrigin, UriKind.Absolute, out var uri)
             || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
             || !string.IsNullOrEmpty(uri.UserInfo)
             || !string.IsNullOrEmpty(uri.Query)
-            || !string.IsNullOrEmpty(uri.Fragment)
-            || (uri.AbsolutePath.Length > 1))
+            || !string.IsNullOrEmpty(uri.Fragment))
         {
             throw new ArgumentException(
-                "server origin must be an absolute http(s) origin without path, query or userinfo",
+                "server address must be an absolute http(s) URL without query, fragment or userinfo",
                 nameof(serverOrigin));
         }
 
-        return uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+        var origin = uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+        var basePath = uri.AbsolutePath.TrimEnd('/');
+        return (origin, string.Equals(basePath, "/", StringComparison.Ordinal) ? string.Empty : basePath);
     }
 
     private static string NormalizeOwnerIdentity(string ownerIdentity)
@@ -50,7 +61,7 @@ public sealed record NodeCapabilitySnapshot(
     string AccountId,
     IReadOnlyList<string> ExecutableModelIds,
     DateTimeOffset RegisteredAtUtc,
-    string? ServerOrigin = null);
+    string? ServerBaseAddress = null);
 
 public sealed record AccountSwitchResult(
     string? PreviousAccountId,
@@ -67,7 +78,7 @@ public sealed class LocalRuntimeAccountGuard
 {
     private readonly object _sync = new();
     private string? _accountId;
-    private string? _serverOrigin;
+    private string? _serverBaseAddress;
     private CancellationTokenSource? _activeRun;
     private NodeCapabilitySnapshot? _capability;
 
@@ -88,7 +99,21 @@ public sealed class LocalRuntimeAccountGuard
         {
             lock (_sync)
             {
-                return _serverOrigin;
+                return _serverBaseAddress is null
+                    ? null
+                    : new Uri(_serverBaseAddress, UriKind.Absolute)
+                        .GetLeftPart(UriPartial.Authority);
+            }
+        }
+    }
+
+    public string? CurrentServerBaseAddress
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _serverBaseAddress;
             }
         }
     }
@@ -110,7 +135,7 @@ public sealed class LocalRuntimeAccountGuard
     public CancellationToken BeginRun(LocalAccountScope scope)
     {
         ArgumentNullException.ThrowIfNull(scope);
-        return BeginRunCore(scope.OwnerIdentity, scope.ServerOrigin);
+        return BeginRunCore(scope.OwnerIdentity, scope.ServerBaseAddress);
     }
 
     private CancellationToken BeginRunCore(string accountId, string? serverOrigin)
@@ -121,13 +146,13 @@ public sealed class LocalRuntimeAccountGuard
         }
 
         accountId = accountId.Trim();
-        serverOrigin = NormalizeOptionalOrigin(serverOrigin);
+        serverOrigin = NormalizeOptionalServerBaseAddress(serverOrigin);
         lock (_sync)
         {
             if (_accountId is not null
                 && (!string.Equals(_accountId, accountId, StringComparison.Ordinal)
                     || !string.Equals(
-                        _serverOrigin,
+                        _serverBaseAddress,
                         serverOrigin,
                         StringComparison.Ordinal)))
             {
@@ -140,7 +165,7 @@ public sealed class LocalRuntimeAccountGuard
             }
 
             _accountId = accountId;
-            _serverOrigin = serverOrigin;
+            _serverBaseAddress = serverOrigin;
             _activeRun = new CancellationTokenSource();
             return _activeRun.Token;
         }
@@ -171,7 +196,7 @@ public sealed class LocalRuntimeAccountGuard
         IEnumerable<string> executableModelIds)
     {
         ArgumentNullException.ThrowIfNull(scope);
-        RegisterCapabilityCore(scope.OwnerIdentity, scope.ServerOrigin, executableModelIds);
+        RegisterCapabilityCore(scope.OwnerIdentity, scope.ServerBaseAddress, executableModelIds);
     }
 
     private void RegisterCapabilityCore(
@@ -186,13 +211,13 @@ public sealed class LocalRuntimeAccountGuard
 
         ArgumentNullException.ThrowIfNull(executableModelIds);
         accountId = accountId.Trim();
-        serverOrigin = NormalizeOptionalOrigin(serverOrigin);
+        serverOrigin = NormalizeOptionalServerBaseAddress(serverOrigin);
         lock (_sync)
         {
             if (_accountId is not null
                 && (!string.Equals(_accountId, accountId, StringComparison.Ordinal)
                     || !string.Equals(
-                        _serverOrigin,
+                        _serverBaseAddress,
                         serverOrigin,
                         StringComparison.Ordinal)))
             {
@@ -201,7 +226,7 @@ public sealed class LocalRuntimeAccountGuard
             }
 
             _accountId = accountId;
-            _serverOrigin = serverOrigin;
+            _serverBaseAddress = serverOrigin;
             _capability = new NodeCapabilitySnapshot(
                 accountId,
                 executableModelIds.Distinct(StringComparer.Ordinal).ToArray(),
@@ -216,7 +241,7 @@ public sealed class LocalRuntimeAccountGuard
             nextOrigin: null);
 
     public Task<AccountSwitchResult> SwitchScopeAsync(LocalAccountScope? newScope)
-        => SwitchScopeCore(newScope?.OwnerIdentity, newScope?.ServerOrigin);
+        => SwitchScopeCore(newScope?.OwnerIdentity, newScope?.ServerBaseAddress);
 
     private Task<AccountSwitchResult> SwitchScopeCore(
         string? nextAccount,
@@ -226,7 +251,7 @@ public sealed class LocalRuntimeAccountGuard
         {
             var previous = _accountId;
             if (string.Equals(previous, nextAccount, StringComparison.Ordinal)
-                && string.Equals(_serverOrigin, nextOrigin, StringComparison.Ordinal))
+                && string.Equals(_serverBaseAddress, nextOrigin, StringComparison.Ordinal))
             {
                 return Task.FromResult(new AccountSwitchResult(previous, previous, false, false));
             }
@@ -244,18 +269,18 @@ public sealed class LocalRuntimeAccountGuard
             var revoked = _capability is not null;
             _capability = null;
             _accountId = nextAccount;
-            _serverOrigin = nextOrigin;
+            _serverBaseAddress = nextOrigin;
             return Task.FromResult(new AccountSwitchResult(previous, nextAccount, cancelled, revoked));
         }
     }
 
-    private static string? NormalizeOptionalOrigin(string? serverOrigin)
+    private static string? NormalizeOptionalServerBaseAddress(string? serverOrigin)
     {
         if (serverOrigin is null)
         {
             return null;
         }
 
-        return new LocalAccountScope(serverOrigin, "scope-validation").ServerOrigin;
+        return new LocalAccountScope(serverOrigin, "scope-validation").ServerBaseAddress;
     }
 }

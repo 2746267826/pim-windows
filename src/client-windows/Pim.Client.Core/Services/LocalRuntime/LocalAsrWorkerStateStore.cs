@@ -41,7 +41,7 @@ public sealed class LocalAsrWorkerStateStore
     {
         ArgumentNullException.ThrowIfNull(scope);
         ValidateNodeId(nodeId);
-        var path = StatePath(scope.ServerOrigin, scope.OwnerIdentity, nodeId);
+        var path = StatePath(scope.ServerBaseAddress, scope.OwnerIdentity, nodeId);
         try
         {
             if (!File.Exists(path))
@@ -57,7 +57,7 @@ public sealed class LocalAsrWorkerStateStore
             }
 
             ValidateState(state);
-            return string.Equals(state.ServerOrigin, scope.ServerOrigin, StringComparison.Ordinal)
+            return string.Equals(state.ServerOrigin, scope.ServerBaseAddress, StringComparison.Ordinal)
                    && string.Equals(state.OwnerIdentity, scope.OwnerIdentity, StringComparison.Ordinal)
                    && string.Equals(state.NodeId, nodeId, StringComparison.Ordinal)
                 ? state

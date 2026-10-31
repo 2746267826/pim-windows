@@ -52,6 +52,29 @@ public class LocalRuntimeAccountGuardTests
     }
 
     [Fact]
+    public async Task SameOwnerOnSameHostDifferentBasePath_CancelsRunAndRevokesCapability()
+    {
+        var guard = new LocalRuntimeAccountGuard();
+        var first = new LocalAccountScope("https://api.example.test/tenant-a", "account-a");
+        var second = new LocalAccountScope("https://api.example.test/tenant-b", "account-a");
+        var runToken = guard.BeginRun(first);
+        guard.RegisterCapability(first, new[] { "model-a" });
+
+        Assert.Equal(
+            "https://api.example.test/tenant-a",
+            Assert.IsType<NodeCapabilitySnapshot>(guard.Capability).ServerBaseAddress);
+
+        var result = await guard.SwitchScopeAsync(second);
+
+        Assert.True(runToken.IsCancellationRequested);
+        Assert.True(result.ActiveRunCancelled);
+        Assert.True(result.CapabilityRevoked);
+        Assert.Null(guard.Capability);
+        Assert.Equal("https://api.example.test", guard.CurrentServerOrigin);
+        Assert.Equal("https://api.example.test/tenant-b", guard.CurrentServerBaseAddress);
+    }
+
+    [Fact]
     public void Run_IsPinnedToStartingServerOrigin()
     {
         var guard = new LocalRuntimeAccountGuard();

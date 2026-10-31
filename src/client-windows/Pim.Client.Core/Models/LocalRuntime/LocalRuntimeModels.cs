@@ -225,7 +225,9 @@ public sealed record LocalRuntimeCatalog(
 
 public sealed record LocalRuntimeCatalogParseResult(
     LocalRuntimeCatalog Catalog,
-    IReadOnlyList<string> Errors);
+    IReadOnlyList<string> Errors,
+    string? CatalogId = null,
+    string? CandidateStatus = null);
 
 public enum ModelInstallState
 {
@@ -412,6 +414,7 @@ public static class LocalRuntimeReasonCodes
     public const string InvalidConfiguration = "invalid-configuration";
     public const string ClaimInvalid = "claim-invalid";
     public const string InputInvalid = "input-invalid";
+    public const string NoPendingSegments = "no-pending-segments";
     public const string LeaseInvalid = "lease-invalid";
     public const string LeaseExpired = "lease-expired";
     public const string RenewFailed = "renew-failed";
