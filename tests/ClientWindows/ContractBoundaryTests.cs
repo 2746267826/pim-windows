@@ -97,7 +97,7 @@ public class ContractBoundaryTests
     [Fact]
     public void GeneratedArtifacts_ExistAndEmbedTheContractSnapshotHash()
     {
-        var snapshotHash = Sha256(RepoPath("contract", "openapi.json"));
+        var snapshotHash = CanonicalSha256(RepoPath("contract", "openapi.json"));
 
         foreach (var relative in GeneratedArtifacts)
         {
@@ -165,10 +165,31 @@ public class ContractBoundaryTests
         }
     }
 
-    private static string Sha256(string path)
+    /// <summary>
+    /// The generator hashes the contract bytes on the canonical LF checkout
+    /// (`args.contract.read_bytes()` in scripts/contract/generate-csharp.py).
+    /// Windows working trees may materialize CRLF; normalize only line endings so
+    /// this test verifies the same canonical bytes as the generator without
+    /// touching generated files.
+    /// </summary>
+    private static string CanonicalSha256(string path)
     {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        var bytes = File.ReadAllBytes(path);
+        var normalized = new byte[bytes.Length];
+        var length = 0;
+        for (var index = 0; index < bytes.Length; index++)
+        {
+            if (bytes[index] == (byte)'\r'
+                && index + 1 < bytes.Length
+                && bytes[index + 1] == (byte)'\n')
+            {
+                continue;
+            }
+
+            normalized[length++] = bytes[index];
+        }
+
+        return Convert.ToHexString(SHA256.HashData(normalized.AsSpan(0, length))).ToLowerInvariant();
     }
 
     private static string RepoPath(params string[] parts)

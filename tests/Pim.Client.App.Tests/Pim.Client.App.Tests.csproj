@@ -33,6 +33,7 @@
     <Compile Include="../ClientWindows/WindowsStatusCenterTests.cs" />
     <Compile Include="../ClientWindows/LocalModelSectionViewTests.cs" />
     <Compile Include="../ClientWindows/WindowsControlledProcessRunnerTests.cs" />
+    <Compile Include="../ClientWindows/WindowsResourceSnapshotProviderTests.cs" />
   </ItemGroup>
 
   <ItemGroup>

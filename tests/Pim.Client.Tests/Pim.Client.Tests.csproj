@@ -20,6 +20,7 @@
   <ItemGroup>
     <!-- 显式列出用例文件：清单即范围，新增文件时必须显式加入（避免"悄悄不被执行"） -->
     <Compile Include="../ClientWindows/ApiClientDefaultsTests.cs" />
+    <Compile Include="../ClientWindows/ArtifactDownloaderSecurityTests.cs" />
     <Compile Include="../ClientWindows/AuthServiceTests.cs" />
     <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/AwBucketSelectionTests.cs" />
@@ -34,6 +35,7 @@
     <Compile Include="../ClientWindows/KeyStatsOneClickFixServiceTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsProcessManagerTests.cs" />
     <Compile Include="../ClientWindows/ControlledProcessRunnerCoreTests.cs" />
+    <Compile Include="../ClientWindows/CpuLoadSamplerTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeCatalogTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeAccountGuardTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeResourceBackoffTests.cs" />

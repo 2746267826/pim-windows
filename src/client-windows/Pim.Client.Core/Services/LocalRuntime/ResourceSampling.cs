@@ -31,6 +31,8 @@ public sealed class MockResourceSnapshotProvider : IResourceSnapshotProvider
 /// </summary>
 public sealed class WindowsResourceSnapshotProvider : IResourceSnapshotProvider
 {
+    private readonly CpuLoadSampler _cpuLoadSampler = new(ReadSystemTimes);
+
     public Task<ResourceSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -57,12 +59,25 @@ public sealed class WindowsResourceSnapshotProvider : IResourceSnapshotProvider
         return Task.FromResult(new ResourceSnapshot(
             DateTimeOffset.UtcNow,
             LogicalProcessorCount: Environment.ProcessorCount,
-            CpuLoadPercent: null,
+            CpuLoadPercent: _cpuLoadSampler.Sample(),
             AvailableMemoryBytes: availableMemory,
             VramAvailableBytes: null,
             IsOnAcPower: acPower,
             BatteryPercent: batteryPercent));
     }
+
+    private static CpuTimes ReadSystemTimes()
+    {
+        if (!GetSystemTimes(out var idle, out var kernel, out var user))
+        {
+            throw new InvalidOperationException("GetSystemTimes failed");
+        }
+
+        return new CpuTimes(ToUInt64(idle), ToUInt64(kernel), ToUInt64(user));
+    }
+
+    private static ulong ToUInt64(FileTime value) =>
+        ((ulong)value.HighDateTime << 32) | value.LowDateTime;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MemoryStatusEx
@@ -89,6 +104,13 @@ public sealed class WindowsResourceSnapshotProvider : IResourceSnapshotProvider
         public uint BatteryFullLifeTime;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileTime
+    {
+        public uint LowDateTime;
+        public uint HighDateTime;
+    }
+
     [DllImport("kernel32.dll", SetLastError = false)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GlobalMemoryStatusEx(ref MemoryStatusEx buffer);
@@ -96,4 +118,58 @@ public sealed class WindowsResourceSnapshotProvider : IResourceSnapshotProvider
     [DllImport("kernel32.dll", SetLastError = false)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetSystemPowerStatus(out SystemPowerStatus systemPowerStatus);
+
+    [DllImport("kernel32.dll", SetLastError = false)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetSystemTimes(
+        out FileTime idleTime,
+        out FileTime kernelTime,
+        out FileTime userTime);
+}
+
+public readonly record struct CpuTimes(ulong Idle, ulong Kernel, ulong User);
+
+/// <summary>
+/// Converts two cumulative GetSystemTimes readings into a busy ratio. The first
+/// reading has no delta and therefore stays unknown; the next non-zero delta yields
+/// a real percentage. Zero-delta samples stay unknown without discarding the last
+/// baseline.
+/// </summary>
+public sealed class CpuLoadSampler
+{
+    private readonly Func<CpuTimes> _read;
+    private readonly object _sync = new();
+    private CpuTimes? _previous;
+
+    public CpuLoadSampler(Func<CpuTimes> read)
+    {
+        _read = read;
+    }
+
+    public double? Sample()
+    {
+        var current = _read();
+        lock (_sync)
+        {
+            if (_previous is not { } previous)
+            {
+                _previous = current;
+                return null;
+            }
+
+            var idleDelta = current.Idle >= previous.Idle ? current.Idle - previous.Idle : 0;
+            var kernelDelta = current.Kernel >= previous.Kernel ? current.Kernel - previous.Kernel : 0;
+            var userDelta = current.User >= previous.User ? current.User - previous.User : 0;
+            var totalDelta = kernelDelta + userDelta;
+            if (totalDelta == 0)
+            {
+                return null;
+            }
+
+            _previous = current;
+            var boundedIdle = Math.Min(idleDelta, totalDelta);
+            var busy = totalDelta - boundedIdle;
+            return Math.Clamp(busy * 100.0 / totalDelta, 0, 100);
+        }
+    }
 }

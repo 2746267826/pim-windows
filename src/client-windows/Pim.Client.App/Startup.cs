@@ -42,7 +42,7 @@ public static class Startup
         services.AddSingleton<EndpointCollectionBoundaryService>();
         services.AddSingleton<NotificationActionRouter>();
         services.AddSingleton<IArtifactDownloader>(
-            _ => new HttpArtifactDownloader(new HttpClient { Timeout = Timeout.InfiniteTimeSpan }));
+            _ => new HttpArtifactDownloader(HttpArtifactDownloader.CreateHttpClient()));
         services.AddSingleton<IDiskSpaceProbe, DriveInfoDiskSpaceProbe>();
         services.AddSingleton(sp => new ModelInstallStore(
             LocalRuntimePaths.DefaultRoot,

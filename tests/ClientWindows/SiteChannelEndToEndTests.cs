@@ -56,7 +56,11 @@ public sealed class SiteChannelEndToEndTests : IDisposable
                 using var reader = new System.IO.StreamReader(ctx.Request.InputStream, Encoding.UTF8);
                 var body = await reader.ReadToEndAsync();
                 received.TrySetResult(body);
-                var bytes = Encoding.UTF8.GetBytes("""{"code":0,"data":1}""");
+                // Int32ApiResponse also requires message/timestamp. Omitting them
+                // makes the client throw during deserialization, which previously
+                // requeued the batch while the stub had already received the body.
+                var bytes = Encoding.UTF8.GetBytes(
+                    """{"code":0,"data":1,"message":"ok","timestamp":"2026-09-03T00:00:00Z"}""");
                 ctx.Response.ContentType = "application/json";
                 ctx.Response.StatusCode = 200;
                 await ctx.Response.OutputStream.WriteAsync(bytes);
@@ -117,7 +121,9 @@ public sealed class SiteChannelEndToEndTests : IDisposable
         {
             await Task.Delay(200);
         }
-        Assert.True(_tracker.SiteEventsUploaded >= 2, $"uploaded counter {_tracker.SiteEventsUploaded}");
+        Assert.True(
+            _tracker.SiteEventsUploaded >= 2,
+            $"uploaded counter {_tracker.SiteEventsUploaded} failures={_tracker.SiteUploadFailures} lastError={_tracker.SiteLastError ?? "none"}");
         Assert.True(_tracker.SiteConnected, "site channel should report connected");
     }
 
