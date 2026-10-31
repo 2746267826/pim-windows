@@ -74,8 +74,9 @@ public sealed class ControlledProcessRunner : IControlledProcessRunner
                 null,
                 cancelled: true,
                 timedOut: false,
-                string.Empty,
-                string.Empty,
+                outputTruncated: false,
+                BoundedOutput.Empty,
+                BoundedOutput.Empty,
                 LocalRuntimeReasonCodes.ProcessCancelled,
                 started);
         }
@@ -187,30 +188,64 @@ public sealed class ControlledProcessRunner : IControlledProcessRunner
             var stderr = await AwaitOutputAsync(stderrTask).ConfigureAwait(false);
             if (cancelled)
             {
-                return Result(false, null, true, false, stdout, stderr, LocalRuntimeReasonCodes.ProcessCancelled, started);
+                return Result(
+                    false,
+                    null,
+                    cancelled: true,
+                    timedOut: false,
+                    outputTruncated: stdout.Truncated || stderr.Truncated,
+                    stdout,
+                    stderr,
+                    LocalRuntimeReasonCodes.ProcessCancelled,
+                    started);
             }
 
             if (timedOut)
             {
-                return Result(false, null, false, true, stdout, stderr, LocalRuntimeReasonCodes.ProcessTimedOut, started);
+                return Result(
+                    false,
+                    null,
+                    cancelled: false,
+                    timedOut: true,
+                    outputTruncated: stdout.Truncated || stderr.Truncated,
+                    stdout,
+                    stderr,
+                    LocalRuntimeReasonCodes.ProcessTimedOut,
+                    started);
             }
 
             var exitCode = process.ExitCode;
+            var outputTruncated = stdout.Truncated || stderr.Truncated;
+            var succeeded = exitCode == 0 && !outputTruncated;
             return Result(
-                exitCode == 0,
+                succeeded,
                 exitCode,
-                false,
-                false,
+                cancelled: false,
+                timedOut: false,
+                outputTruncated,
                 stdout,
                 stderr,
-                exitCode == 0 ? null : "process-exit-nonzero",
+                exitCode != 0
+                    ? "process-exit-nonzero"
+                    : outputTruncated
+                        ? LocalRuntimeReasonCodes.OutputTruncated
+                        : null,
                 started);
         }
         catch (OperationCanceledException)
         {
             KillBestEffort(process, job);
             await WaitForExitBestEffortAsync(process).ConfigureAwait(false);
-            return Result(false, null, true, false, string.Empty, string.Empty, LocalRuntimeReasonCodes.ProcessCancelled, started);
+            return Result(
+                false,
+                null,
+                cancelled: true,
+                timedOut: false,
+                outputTruncated: false,
+                BoundedOutput.Empty,
+                BoundedOutput.Empty,
+                LocalRuntimeReasonCodes.ProcessCancelled,
+                started);
         }
         catch (Exception ex) when (ex is InvalidOperationException
                                        or System.ComponentModel.Win32Exception
@@ -238,7 +273,7 @@ public sealed class ControlledProcessRunner : IControlledProcessRunner
         }
     }
 
-    private static async Task<string> ReadBoundedAsync(StreamReader reader, int maxChars)
+    private static async Task<BoundedOutput> ReadBoundedAsync(StreamReader reader, int maxChars)
     {
         var builder = new StringBuilder(Math.Min(maxChars, 16 * 1024));
         var buffer = new char[4096];
@@ -265,10 +300,10 @@ public sealed class ControlledProcessRunner : IControlledProcessRunner
             builder.Append("\n[output truncated]");
         }
 
-        return builder.ToString();
+        return new BoundedOutput(builder.ToString(), truncated);
     }
 
-    private static async Task<string> AwaitOutputAsync(Task<string> task)
+    private static async Task<BoundedOutput> AwaitOutputAsync(Task<BoundedOutput> task)
     {
         try
         {
@@ -276,7 +311,7 @@ public sealed class ControlledProcessRunner : IControlledProcessRunner
         }
         catch (TimeoutException)
         {
-            return string.Empty;
+            return new BoundedOutput(string.Empty, true);
         }
     }
 
@@ -338,15 +373,25 @@ public sealed class ControlledProcessRunner : IControlledProcessRunner
     }
 
     private static RuntimeLaunchResult Failure(string errorCode, long started) =>
-        Result(false, null, false, false, string.Empty, string.Empty, errorCode, started);
+        Result(
+            false,
+            null,
+            cancelled: false,
+            timedOut: false,
+            outputTruncated: false,
+            BoundedOutput.Empty,
+            BoundedOutput.Empty,
+            errorCode,
+            started);
 
     private static RuntimeLaunchResult Result(
         bool succeeded,
         int? exitCode,
         bool cancelled,
         bool timedOut,
-        string stdout,
-        string stderr,
+        bool outputTruncated,
+        BoundedOutput stdout,
+        BoundedOutput stderr,
         string? errorCode,
         long started) =>
         new(
@@ -354,8 +399,14 @@ public sealed class ControlledProcessRunner : IControlledProcessRunner
             exitCode,
             cancelled,
             timedOut,
-            stdout,
-            stderr,
+            outputTruncated,
+            stdout.Text,
+            stderr.Text,
             errorCode,
             Stopwatch.GetElapsedTime(started));
+
+    private sealed record BoundedOutput(string Text, bool Truncated)
+    {
+        public static BoundedOutput Empty { get; } = new(string.Empty, false);
+    }
 }

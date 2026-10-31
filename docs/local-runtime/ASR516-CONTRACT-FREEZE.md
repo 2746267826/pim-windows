@@ -39,6 +39,24 @@ operationId、字段名、可空性、枚举和错误码都必须来自唯一 Op
 sha256` 以及可信 API origin。即使服务端返回 `ContentEndpoint`/下载 URL，客户端也不能跟随任意
 origin、任意 redirect 或外部 URL 并携带 API token；内容请求只允许生成或批准的 explicit endpoint，
 响应摘要必须与 claim snapshot 一致。`ApiClient` 的显式 endpoint 边界必须保留，不增加裸 URL HTTP 入口。
+响应里的 `ServerOrigin` 只能用于与客户端已配置的 API origin 做精确一致性校验，不能被当作新的信任根；
+同一 owner 切换到不同 server origin 时仍必须停止旧 run、撤回旧 capability/lease，旧 token 不得跨 origin。
+
+摘要语义必须区分：
+
+- `SourceSha256`：claim snapshot 中整段源录音的摘要，只用于证明分片所属源文件/版本；
+- 分片响应实际字节摘要：由服务端按**实际返回的分片 WAV bytes**计算，客户端也必须对收到的 bytes
+  重新计算；两者比较，绝不能拿整源 `SourceSha256` 与分片 bytes 比较。
+
+真实契约还需把响应头/metadata 绑定到 `attemptId + versionId + segmentIndex + leaseId + fencingToken +
+SourceSha256 + SourceOffsetSamples + Samples + actual-content-sha256`。任一项不匹配都 fail-closed。
+stop/cancel/renew 还要冻结 `StopRequested` 的幂等读取、停止确认和 timeout 后 `Unknown` 语义；
+multipart schema（若采用）必须明确字段名、重复项、边界和实际内容摘要。
+
+客户端运行时输出必须是完整成功边界：stdout/stderr 超过有界预算时显式标记 `output-truncated`，
+整个运行失败，不能把截断文本当作 PlainText 转写结果，也不能据此生成成功 ACK。Whisper JSON 的根
+必须是 object；非 object、非法 offsets、超大 offset、空 transcription 或所有 segment 均无有效文本
+都必须稳定 fail-closed。只有顶层 `text` 为空且至少一个 segment 有有效文本时，才允许按 segment 聚合。
 
 ## 必须进入 schemas 的不可变字段
 

@@ -334,6 +334,7 @@ public sealed record RuntimeLaunchResult(
     int? ExitCode,
     bool Cancelled,
     bool TimedOut,
+    bool OutputTruncated,
     string StandardOutput,
     string StandardError,
     string? ErrorCode,
@@ -389,8 +390,12 @@ public static class LocalRuntimeReasonCodes
     public const string RuntimeNotInstalled = "runtime-not-installed";
     public const string RevisionMismatch = "revision-mismatch";
     public const string InputMissing = "input-missing";
+    public const string ContentBindingMismatch = "content-binding-mismatch";
+    public const string ContentSourceHashMismatch = "content-source-hash-mismatch";
+    public const string ContentDigestMismatch = "content-digest-mismatch";
     public const string InvalidExecutionProfile = "invalid-execution-profile";
     public const string OutputParseFailed = "output-parse-failed";
+    public const string OutputTruncated = "output-truncated";
     public const string ProcessStartFailed = "process-start-failed";
     public const string JobCreateFailed = "job-create-failed";
     public const string JobAssignFailed = "job-assign-failed";
@@ -404,6 +409,18 @@ public static class LocalRuntimeReasonCodes
     public const string ResourceVramInsufficient = "resource-vram-insufficient";
     public const string ResourcePowerUnknown = "resource-power-unknown";
     public const string ResourceOnBattery = "resource-on-battery";
+    public const string InvalidConfiguration = "invalid-configuration";
+    public const string ClaimInvalid = "claim-invalid";
+    public const string InputInvalid = "input-invalid";
+    public const string LeaseInvalid = "lease-invalid";
+    public const string LeaseExpired = "lease-expired";
+    public const string RenewFailed = "renew-failed";
+    public const string AckRejected = "ack-rejected";
+    public const string WorkerStopped = "worker-stopped";
+    public const string WorkerCancelled = "worker-cancelled";
+    public const string ScopeChanged = "scope-changed";
+    public const string TransportFailed = "transport-failed";
+    public const string RestartUnknown = "restart-unknown";
 }
 
 public static class PathSafety

@@ -14,6 +14,8 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
 {
     private static readonly byte[] ModelBytes = "synthetic-model"u8.ToArray();
     private static readonly byte[] InputBytes = "synthetic-input-audio"u8.ToArray();
+    private static readonly LocalAccountScope Scope =
+        new("https://api.example.test", "account-a");
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
         "pim-runtime-exec-" + Guid.NewGuid().ToString("N"));
@@ -63,7 +65,7 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
         var result = await adapter.ExecuteAsync(
             runtime.Manifest,
             model.Manifest,
-            new LocalSpeechExecutionRequest("account-a", input, "en"));
+            new LocalSpeechExecutionRequest(Scope, input, "en"));
 
         Assert.True(result.Succeeded, result.ErrorCode + " " + result.Detail);
         Assert.Equal("synthetic transcript", result.Text);
@@ -108,7 +110,7 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
         var result = await adapter.ExecuteAsync(
             runtime.Manifest,
             model.Manifest,
-            new LocalSpeechExecutionRequest("account-a", input, "en"));
+            new LocalSpeechExecutionRequest(Scope, input, "en"));
 
         Assert.False(result.Succeeded);
         Assert.Equal(LocalRuntimeReasonCodes.RuntimeNotInstalled, result.ErrorCode);
@@ -130,12 +132,200 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
             runtime.Manifest,
             model.Manifest,
             new LocalSpeechExecutionRequest(
-                "account-a",
+                Scope,
                 Path.Combine(_root, "missing.wav"),
                 "en"));
 
         Assert.False(result.Succeeded);
         Assert.Equal(LocalRuntimeReasonCodes.InputMissing, result.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Execute_WithoutExplicitAccountScope_FailsClosed()
+    {
+        var input = Path.Combine(_root, "input.wav");
+        Directory.CreateDirectory(_root);
+        await File.WriteAllBytesAsync(input, InputBytes);
+        var adapter = new LocalRuntimeExecutionAdapter(
+            null!,
+            null!,
+            null!,
+            new LocalRuntimeAccountGuard());
+
+        var result = await adapter.ExecuteAsync(
+            CreateRuntimeManifestFromHelper().Manifest,
+            CreateModelManifest().Manifest,
+            new LocalSpeechExecutionRequest("account-a", input, "en"));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalRuntimeReasonCodes.AccountRequired, result.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Execute_ScopeOwnerMismatch_FailsBeforeRuntimeAccess()
+    {
+        var input = Path.Combine(_root, "input.wav");
+        Directory.CreateDirectory(_root);
+        await File.WriteAllBytesAsync(input, InputBytes);
+        var adapter = new LocalRuntimeExecutionAdapter(
+            null!,
+            null!,
+            null!,
+            new LocalRuntimeAccountGuard());
+
+        var result = await adapter.ExecuteAsync(
+            CreateRuntimeManifestFromHelper().Manifest,
+            CreateModelManifest().Manifest,
+            new LocalSpeechExecutionRequest(
+                "account-a",
+                input,
+                "en",
+                new LocalAccountScope("https://api.example.test", "account-b")));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalRuntimeReasonCodes.OwnershipMismatch, result.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData("whisper-array")]
+    [InlineData("whisper-null")]
+    [InlineData("whisper-primitive")]
+    public async Task Execute_WhisperRootMustBeObject_FailsClosed(string mode)
+    {
+        var result = await ExecuteHelperModeAsync(new[] { "--mode", mode });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalRuntimeReasonCodes.OutputParseFailed, result.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Execute_WhisperHugeOffset_FailsClosed()
+    {
+        var result = await ExecuteHelperModeAsync(new[] { "--mode", "whisper-huge-offset" });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalRuntimeReasonCodes.OutputParseFailed, result.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Execute_WhisperSegmentsWithNoText_FailsClosed()
+    {
+        var result = await ExecuteHelperModeAsync(new[] { "--mode", "whisper-empty-segments" });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalRuntimeReasonCodes.OutputParseFailed, result.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Execute_WhisperEmptyTranscription_FailsClosed()
+    {
+        var result = await ExecuteHelperModeAsync(
+            new[] { "--mode", "whisper-empty-transcription" });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalRuntimeReasonCodes.OutputParseFailed, result.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Execute_WhisperEmptyTopText_UsesNonEmptySegmentText()
+    {
+        var result = await ExecuteHelperModeAsync(
+            new[] { "--mode", "whisper-empty-top-text" });
+
+        Assert.True(result.Succeeded, result.ErrorCode + " " + result.Detail);
+        Assert.Equal("segment transcript", result.Text);
+        Assert.Single(result.Segments);
+    }
+
+    [Fact]
+    public async Task Execute_PlainTextTruncatedOutput_IsNeverSuccessful()
+    {
+        var result = await ExecuteHelperModeAsync(
+            new[] { "--mode", "flood", "--bytes", (4 * 1024 * 1024 + 1).ToString() },
+            LocalRuntimeExecutionProfile.PlainText);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalRuntimeReasonCodes.OutputTruncated, result.ErrorCode);
+        Assert.True(result.Process?.OutputTruncated);
+    }
+
+    [Theory]
+    [InlineData(LocalRuntimeExecutionProfile.PlainText)]
+    [InlineData(LocalRuntimeExecutionProfile.WhisperCppJson)]
+    public async Task Execute_TruncatedFlagIsTerminalEvenIfRunnerClaimsSuccess(
+        string outputFormat)
+    {
+        var model = CreateModelManifest();
+        var runtime = CreateRuntimeManifestFromHelper(outputFormat: outputFormat);
+        var modelStore = new ModelInstallStore(
+            _root,
+            new FakeDownloader(ModelBytes),
+            new FakeDiskSpaceProbe());
+        var runtimeStore = new RuntimeInstallStore(
+            _root,
+            new FakeDownloader(runtime.ArchiveBytes),
+            new FakeDiskSpaceProbe(),
+            stagingMarginBytes: 0);
+        await modelStore.InstallAsync(model.Manifest, "account-a");
+        await runtimeStore.InstallAsync(runtime.Manifest, "account-a");
+        var input = Path.Combine(_root, "input.wav");
+        await File.WriteAllBytesAsync(input, InputBytes);
+        var adapter = new LocalRuntimeExecutionAdapter(
+            runtimeStore,
+            modelStore,
+            new StubProcessRunner(new RuntimeLaunchResult(
+                Succeeded: true,
+                ExitCode: 0,
+                Cancelled: false,
+                TimedOut: false,
+                OutputTruncated: true,
+                StandardOutput: "truncated text",
+                StandardError: string.Empty,
+                ErrorCode: null,
+                Duration: TimeSpan.Zero)),
+            new LocalRuntimeAccountGuard());
+
+        var result = await adapter.ExecuteAsync(
+            runtime.Manifest,
+            model.Manifest,
+            new LocalSpeechExecutionRequest(Scope, input, "en"));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalRuntimeReasonCodes.OutputTruncated, result.ErrorCode);
+        Assert.True(result.Process?.OutputTruncated);
+        Assert.Empty(result.Text);
+        Assert.Empty(result.Segments);
+    }
+
+    private async Task<LocalSpeechExecutionResult> ExecuteHelperModeAsync(
+        IReadOnlyList<string> arguments,
+        string outputFormat = LocalRuntimeExecutionProfile.WhisperCppJson)
+    {
+        var model = CreateModelManifest();
+        var runtime = CreateRuntimeManifestFromHelper(arguments, outputFormat);
+        var modelStore = new ModelInstallStore(
+            _root,
+            new FakeDownloader(ModelBytes),
+            new FakeDiskSpaceProbe());
+        var runtimeStore = new RuntimeInstallStore(
+            _root,
+            new FakeDownloader(runtime.ArchiveBytes),
+            new FakeDiskSpaceProbe(),
+            stagingMarginBytes: 0);
+        await modelStore.InstallAsync(model.Manifest, "account-a");
+        await runtimeStore.InstallAsync(runtime.Manifest, "account-a");
+        var input = Path.Combine(_root, "input.wav");
+        await File.WriteAllBytesAsync(input, InputBytes);
+        var adapter = new LocalRuntimeExecutionAdapter(
+            runtimeStore,
+            modelStore,
+            new ControlledProcessRunner(),
+            new LocalRuntimeAccountGuard());
+
+        return await adapter.ExecuteAsync(
+            runtime.Manifest,
+            model.Manifest,
+            new LocalSpeechExecutionRequest(Scope, input, "en"));
     }
 
     private static (LocalModelManifest Manifest, byte[] Bytes) CreateModelManifest() =>
@@ -153,7 +343,9 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
             new LocalResourceRequirements(CpuCores: 1, MemoryBytes: 1024)),
         ModelBytes);
 
-    private static (LocalRuntimeManifest Manifest, byte[] ArchiveBytes) CreateRuntimeManifestFromHelper()
+    private static (LocalRuntimeManifest Manifest, byte[] ArchiveBytes) CreateRuntimeManifestFromHelper(
+        IReadOnlyList<string>? arguments = null,
+        string outputFormat = LocalRuntimeExecutionProfile.WhisperCppJson)
     {
         var helperDirectory = Path.Combine(AppContext.BaseDirectory, "helper");
         var executablePath = Path.Combine(helperDirectory, "Pim.LocalRuntime.Helper.exe");
@@ -196,7 +388,7 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
             "Pim.LocalRuntime.Helper.exe",
             required,
             new LocalRuntimeExecutionProfile(
-                new[]
+                arguments ?? new[]
                 {
                     "--mode", "whisper-json",
                     "--model", "{modelPath}",
@@ -204,7 +396,7 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
                     "--language", "{language}",
                 },
                 TimeSpan.FromSeconds(30),
-                LocalRuntimeExecutionProfile.WhisperCppJson)), bytes);
+                outputFormat)), bytes);
     }
 
     private static string Sha256(byte[] bytes) =>
@@ -236,5 +428,20 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
     private sealed class FakeDiskSpaceProbe : IDiskSpaceProbe
     {
         public long GetAvailableFreeBytes(string directoryPath) => 1024L * 1024 * 1024;
+    }
+
+    private sealed class StubProcessRunner : IControlledProcessRunner
+    {
+        private readonly RuntimeLaunchResult _result;
+
+        public StubProcessRunner(RuntimeLaunchResult result)
+        {
+            _result = result;
+        }
+
+        public Task<RuntimeLaunchResult> StartAsync(
+            RuntimeLaunchSpec spec,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(_result);
     }
 }

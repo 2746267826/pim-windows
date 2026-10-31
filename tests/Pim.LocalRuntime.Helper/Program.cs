@@ -44,6 +44,47 @@ internal static class Program
             case "whisper-json":
                 return WhisperJson(args);
 
+            case "whisper-array":
+                Console.Out.WriteLine("[]");
+                Console.Out.Flush();
+                return 0;
+
+            case "whisper-null":
+                Console.Out.WriteLine("null");
+                Console.Out.Flush();
+                return 0;
+
+            case "whisper-primitive":
+                Console.Out.WriteLine("42");
+                Console.Out.Flush();
+                return 0;
+
+            case "whisper-huge-offset":
+                Console.Out.WriteLine(
+                    "{\"transcription\":[{\"offsets\":{\"from\":9223372036854775807," +
+                    "\"to\":9223372036854775807},\"text\":\"transcript\"}],\"text\":\"transcript\"}");
+                Console.Out.Flush();
+                return 0;
+
+            case "whisper-empty-segments":
+                Console.Out.WriteLine(
+                    "{\"transcription\":[{\"offsets\":{\"from\":0,\"to\":100}," +
+                    "\"text\":\"   \"}],\"text\":\"\"}");
+                Console.Out.Flush();
+                return 0;
+
+            case "whisper-empty-transcription":
+                Console.Out.WriteLine("{\"transcription\":[],\"text\":\"\"}");
+                Console.Out.Flush();
+                return 0;
+
+            case "whisper-empty-top-text":
+                Console.Out.WriteLine(
+                    "{\"transcription\":[{\"offsets\":{\"from\":0,\"to\":100}," +
+                    "\"text\":\"segment transcript\"}],\"text\":\"\"}");
+                Console.Out.Flush();
+                return 0;
+
             default:
                 Console.Error.WriteLine("HELPER_UNKNOWN_MODE");
                 return 64;

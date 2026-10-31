@@ -7,7 +7,17 @@ namespace Pim.Client.Core.Services.LocalRuntime;
 public sealed record LocalSpeechExecutionRequest(
     string AccountId,
     string InputPath,
-    string Language = "auto");
+    string Language = "auto",
+    LocalAccountScope? Scope = null)
+{
+    public LocalSpeechExecutionRequest(
+        LocalAccountScope scope,
+        string inputPath,
+        string language = "auto")
+        : this(scope.OwnerIdentity, inputPath, language, scope)
+    {
+    }
+}
 
 public sealed record LocalSpeechTranscriptSegment(
     TimeSpan Start,
@@ -107,10 +117,27 @@ public sealed class LocalRuntimeExecutionAdapter : ILocalSpeechRuntimeAdapter
             return LocalSpeechExecutionResult.Failed(LocalRuntimeReasonCodes.InputMissing);
         }
 
+        var scope = request.Scope;
+        if (scope is null)
+        {
+            // A worker must carry the origin that issued the account identity. Falling
+            // back to an owner-only run would let an old origin's lease escape a switch.
+            return LocalSpeechExecutionResult.Failed(
+                LocalRuntimeReasonCodes.AccountRequired,
+                "an explicit server origin/owner scope is required");
+        }
+
+        if (!string.Equals(scope.OwnerIdentity, request.AccountId, StringComparison.Ordinal))
+        {
+            return LocalSpeechExecutionResult.Failed(
+                LocalRuntimeReasonCodes.OwnershipMismatch,
+                "request account does not match its server origin/owner scope");
+        }
+
         CancellationToken accountToken;
         try
         {
-            accountToken = _accountGuard.BeginRun(request.AccountId);
+            accountToken = _accountGuard.BeginRun(scope);
         }
         catch (InvalidOperationException ex)
         {
@@ -243,6 +270,14 @@ public sealed class LocalRuntimeExecutionAdapter : ILocalSpeechRuntimeAdapter
                     process);
             }
 
+            if (process.OutputTruncated)
+            {
+                return LocalSpeechExecutionResult.Failed(
+                    LocalRuntimeReasonCodes.OutputTruncated,
+                    "runtime output exceeded the bounded capture budget",
+                    process);
+            }
+
             if (string.Equals(
                     runtimeManifest.Execution.OutputFormat,
                     LocalRuntimeExecutionProfile.PlainText,
@@ -299,10 +334,25 @@ public sealed class LocalRuntimeExecutionAdapter : ILocalSpeechRuntimeAdapter
         {
             using var document = JsonDocument.Parse(process.StandardOutput);
             var root = document.RootElement;
-            var segments = new List<LocalSpeechTranscriptSegment>();
-            if (root.TryGetProperty("transcription", out var transcription)
-                && transcription.ValueKind == JsonValueKind.Array)
+            if (root.ValueKind != JsonValueKind.Object)
             {
+                return LocalSpeechExecutionResult.Failed(
+                    LocalRuntimeReasonCodes.OutputParseFailed,
+                    "whisper.cpp output root must be an object",
+                    process);
+            }
+
+            var segments = new List<LocalSpeechTranscriptSegment>();
+            if (root.TryGetProperty("transcription", out var transcription))
+            {
+                if (transcription.ValueKind != JsonValueKind.Array)
+                {
+                    return LocalSpeechExecutionResult.Failed(
+                        LocalRuntimeReasonCodes.OutputParseFailed,
+                        "transcription must be an array",
+                        process);
+                }
+
                 foreach (var item in transcription.EnumerateArray())
                 {
                     if (item.ValueKind != JsonValueKind.Object
@@ -338,14 +388,29 @@ public sealed class LocalRuntimeExecutionAdapter : ILocalSpeechRuntimeAdapter
                 }
             }
 
-            var aggregate = root.TryGetProperty("text", out var topLevelText)
-                            && topLevelText.ValueKind == JsonValueKind.String
-                ? topLevelText.GetString()?.Trim() ?? string.Empty
-                : string.Join(
-                    " ",
-                    segments.Select(segment => segment.Text)
-                        .Where(text => text.Length > 0));
-            if (aggregate.Length == 0 && segments.Count == 0)
+            string aggregate;
+            if (root.TryGetProperty("text", out var topLevelText))
+            {
+                if (topLevelText.ValueKind != JsonValueKind.String)
+                {
+                    return LocalSpeechExecutionResult.Failed(
+                        LocalRuntimeReasonCodes.OutputParseFailed,
+                        "text must be a string",
+                        process);
+                }
+
+                aggregate = topLevelText.GetString()?.Trim() ?? string.Empty;
+                if (aggregate.Length == 0)
+                {
+                    aggregate = AggregateSegmentText(segments);
+                }
+            }
+            else
+            {
+                aggregate = AggregateSegmentText(segments);
+            }
+
+            if (aggregate.Length == 0)
             {
                 return LocalSpeechExecutionResult.Failed(
                     LocalRuntimeReasonCodes.OutputParseFailed,
@@ -361,7 +426,7 @@ public sealed class LocalRuntimeExecutionAdapter : ILocalSpeechRuntimeAdapter
                 segments,
                 process);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or OverflowException)
         {
             return LocalSpeechExecutionResult.Failed(
                 LocalRuntimeReasonCodes.OutputParseFailed,
@@ -370,6 +435,13 @@ public sealed class LocalRuntimeExecutionAdapter : ILocalSpeechRuntimeAdapter
         }
     }
 
+    private static string AggregateSegmentText(
+        IReadOnlyList<LocalSpeechTranscriptSegment> segments) =>
+        string.Join(
+            " ",
+            segments.Select(segment => segment.Text)
+                .Where(text => text.Length > 0));
+
     private static bool TryReadOffset(
         JsonElement item,
         out TimeSpan start,
@@ -377,32 +449,49 @@ public sealed class LocalRuntimeExecutionAdapter : ILocalSpeechRuntimeAdapter
     {
         start = default;
         end = default;
-        if (item.TryGetProperty("offsets", out var offsets)
-            && offsets.ValueKind == JsonValueKind.Object
-            && offsets.TryGetProperty("from", out var from)
-            && offsets.TryGetProperty("to", out var to)
-            && from.TryGetInt64(out var fromMilliseconds)
-            && to.TryGetInt64(out var toMilliseconds))
+        if (item.TryGetProperty("offsets", out var offsets))
         {
-            start = TimeSpan.FromMilliseconds(fromMilliseconds);
-            end = TimeSpan.FromMilliseconds(toMilliseconds);
-            return true;
+            return offsets.ValueKind == JsonValueKind.Object
+                   && offsets.TryGetProperty("from", out var from)
+                   && offsets.TryGetProperty("to", out var to)
+                   && TryReadMilliseconds(from, out start)
+                   && TryReadMilliseconds(to, out end);
         }
 
-        if (item.TryGetProperty("timestamps", out var timestamps)
-            && timestamps.ValueKind == JsonValueKind.Object
-            && timestamps.TryGetProperty("from", out var fromText)
-            && timestamps.TryGetProperty("to", out var toText)
-            && fromText.ValueKind == JsonValueKind.String
-            && toText.ValueKind == JsonValueKind.String
-            && TimeSpan.TryParse(fromText.GetString(), out start)
-            && TimeSpan.TryParse(toText.GetString(), out end))
+        if (item.TryGetProperty("timestamps", out var timestamps))
         {
-            return true;
+            return timestamps.ValueKind == JsonValueKind.Object
+                   && timestamps.TryGetProperty("from", out var fromText)
+                   && timestamps.TryGetProperty("to", out var toText)
+                   && fromText.ValueKind == JsonValueKind.String
+                   && toText.ValueKind == JsonValueKind.String
+                   && TimeSpan.TryParse(fromText.GetString(), out start)
+                   && TimeSpan.TryParse(toText.GetString(), out end);
         }
 
         start = default;
         end = default;
         return false;
+    }
+
+    private static bool TryReadMilliseconds(JsonElement element, out TimeSpan value)
+    {
+        value = default;
+        if (!element.TryGetInt64(out var milliseconds)
+            || milliseconds < 0
+            || milliseconds > (long)TimeSpan.MaxValue.TotalMilliseconds)
+        {
+            return false;
+        }
+
+        try
+        {
+            value = TimeSpan.FromMilliseconds(milliseconds);
+            return true;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
     }
 }

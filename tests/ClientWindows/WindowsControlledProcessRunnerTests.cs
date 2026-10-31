@@ -75,7 +75,9 @@ public class WindowsControlledProcessRunnerTests
             TimeSpan.FromSeconds(30),
             maxOutputBytes: 4096);
 
-        Assert.True(result.Succeeded);
+        Assert.False(result.Succeeded);
+        Assert.True(result.OutputTruncated);
+        Assert.Equal(LocalRuntimeReasonCodes.OutputTruncated, result.ErrorCode);
         Assert.Contains("[output truncated]", result.StandardOutput);
         Assert.InRange(result.StandardOutput.Length, 4096, 4200);
     }

@@ -25,9 +25,9 @@ public sealed class MockResourceSnapshotProvider : IResourceSnapshotProvider
 }
 
 /// <summary>
-/// Windows sampling via kernel32 only. CPU load and available VRAM are not measured
-/// here yet, so they stay null: GPU-required models fail closed with
-/// resource-vram-unknown until real VRAM sampling is wired.
+/// Windows sampling via kernel32 only. CPU load is derived from consecutive
+/// GetSystemTimes readings; available VRAM remains unknown here, so GPU-required
+/// models fail closed with resource-vram-unknown until real VRAM sampling is wired.
 /// </summary>
 public sealed class WindowsResourceSnapshotProvider : IResourceSnapshotProvider
 {

@@ -2,10 +2,55 @@ using Pim.Client.Core.Models.LocalRuntime;
 
 namespace Pim.Client.Core.Services.LocalRuntime;
 
+public sealed record LocalAccountScope
+{
+    public LocalAccountScope(string serverOrigin, string ownerIdentity)
+    {
+        ServerOrigin = NormalizeServerOrigin(serverOrigin);
+        OwnerIdentity = NormalizeOwnerIdentity(ownerIdentity);
+    }
+
+    public string ServerOrigin { get; }
+
+    public string OwnerIdentity { get; }
+
+    public bool Matches(LocalAccountScope other) =>
+        string.Equals(ServerOrigin, other.ServerOrigin, StringComparison.Ordinal)
+        && string.Equals(OwnerIdentity, other.OwnerIdentity, StringComparison.Ordinal);
+
+    private static string NormalizeServerOrigin(string serverOrigin)
+    {
+        if (!Uri.TryCreate(serverOrigin, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
+            || !string.IsNullOrEmpty(uri.UserInfo)
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment)
+            || (uri.AbsolutePath.Length > 1))
+        {
+            throw new ArgumentException(
+                "server origin must be an absolute http(s) origin without path, query or userinfo",
+                nameof(serverOrigin));
+        }
+
+        return uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+    }
+
+    private static string NormalizeOwnerIdentity(string ownerIdentity)
+    {
+        if (string.IsNullOrWhiteSpace(ownerIdentity) || ownerIdentity.Length > 256)
+        {
+            throw new ArgumentException("owner identity is required", nameof(ownerIdentity));
+        }
+
+        return ownerIdentity.Trim();
+    }
+}
+
 public sealed record NodeCapabilitySnapshot(
     string AccountId,
     IReadOnlyList<string> ExecutableModelIds,
-    DateTimeOffset RegisteredAtUtc);
+    DateTimeOffset RegisteredAtUtc,
+    string? ServerOrigin = null);
 
 public sealed record AccountSwitchResult(
     string? PreviousAccountId,
@@ -22,6 +67,7 @@ public sealed class LocalRuntimeAccountGuard
 {
     private readonly object _sync = new();
     private string? _accountId;
+    private string? _serverOrigin;
     private CancellationTokenSource? _activeRun;
     private NodeCapabilitySnapshot? _capability;
 
@@ -32,6 +78,17 @@ public sealed class LocalRuntimeAccountGuard
             lock (_sync)
             {
                 return _accountId;
+            }
+        }
+    }
+
+    public string? CurrentServerOrigin
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _serverOrigin;
             }
         }
     }
@@ -48,18 +105,33 @@ public sealed class LocalRuntimeAccountGuard
     }
 
     public CancellationToken BeginRun(string accountId)
+        => BeginRunCore(accountId, serverOrigin: null);
+
+    public CancellationToken BeginRun(LocalAccountScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return BeginRunCore(scope.OwnerIdentity, scope.ServerOrigin);
+    }
+
+    private CancellationToken BeginRunCore(string accountId, string? serverOrigin)
     {
         if (string.IsNullOrWhiteSpace(accountId))
         {
             throw new ArgumentException("account id is required", nameof(accountId));
         }
 
+        accountId = accountId.Trim();
+        serverOrigin = NormalizeOptionalOrigin(serverOrigin);
         lock (_sync)
         {
             if (_accountId is not null
-                && !string.Equals(_accountId, accountId, StringComparison.Ordinal))
+                && (!string.Equals(_accountId, accountId, StringComparison.Ordinal)
+                    || !string.Equals(
+                        _serverOrigin,
+                        serverOrigin,
+                        StringComparison.Ordinal)))
             {
-                throw new InvalidOperationException("run account does not match the active account");
+                throw new InvalidOperationException("run scope does not match the active account/server origin");
             }
 
             if (_activeRun is not null)
@@ -68,6 +140,7 @@ public sealed class LocalRuntimeAccountGuard
             }
 
             _accountId = accountId;
+            _serverOrigin = serverOrigin;
             _activeRun = new CancellationTokenSource();
             return _activeRun.Token;
         }
@@ -91,34 +164,69 @@ public sealed class LocalRuntimeAccountGuard
     }
 
     public void RegisterCapability(string accountId, IEnumerable<string> executableModelIds)
+        => RegisterCapabilityCore(accountId, serverOrigin: null, executableModelIds);
+
+    public void RegisterCapability(
+        LocalAccountScope scope,
+        IEnumerable<string> executableModelIds)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        RegisterCapabilityCore(scope.OwnerIdentity, scope.ServerOrigin, executableModelIds);
+    }
+
+    private void RegisterCapabilityCore(
+        string accountId,
+        string? serverOrigin,
+        IEnumerable<string> executableModelIds)
     {
         if (string.IsNullOrWhiteSpace(accountId))
         {
             throw new ArgumentException("account id is required", nameof(accountId));
         }
 
+        ArgumentNullException.ThrowIfNull(executableModelIds);
+        accountId = accountId.Trim();
+        serverOrigin = NormalizeOptionalOrigin(serverOrigin);
         lock (_sync)
         {
             if (_accountId is not null
-                && !string.Equals(_accountId, accountId, StringComparison.Ordinal))
+                && (!string.Equals(_accountId, accountId, StringComparison.Ordinal)
+                    || !string.Equals(
+                        _serverOrigin,
+                        serverOrigin,
+                        StringComparison.Ordinal)))
             {
-                throw new InvalidOperationException("capability account does not match the active account");
+                throw new InvalidOperationException(
+                    "capability scope does not match the active account/server origin");
             }
 
             _accountId = accountId;
+            _serverOrigin = serverOrigin;
             _capability = new NodeCapabilitySnapshot(
                 accountId,
                 executableModelIds.Distinct(StringComparer.Ordinal).ToArray(),
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                serverOrigin);
         }
     }
 
     public Task<AccountSwitchResult> SwitchAccountAsync(string? newAccountId)
+        => SwitchScopeCore(
+            string.IsNullOrWhiteSpace(newAccountId) ? null : newAccountId.Trim(),
+            nextOrigin: null);
+
+    public Task<AccountSwitchResult> SwitchScopeAsync(LocalAccountScope? newScope)
+        => SwitchScopeCore(newScope?.OwnerIdentity, newScope?.ServerOrigin);
+
+    private Task<AccountSwitchResult> SwitchScopeCore(
+        string? nextAccount,
+        string? nextOrigin)
     {
         lock (_sync)
         {
             var previous = _accountId;
-            if (string.Equals(previous, newAccountId, StringComparison.Ordinal))
+            if (string.Equals(previous, nextAccount, StringComparison.Ordinal)
+                && string.Equals(_serverOrigin, nextOrigin, StringComparison.Ordinal))
             {
                 return Task.FromResult(new AccountSwitchResult(previous, previous, false, false));
             }
@@ -135,8 +243,19 @@ public sealed class LocalRuntimeAccountGuard
 
             var revoked = _capability is not null;
             _capability = null;
-            _accountId = newAccountId;
-            return Task.FromResult(new AccountSwitchResult(previous, newAccountId, cancelled, revoked));
+            _accountId = nextAccount;
+            _serverOrigin = nextOrigin;
+            return Task.FromResult(new AccountSwitchResult(previous, nextAccount, cancelled, revoked));
         }
+    }
+
+    private static string? NormalizeOptionalOrigin(string? serverOrigin)
+    {
+        if (serverOrigin is null)
+        {
+            return null;
+        }
+
+        return new LocalAccountScope(serverOrigin, "scope-validation").ServerOrigin;
     }
 }

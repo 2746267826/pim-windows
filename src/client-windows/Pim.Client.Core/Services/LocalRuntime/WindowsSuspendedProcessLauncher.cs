@@ -14,6 +14,7 @@ internal static class WindowsSuspendedProcessLauncher
 {
     private const uint CreateSuspended = 0x00000004;
     private const uint CreateNoWindow = 0x08000000;
+    private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const int StartfUseStdHandles = 0x00000100;
     private const uint HandleFlagInherit = 0x00000001;
     private const uint GenericRead = 0x80000000;
@@ -21,7 +22,8 @@ internal static class WindowsSuspendedProcessLauncher
     private const uint FileShareRead = 0x00000001;
     private const uint FileShareWrite = 0x00000002;
     private const uint OpenExisting = 3;
-    private const int StdInputHandle = -10;
+    private const int InsufficientBuffer = 122;
+    private const int ProcThreadAttributeHandleList = 0x00020002;
 
     public static bool TryStart(
         RuntimeLaunchSpec spec,
@@ -47,7 +49,8 @@ internal static class WindowsSuspendedProcessLauncher
         IntPtr stderrRead = IntPtr.Zero;
         IntPtr stderrWrite = IntPtr.Zero;
         var nul = IntPtr.Zero;
-        var nulOpened = false;
+        IntPtr attributeList = IntPtr.Zero;
+        GCHandle handleListPin = default;
         Process? process = null;
         StreamReader? stdoutReader = null;
         StreamReader? stderrReader = null;
@@ -64,33 +67,54 @@ internal static class WindowsSuspendedProcessLauncher
             SetHandleInformation(stdoutRead, HandleFlagInherit, 0);
             SetHandleInformation(stderrRead, HandleFlagInherit, 0);
 
-            nul = GetStdHandle(StdInputHandle);
+            // Always create our own inheritable NUL handle. Reusing the caller's
+            // console handle would make the child inherit a handle outside the
+            // explicit list and can leak unrelated pipes.
+            nul = CreateFileW(
+                "NUL",
+                GenericRead | GenericWrite,
+                FileShareRead | FileShareWrite,
+                ref security,
+                OpenExisting,
+                0,
+                IntPtr.Zero);
             if (nul == IntPtr.Zero || nul == new IntPtr(-1))
             {
-                nul = CreateFileW(
-                    "NUL",
-                    GenericRead | GenericWrite,
-                    FileShareRead | FileShareWrite,
-                    ref security,
-                    OpenExisting,
-                    0,
-                    IntPtr.Zero);
-                if (nul == IntPtr.Zero || nul == new IntPtr(-1))
-                {
-                    error = $"open-nul-{Marshal.GetLastWin32Error()}";
-                    return false;
-                }
-
-                nulOpened = true;
+                error = $"open-nul-{Marshal.GetLastWin32Error()}";
+                return false;
             }
 
-            var startup = new StartupInfo
+            var handles = new[] { nul, stdoutWrite, stderrWrite };
+            if (!TryCreateHandleListAttribute(handles, out attributeList, out error))
             {
-                Size = Marshal.SizeOf<StartupInfo>(),
-                Flags = StartfUseStdHandles,
-                StandardInput = nul,
-                StandardOutput = stdoutWrite,
-                StandardError = stderrWrite,
+                return false;
+            }
+
+            handleListPin = GCHandle.Alloc(handles, GCHandleType.Pinned);
+            if (!UpdateProcThreadAttribute(
+                    attributeList,
+                    0,
+                    ProcThreadAttributeHandleList,
+                    handleListPin.AddrOfPinnedObject(),
+                    (IntPtr)(IntPtr.Size * handles.Length),
+                    IntPtr.Zero,
+                    IntPtr.Zero))
+            {
+                error = $"handle-list-attribute-{Marshal.GetLastWin32Error()}";
+                return false;
+            }
+
+            var startup = new StartupInfoEx
+            {
+                StartupInfo = new StartupInfo
+                {
+                    Size = Marshal.SizeOf<StartupInfoEx>(),
+                    Flags = StartfUseStdHandles,
+                    StandardInput = nul,
+                    StandardOutput = stdoutWrite,
+                    StandardError = stderrWrite,
+                },
+                AttributeList = attributeList,
             };
 
             var commandLine = BuildCommandLine(spec.ExecutablePath, spec.Arguments);
@@ -100,7 +124,7 @@ internal static class WindowsSuspendedProcessLauncher
                 IntPtr.Zero,
                 IntPtr.Zero,
                 inheritHandles: true,
-                CreateSuspended | CreateNoWindow,
+                CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent,
                 IntPtr.Zero,
                 spec.WorkingDirectory,
                 ref startup,
@@ -156,11 +180,49 @@ internal static class WindowsSuspendedProcessLauncher
                 CloseHandle(processInformation.ThreadHandle);
             }
 
-            if (nulOpened && nul != IntPtr.Zero && nul != new IntPtr(-1))
+            if (nul != IntPtr.Zero && nul != new IntPtr(-1))
             {
                 CloseHandle(nul);
             }
+
+            if (handleListPin.IsAllocated)
+            {
+                handleListPin.Free();
+            }
+
+            if (attributeList != IntPtr.Zero)
+            {
+                DeleteProcThreadAttributeList(attributeList);
+                Marshal.FreeHGlobal(attributeList);
+            }
         }
+    }
+
+    private static bool TryCreateHandleListAttribute(
+        IntPtr[] handles,
+        out IntPtr attributeList,
+        out string? error)
+    {
+        attributeList = IntPtr.Zero;
+        error = null;
+        var size = IntPtr.Zero;
+        _ = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+        if (size == IntPtr.Zero || Marshal.GetLastWin32Error() != InsufficientBuffer)
+        {
+            error = $"initialize-handle-list-{Marshal.GetLastWin32Error()}";
+            return false;
+        }
+
+        var buffer = Marshal.AllocHGlobal(size);
+        if (!InitializeProcThreadAttributeList(buffer, 1, 0, ref size))
+        {
+            error = $"initialize-handle-list-{Marshal.GetLastWin32Error()}";
+            Marshal.FreeHGlobal(buffer);
+            return false;
+        }
+
+        attributeList = buffer;
+        return true;
     }
 
     private static StreamReader CreateReader(IntPtr readHandle)
@@ -347,6 +409,13 @@ internal static class WindowsSuspendedProcessLauncher
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct StartupInfoEx
+    {
+        public StartupInfo StartupInfo;
+        public IntPtr AttributeList;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct ProcessInformation
     {
         public IntPtr ProcessHandle;
@@ -365,9 +434,6 @@ internal static class WindowsSuspendedProcessLauncher
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GetStdHandle(int standardHandle);
-
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateFileW(
         string fileName,
@@ -377,6 +443,26 @@ internal static class WindowsSuspendedProcessLauncher
         uint creationDisposition,
         uint flagsAndAttributes,
         IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool InitializeProcThreadAttributeList(
+        IntPtr attributeList,
+        int attributeCount,
+        uint flags,
+        ref IntPtr size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool UpdateProcThreadAttribute(
+        IntPtr attributeList,
+        uint flags,
+        IntPtr attribute,
+        IntPtr value,
+        IntPtr size,
+        IntPtr previousValue,
+        IntPtr returnSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcessW(
@@ -388,7 +474,7 @@ internal static class WindowsSuspendedProcessLauncher
         uint creationFlags,
         IntPtr environment,
         string currentDirectory,
-        ref StartupInfo startupInfo,
+        ref StartupInfoEx startupInfo,
         out ProcessInformation processInformation);
 
     [DllImport("kernel32.dll", SetLastError = true)]
