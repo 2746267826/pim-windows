@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# 契约新鲜度设施 · 行为测试（离线；唯一外部前置是 python3 + PyYAML）
+# 契约新鲜度设施 · 行为测试（离线；唯一外部前置是 "$PY" + PyYAML）
 #
 # 覆盖（本脚本只管 contract/openapi.json + contract/provenance.json 两个产物；
 # 客户端生成物的一致性由 scripts/ci/test-contract-csharp.sh 负责，两边不重复也不假造）：
@@ -61,12 +61,12 @@ record() { # record <name> <0=ok> <observed>
 notrun() { NR=$((NR+1)); say "NOT-RUN  $1 :: $2"; }
 section() { say ""; say "-- $* --"; }
 
-if ! command -v python3 >/dev/null 2>&1; then
-  say "缺少 python3（check/fetch 的 JSON 校验与 ⑫ 的 YAML 抽取都需要它）。"
-  exit 2
-fi
-if ! python3 -c 'import yaml' 2>/dev/null; then
-  say "缺少 PyYAML（用于原样抽取真实 CI step）；无法完成 ⑫。"
+PY=""
+for candidate in python3 python; do
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import yaml' 2>/dev/null; then PY="$candidate"; break; fi
+done
+if [ -z "$PY" ]; then
+  say "缺少可执行的 python3/python + PyYAML（check/fetch 的 JSON 校验与 ⑫ 的 YAML 抽取都需要它）。"
   exit 2
 fi
 
@@ -209,12 +209,12 @@ lay pim-api "empty"              "$FIX/openapi.empty"
 lay pim-api "fakejson"           "$FIX/openapi.fakejson"
 lay 2746267826/pim-api "$SHA_MASTER" "$FIX/openapi.master.json"   # REPO 覆写用例
 
-PORT="$(python3 - <<'PY'
+PORT="$("$PY" - <<'PY'
 import socket
 s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
 PY
 )"
-( cd "$SERVE" && exec python3 -u -m http.server "$PORT" --bind 127.0.0.1 ) > "$WORK/http-server.log" 2>&1 &
+( cd "$SERVE" && exec "$PY" -u -m http.server "$PORT" --bind 127.0.0.1 ) > "$WORK/http-server.log" 2>&1 &
 SRV_PID=$!
 RAW="http://127.0.0.1:$PORT"
 for _ in $(seq 1 60); do
@@ -462,7 +462,7 @@ record "check_missing_provenance_no_write" $([ "$SIG_BEFORE" = "$SIG_AFTER" ] &&
 
 sandbox "$WORK/c7b"
 refresh_sandbox "$WORK/c7b" master >/dev/null 2>&1
-python3 - "$WORK/c7b/contract/provenance.json" <<'PY'
+"$PY" - "$WORK/c7b/contract/provenance.json" <<'PY'
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p, encoding="utf-8"))
@@ -487,7 +487,7 @@ record "refresh_writes_snapshot_bytes" \
   $([ "$(sha "$SNAP")" = "$(sha "$FIX/openapi.master.json")" ] && echo 0 || echo 1) \
   "snapshot bytes == upstream master bytes"
 if [ -f "$PROV" ]; then
-  EFFECTIVE="$(python3 - "$PROV" "$SNAP" "$SHA_MASTER" <<'PY'
+  EFFECTIVE="$("$PY" - "$PROV" "$SNAP" "$SHA_MASTER" <<'PY'
 import json, sys, hashlib, re
 prov, snap_path, expect_sha = sys.argv[1:4]
 doc = json.load(open(prov, encoding="utf-8"))
@@ -508,9 +508,9 @@ print("|".join(problems) if problems else "OK")
 PY
 )"
   record "refresh_provenance_shape_ok" $([ "$EFFECTIVE" = "OK" ] && echo 0 || echo 1) "provenance fields: $EFFECTIVE"
-  RESOLVED="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["resolvedRef"])' "$PROV")"
+  RESOLVED="$("$PY" -c 'import json,sys;print(json.load(open(sys.argv[1]))["resolvedRef"])' "$PROV")"
   record "refresh_provenance_resolved_ref" $([ "$RESOLVED" = "$SHA_MASTER" ] && echo 0 || echo 1) "resolvedRef=$RESOLVED == fixture master=$SHA_MASTER"
-  PROV_BYTE_HASH="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["sha256"])' "$PROV")"
+  PROV_BYTE_HASH="$("$PY" -c 'import json,sys;print(json.load(open(sys.argv[1]))["sha256"])' "$PROV")"
   record "refresh_provenance_local_byte_hash" \
     $([ "$PROV_BYTE_HASH" = "$(sha "$SNAP")" ] && echo 0 || echo 1) \
     "provenance.sha256 == sha256(committed snapshot bytes)"
@@ -574,7 +574,7 @@ section "⑩ 上游出现非契约提交、契约字节不变 → 必须 PASS，
 sandbox "$WORK/c10"
 refresh_sandbox "$WORK/c10" "$SHA_C1" >/dev/null 2>&1      # provenance.resolvedRef = c1
 commit_sandbox "$WORK/c10" 'synced at c1'
-PROV_SHA="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["resolvedRef"])' "$WORK/c10/contract/provenance.json" 2>/dev/null || echo missing)"
+PROV_SHA="$("$PY" -c 'import json,sys;print(json.load(open(sys.argv[1]))["resolvedRef"])' "$WORK/c10/contract/provenance.json" 2>/dev/null || echo missing)"
 run_check "$WORK/c10" master                               # 上游 HEAD 已是 c2（非契约提交）
 say "   rc=$CHECK_RC  provenance.resolvedRef=$PROV_SHA  今天解析出的上游=$SHA_MASTER"
 record "noncontract_commit_snapshot_unchanged_pass" $([ "$CHECK_RC" -eq 0 ] && echo 0 || echo 1) "rc=$CHECK_RC although upstream HEAD moved c1->c2"
@@ -584,7 +584,7 @@ record "provenance_may_lag_head" $([ "$PROV_SHA" = "$SHA_C1" ] && echo 0 || echo
 # resolvedRef 换成另一个合法 40-hex（但 provenance sha256/bytes 仍与快照一致）→ 仍 PASS
 sandbox "$WORK/c10b"
 refresh_sandbox "$WORK/c10b" master >/dev/null 2>&1
-python3 - "$WORK/c10b/contract/provenance.json" <<'PY'
+"$PY" - "$WORK/c10b/contract/provenance.json" <<'PY'
 import json, sys
 p = sys.argv[1]
 doc = json.load(open(p, encoding="utf-8"))
@@ -594,7 +594,7 @@ json.dump(doc, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 PY
 commit_sandbox "$WORK/c10b" 'provenance resolvedRef lags (another legal sha)'
 run_check "$WORK/c10b" master
-record "provenance_lagging_resolved_ref_pass" $([ "$CHECK_RC" -eq 0 ] && echo 0 || echo 1) "rc=$CHECK_RC with provenance.resolvedRef=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["resolvedRef"])' "$WORK/c10b/contract/provenance.json")"
+record "provenance_lagging_resolved_ref_pass" $([ "$CHECK_RC" -eq 0 ] && echo 0 || echo 1) "rc=$CHECK_RC with provenance.resolvedRef=$("$PY" -c 'import json,sys;print(json.load(open(sys.argv[1]))["resolvedRef"])' "$WORK/c10b/contract/provenance.json")"
 
 # ======================= ⑪ CI 环境下测试旁路被拒 ===========================
 section "⑪ CI 环境下把仓内文件当权威源的测试旁路必须被拒（不得静默变绿；旁路≠真实 source）"
@@ -629,7 +629,7 @@ STEP="$WORK/ci-step-body.sh"
 TESTSTEP="$WORK/ci-teststep-body.sh"
 GATE="$WORK/ci-gate-body.sh"
 GATE_ENV_MAP="$WORK/gate-env-map.txt"
-python3 - "$CI_YML" "$STEP" "$TESTSTEP" "$GATE" "$GATE_ENV_MAP" "$CHECK_STEP_NAME" "$TEST_STEP_NAME" <<'PY'
+"$PY" - "$CI_YML" "$STEP" "$TESTSTEP" "$GATE" "$GATE_ENV_MAP" "$CHECK_STEP_NAME" "$TEST_STEP_NAME" <<'PY'
 import re, sys, yaml
 src, step_out, teststep_out, gate_out, map_out, check_name, test_name = sys.argv[1:8]
 doc = yaml.safe_load(open(src, encoding="utf-8"))
@@ -659,7 +659,7 @@ for s in (gate.get("steps") or []):
         m = re.search(r"needs\.([A-Za-z0-9_.-]+)\.result", str(expr))
         if m:
             pairs.append("%s %s" % (var, m.group(1)))
-open(map_out, "w", encoding="utf-8").write("\n".join(pairs) + "\n")
+open(map_out, "w", encoding="utf-8", newline="\n").write("\n".join(pairs) + "\n")
 print("extracted step '%s' from job '%s' (step index %d); test step job=%s" % (check_name, job, idx, tjob))
 PY
 [ -s "$STEP" ] || record "yaml_step_extracted" 1 "cannot extract CI step body"
@@ -669,7 +669,7 @@ PY
 
 # 结构断言：owner job 被 gate 消费；无 if / continue-on-error / env 覆盖；setup-python 显式存在；
 # 行为测试 step 在 check step 之前；release 依赖 freshness。
-STRUCT="$(python3 - "$CI_YML" "$CHECK_STEP_NAME" "$TEST_STEP_NAME" "$OWNER_JOB" <<'PY'
+STRUCT="$("$PY" - "$CI_YML" "$CHECK_STEP_NAME" "$TEST_STEP_NAME" "$OWNER_JOB" <<'PY'
 import sys, yaml
 src, check_name, test_name, owner_hint = sys.argv[1:5]
 doc = yaml.safe_load(open(src, encoding="utf-8"))
@@ -754,11 +754,11 @@ print("|".join(problems) if problems else "OK")
 PY
 )"
 record "ci_step_wiring_ok" $([ "$STRUCT" = "OK" ] && echo 0 || echo 1) "structure: $STRUCT"
-say "   CI triggers: $(python3 -c 'import yaml,sys;d=yaml.safe_load(open(sys.argv[1]));print(sorted(str(k) for k in (d.get("on") or d.get(True)).keys()))' "$CI_YML")"
+say "   CI triggers: $("$PY" -c 'import yaml,sys;d=yaml.safe_load(open(sys.argv[1]));print(sorted(str(k) for k in (d.get("on") or d.get(True)).keys()))' "$CI_YML")"
 say "   gate env->job map:"; sed 's/^/     /' "$GATE_ENV_MAP"
 
 # gate.needs 上的每个 job 都必须能通过 gate 的 env 映射被观测到（漏 env 等于漏 check）
-NEEDS_UNCOVERED="$(python3 - "$CI_YML" "$GATE_ENV_MAP" <<'PY'
+NEEDS_UNCOVERED="$("$PY" - "$CI_YML" "$GATE_ENV_MAP" <<'PY'
 import sys, yaml
 doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
 needs = list(doc["jobs"]["gate"].get("needs") or [])
@@ -772,7 +772,7 @@ record "gate_env_covers_every_need" $([ -z "$NEEDS_UNCOVERED" ] && echo 0 || ech
 # ⑬ 的负对照读一个**历史提交**，因此 contract-freshness job 的 checkout 必须保留完整历史。
 # 这条不能只靠注释：若有人把 fetch-depth 改小或删掉，⑬ 会因对象不可达而失效
 # （CI 下已改为 fail-closed，但这里提前把「配置被改」本身也拦下来）。
-FD_BAD="$(python3 - "$CI_YML" <<'PY'
+FD_BAD="$("$PY" - "$CI_YML" <<'PY'
 import sys, yaml
 doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
 job = (doc.get("jobs") or {}).get("contract-freshness")
@@ -816,6 +816,7 @@ gate_run() { # gate_run <job=result> ...  未列出的 job 默认 success
   local -a envs=()
   local var job res kv
   while read -r var job; do
+    job="${job%$'\r'}"
     [ -n "${var:-}" ] || continue
     res="success"
     for kv in "$@"; do
@@ -846,7 +847,7 @@ if git -C "$ROOT" rev-parse --verify --quiet "$BASE_REF^{commit}" >/dev/null 2>&
   say "   旧 master ref=$BASE_REF ($OLD_BASE_SHA)"
 
   # (a) 旧树没有任何 freshness 入口（结构性，取自真实旧 ref 的 git 对象）
-  OLD_STRUCT="$(python3 - "$OLD_CI" <<'PY'
+  OLD_STRUCT="$("$PY" - "$OLD_CI" <<'PY'
 import sys, yaml
 doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
 hits = []

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# 契约 C# 生成物设施 · 行为测试（离线；唯一外部前置是 python3 + PyYAML）
+# 契约 C# 生成物设施 · 行为测试（离线；唯一外部前置是 "$PY" + PyYAML）
 #
 # 覆盖：
 #   ① 仓内生成物与快照一致 → check 0，且**零写入**（inode/size/mtime/hash 全等）
@@ -47,11 +47,15 @@ record() { # record <name> <0=ok> <observed>
 notrun() { NR=$((NR+1)); say "NOT-RUN  $1 :: $2"; }
 section() { say ""; say "-- $* --"; }
 
-if ! command -v python3 >/dev/null 2>&1; then
-  say "缺少 python3（生成器/校验器只用标准库）。"
+PY=""
+for candidate in python3 python; do
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import yaml' 2>/dev/null; then PY="$candidate"; break; fi
+done
+if [ -z "$PY" ]; then
+  say "缺少可执行的 python3/python + PyYAML（生成器/校验器/CI 接线测试需要）。"
   exit 2
 fi
-if ! python3 -c 'import yaml' 2>/dev/null; then
+if [ -z "$PY" ]; then
   say "缺少 PyYAML（用于原样抽取真实 CI step 与 gate 函数）；无法完成 ⑪。"
   exit 2
 fi
@@ -85,7 +89,7 @@ run_check() { # run_check <dir> -> CHECK_RC
 }
 
 run_generator() { # run_generator <dir> -> GEN_RC
-  ( cd "$1" && python3 scripts/contract/generate-csharp.py --out-dir "$1" ) > "$1.gen.log" 2>&1
+  ( cd "$1" && "$PY" scripts/contract/generate-csharp.py --out-dir "$1" ) > "$1.gen.log" 2>&1
   GEN_RC=$?
 }
 
@@ -119,7 +123,7 @@ record "check_red_on_missing_artifact" $([ "$CHECK_RC" -ne 0 ] && echo 0 || echo
 
 section "④/⑤ 契约变了但生成物没重生成 → 红；重新生成后 → 绿（工单验收②）"
 SB="$WORK/sb-contract-changed"; mksb "$SB"
-python3 - "$SB/contract/openapi.json" <<'PY'
+"$PY" - "$SB/contract/openapi.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 doc = json.load(open(path, encoding="utf-8"))
@@ -139,7 +143,7 @@ record "check_green_after_regen" $([ "$CHECK_RC" -eq 0 ] && echo 0 || echo 1) "r
 
 section "⑥/⑦ operation 清单写了契约里不存在的东西 → 生成器拒绝产出"
 SB="$WORK/sb-unknown-path"; mksb "$SB"
-python3 - "$SB/scripts/contract/client-operations.json" <<'PY'
+"$PY" - "$SB/scripts/contract/client-operations.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 doc = json.load(open(path, encoding="utf-8"))
@@ -155,7 +159,7 @@ run_check "$SB"
 record "check_red_on_unknown_path_config" $([ "$CHECK_RC" -ne 0 ] && echo 0 || echo 1) "rc=$CHECK_RC (config error, not a silent pass)"
 
 SB="$WORK/sb-wrong-method"; mksb "$SB"
-python3 - "$SB/scripts/contract/client-operations.json" <<'PY'
+"$PY" - "$SB/scripts/contract/client-operations.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 doc = json.load(open(path, encoding="utf-8"))
@@ -169,7 +173,7 @@ record "generator_rejects_wrong_method" $([ "$GEN_RC" -ne 0 ] && echo 0 || echo 
 
 section "⑧ 契约出现生成器尚未支持的形状 → 拒绝产出（不产出半个类型）"
 SB="$WORK/sb-allof"; mksb "$SB"
-python3 - "$SB/contract/openapi.json" <<'PY'
+"$PY" - "$SB/contract/openapi.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 doc = json.load(open(path, encoding="utf-8"))
@@ -198,7 +202,7 @@ section "⑩ 新增一个契约里真实存在的 operation → 产物变化，�
 # 候选必须落在契约基址 /api/v1 之下（客户端 BaseAddress 就是它，生成器对此 fail-closed）。
 # 契约里一部分 operation 的 schema 形状生成器还不支持（会拒绝产出），因此按顺序试候选，
 # 取第一个生成成功的 —— 这条断言证明的是「清单驱动边界」，不是「契约里每个 operation 都能生成」。
-CANDIDATES="$(python3 - "$ROOT/contract/openapi.json" "$ROOT/scripts/contract/client-operations.json" <<'PYEOF'
+CANDIDATES="$("$PY" - "$ROOT/contract/openapi.json" "$ROOT/scripts/contract/client-operations.json" <<'PYEOF'
 import json, sys
 contract = json.load(open(sys.argv[1], encoding="utf-8"))
 ops = json.load(open(sys.argv[2], encoding="utf-8"))
@@ -215,7 +219,7 @@ PYEOF
 )"
 
 declare_operation() { # declare_operation <dir> <"METHOD path">
-  python3 - "$1/scripts/contract/client-operations.json" "$2" <<'PYEOF'
+  "$PY" - "$1/scripts/contract/client-operations.json" "$2" <<'PYEOF'
 import json, sys
 path, spec = sys.argv[1], sys.argv[2]
 method, op_path = spec.split(" ", 1)
@@ -228,6 +232,7 @@ PYEOF
 NEW_OP=""
 TRIED=0
 while IFS= read -r candidate && [ "$TRIED" -lt 25 ]; do
+  candidate="${candidate%$'\r'}"
   [ -n "$candidate" ] || continue
   TRIED=$((TRIED+1))
   PROBE="$WORK/sb-newop-probe-$TRIED"   # 探路用，可能会被生成器写脏，不作为断言现场
@@ -265,7 +270,7 @@ STEP="$WORK/ci-step-body.sh"
 TESTSTEP="$WORK/ci-teststep-body.sh"
 GATE="$WORK/ci-gate-body.sh"
 GATE_ENV_MAP="$WORK/gate-env-map.txt"
-python3 - "$CI_YML" "$STEP" "$TESTSTEP" "$GATE" "$GATE_ENV_MAP" "$CHECK_STEP_NAME" "$TEST_STEP_NAME" "$OWNER_JOB" <<'PY'
+"$PY" - "$CI_YML" "$STEP" "$TESTSTEP" "$GATE" "$GATE_ENV_MAP" "$CHECK_STEP_NAME" "$TEST_STEP_NAME" "$OWNER_JOB" <<'PY'
 import re, sys, yaml
 src, step_out, teststep_out, gate_out, map_out, check_name, test_name, owner_hint = sys.argv[1:9]
 doc = yaml.safe_load(open(src, encoding="utf-8"))
@@ -334,7 +339,7 @@ else:
 open(step_out, "w", encoding="utf-8").write(cstep["run"] if cstep else "")
 open(teststep_out, "w", encoding="utf-8").write((tstep or {}).get("run", ""))
 open(gate_out, "w", encoding="utf-8").write(gate_body)
-open(map_out, "w", encoding="utf-8").write(
+open(map_out, "w", encoding="utf-8", newline="\n").write(
     "\n".join("%s %s" % (v, j) for v, j in sorted(env_map.items())) + "\n")
 print("owner job=%s; step index=%s; gate needs %d jobs; problems=%s" % (
     owner, cidx, len(needs), problems or "none"))
@@ -369,6 +374,7 @@ gate_run() {
   local -a envs=()
   local var job res kv
   while read -r var job; do
+    job="${job%$'\r'}"
     [ -n "${var:-}" ] || continue
     res="success"
     for kv in "$@"; do
@@ -389,13 +395,13 @@ gate_run "test-client-core=failure"
 record "gate_red_when_legacy_job_failed" $([ "$GATE_RC" -ne 0 ] && echo 0 || echo 1) "rc=$GATE_RC with test-client-core=failure (legacy jobs still enforced)"
 
 section "⑫ 仓内每个生成文件都被门禁覆盖（没有「没被校验的产物」）"
-COVERAGE="$(python3 - "$ROOT/scripts/ci/check-contract-csharp.sh" "$ROOT/src/client-windows/Pim.Client.Core/Contract" <<'PY'
+COVERAGE="$("$PY" - "$ROOT/scripts/ci/check-contract-csharp.sh" "$ROOT/src/client-windows/Pim.Client.Core/Contract" <<'PY'
 import re, sys
 from pathlib import Path
 script = Path(sys.argv[1]).read_text(encoding="utf-8")
 artifacts_dir = Path(sys.argv[2])
 listed = set(re.findall(r'"(src/client-windows/Pim\.Client\.Core/Contract/[A-Za-z0-9_.]+\.cs)"', script))
-present = {str(p.relative_to(artifacts_dir.parents[3])) for p in artifacts_dir.glob("*.cs")}
+present = {p.relative_to(artifacts_dir.parents[3]).as_posix() for p in artifacts_dir.glob("*.cs")}
 missing = sorted(present - listed)
 print(",".join(missing))
 PY
@@ -413,7 +419,7 @@ reject_case() { # reject_case <name> <描述> <python 变更片段>
   local dir="$WORK/reject-$name"
   mksb "$dir"
   local before
-  python3 - "$dir/contract/openapi.json" <<PYEOF
+  "$PY" - "$dir/contract/openapi.json" <<PYEOF
 import json, sys
 path = sys.argv[1]
 doc = json.load(open(path, encoding="utf-8"))
@@ -466,8 +472,55 @@ reject_case "path_parameter_not" "path 参数的 schema 用 not 排除约束" \
 reject_case "path_parameter_pattern" "path 参数的 schema 带 pattern" \
   'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"name": "deviceId", "in": "path", "required": True, "schema": {"type": "string", "pattern": "^PC-[0-9]+$"}}]'
 
+section "⑮ 真实 ASR 边界：path uuid/int32 + 两个 required header + audio/wav binary 200 + 12 响应头"
+# 正向：真实清单本身已含 7 个 ASR operation（official 9e96 刷新后），生成必须成功；
+# 先验证清单没有缺项/重复项（防止重复 apiClient 造成“假失败”），再检查产物元数据。
+SB="$WORK/sb-asr-boundary"; mksb "$SB"
+"$PY" - "$SB/scripts/contract/client-operations.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+doc = json.load(open(path, encoding="utf-8"))
+ops = [(entry["apiClient"], entry["method"], entry["path"]) for entry in doc["operations"]]
+assert len(ops) == len(set(ops)), "duplicated client-operations entries"
+required = {
+    ("RegisterNativeAsrNodeAsync", "POST", "/api/v1/native-notes/asr-routing/nodes/register"),
+    ("HeartbeatNativeAsrNodeAsync", "POST", "/api/v1/native-notes/asr-routing/nodes/{nodeId}/heartbeat"),
+    ("WithdrawNativeAsrNodeAsync", "POST", "/api/v1/native-notes/asr-routing/nodes/{nodeId}/withdraw"),
+    ("ClaimNativeAsrLeaseAsync", "POST", "/api/v1/native-notes/asr-routing/leases/claim"),
+    ("RenewNativeAsrLeaseAsync", "POST", "/api/v1/native-notes/asr-routing/leases/{leaseId}/renew"),
+    ("GetNativeAsrSegmentContentAsync", "GET", "/api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content"),
+    ("AckNativeAsrAttemptAsync", "POST", "/api/v1/native-notes/asr-routing/leases/{attemptId}/ack"),
+}
+missing = sorted(required - set(ops))
+assert not missing, "client-operations missing ASR entries: %s" % missing
+PY
+run_generator "$SB"
+record "generator_accepts_actual_asr_boundary" $([ "$GEN_RC" -eq 0 ] && echo 0 || echo 1) \
+  "rc=$GEN_RC for the real 9e96 ASR boundary (path uuid/int32, 2 required headers, audio/wav)"
+OPS_REL="src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs"
+grep -q "X-Pim-Lease-Token" "$SB/$OPS_REL" && grep -q "X-Pim-Fencing-Token" "$SB/$OPS_REL" \
+  && grep -q "audio/wav" "$SB/$OPS_REL" && grep -q "X-Content-SHA256" "$SB/$OPS_REL"
+record "asr_operation_metadata_is_typed" $([ $? -eq 0 ] && echo 0 || echo 1) \
+  "generated operation carries header names, binary media type and response-header metadata"
+
+# 负例：未知 format 参数必须继续 fail-closed，不能静默退化为 string。
+reject_case "path_parameter_unknown_format" "path 参数带未知 format" \
+  'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"name": "deviceId", "in": "path", "required": True, "schema": {"type": "string", "format": "custom-id"}}]'
+
+# 负例：任意的 header 参数（不是已建模的两个 segment content header）必须拒绝。
+reject_case "arbitrary_request_header" "其他 operation 带 required header" \
+  'doc["paths"]["/api/v1/endpoints/{deviceId}/collection-quality"]["get"]["parameters"] = [{"name": "X-Custom", "in": "header", "required": True, "schema": {"type": "string"}}]'
+
+# 负例：segment content 的 12 个响应头少一个或形状变化必须拒绝（不能悄悄少校验一个身份头）。
+reject_case "asr_response_headers_missing" "segment content 200 响应头缺失" \
+  'segment = doc["paths"].get("/api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content") or sys.exit(7)
+assert segment.get("get"), "segment content GET missing"
+headers = segment["get"]["responses"]["200"].get("headers") or sys.exit(8)
+assert "X-Pim-Fencing-Token" in headers, "fencing header missing before mutation"
+headers.pop("X-Pim-Fencing-Token")'
+
 section "⑭ 生成物固定 UTF-8 + LF（Windows 刷新与 Linux CI 复跑必须逐字节相同）"
-CR_CHECK="$(python3 - "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractModels.cs" "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs" <<'PYEOF'
+CR_CHECK="$("$PY" - "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractModels.cs" "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs" <<'PYEOF'
 import sys
 bad = []
 for path in sys.argv[1:]:

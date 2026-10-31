@@ -30,6 +30,8 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# shellcheck source=scripts/ci/contract-freshness-lib.sh
+. "$HERE/contract-freshness-lib.sh"
 
 CONTRACT="$ROOT/contract/openapi.json"
 OPERATIONS="$ROOT/scripts/contract/client-operations.json"
@@ -45,7 +47,7 @@ EXIT_STALE=1
 EXIT_ENV=2
 EXIT_CONFIG=4
 
-if ! command -v python3 >/dev/null 2>&1; then
+if ! PIM_CONTRACT_PYTHON="$(pim_contract_python)"; then
   echo "需要 python3（生成器只用标准库）。" >&2
   exit $EXIT_ENV
 fi
@@ -61,7 +63,7 @@ echo "operation 清单: $OPERATIONS"
 echo "生成器        : $GENERATOR"
 echo ""
 
-if python3 "$GENERATOR" \
+if "$PIM_CONTRACT_PYTHON" "$GENERATOR" \
   --contract "$CONTRACT" \
   --operations "$OPERATIONS" \
   --out-dir "$TMP" >"$TMP/generate.log" 2>&1; then

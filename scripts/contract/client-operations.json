@@ -83,6 +83,41 @@
       "apiClient": "GetClientShellLatestAsync",
       "method": "GET",
       "path": "/api/client/shell/latest"
+    },
+    {
+      "apiClient": "RegisterNativeAsrNodeAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/asr-routing/nodes/register"
+    },
+    {
+      "apiClient": "HeartbeatNativeAsrNodeAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/asr-routing/nodes/{nodeId}/heartbeat"
+    },
+    {
+      "apiClient": "WithdrawNativeAsrNodeAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/asr-routing/nodes/{nodeId}/withdraw"
+    },
+    {
+      "apiClient": "ClaimNativeAsrLeaseAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/asr-routing/leases/claim"
+    },
+    {
+      "apiClient": "RenewNativeAsrLeaseAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/asr-routing/leases/{leaseId}/renew"
+    },
+    {
+      "apiClient": "GetNativeAsrSegmentContentAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content"
+    },
+    {
+      "apiClient": "AckNativeAsrAttemptAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/asr-routing/leases/{attemptId}/ack"
     }
   ]
 }
