@@ -423,7 +423,10 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
         var scopeA = new LocalAccountScope("https://api.example.test/tenant-a", "account-a");
         var scopeB = new LocalAccountScope("https://api.example.test/tenant-b", "account-a");
         var claim = CreateClaim(audio);
-        var transport = new FakeTransport(claim, audio);
+        var transport = new FakeTransport(claim, audio)
+        {
+            ContentOriginOverride = scopeA.ServerBaseAddress,
+        };
         var started = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var adapter = new FakeRuntimeAdapter(async (_, token) =>
@@ -621,6 +624,27 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
         Assert.Equal(LocalAsrWorkerRunStatus.Failed, result.Status);
         Assert.Equal(LocalRuntimeReasonCodes.ContentBindingMismatch, result.ReasonCode);
         Assert.Equal(0, adapter.CallCount);
+    }
+
+    [Fact]
+    public async Task SameHostOtherTenantContent_IsRejectedBeforeExecutingTheRuntime()
+    {
+        var bytes = new[] { "audio"u8.ToArray() };
+        var scope = new LocalAccountScope("https://api.example.test/tenant-a", "account-a");
+        var transport = new FakeTransport(CreateClaim(bytes), bytes)
+        {
+            ContentOriginOverride = "https://api.example.test/tenant-b",
+        };
+        var adapter = new FakeRuntimeAdapter("must-not-run");
+        var engine = CreateEngine(transport, adapter, GoodSnapshot());
+
+        var result = await engine.ProcessOnceAsync(scope, LocalAsrWorkTrigger.Automatic);
+
+        Assert.Equal(LocalAsrWorkerRunStatus.Failed, result.Status);
+        Assert.Equal(LocalRuntimeReasonCodes.ContentBindingMismatch, result.ReasonCode);
+        Assert.Equal(0, adapter.CallCount);
+        Assert.Equal(0, transport.GetAcks().Count(ack =>
+            ack.Kind == LocalAsrAckKind.SegmentSucceeded));
     }
 
     private LocalAsrWorkerEngine CreateEngine(

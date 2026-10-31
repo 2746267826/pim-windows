@@ -655,7 +655,9 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
                 ex.Message);
         }
 
-        if (!string.Equals(content.ApiOrigin, scope.ServerOrigin, StringComparison.Ordinal)
+        // 内容响应的部署身份也必须包含 PathBase；同主机另一个 tenant
+        // 即使 authority 相同，也不能作为当前账号的可信内容源。
+        if (!string.Equals(content.ApiOrigin, scope.ServerBaseAddress, StringComparison.Ordinal)
             || !string.Equals(content.OwnerIdentity, scope.OwnerIdentity, StringComparison.Ordinal)
             || !string.Equals(content.NodeId, _options.NodeId, StringComparison.Ordinal))
         {
