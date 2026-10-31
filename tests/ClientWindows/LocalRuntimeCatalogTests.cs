@@ -203,4 +203,79 @@ public class LocalRuntimeCatalogTests
         Assert.Null(PathSafety.ResolveContained(root, "models/../../a.bin"));
         Assert.Null(PathSafety.ResolveContained(root, Path.Combine(Path.GetTempPath(), "a.bin")));
     }
+
+    [Fact]
+    public void Parse_BundledWhisperCppPrereleaseCatalog_IsVerifiedButExplicitlyPrerelease()
+    {
+        var path = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "client-windows",
+            "Pim.Client.App",
+            "LocalRuntime",
+            "whisper-cpp-b5454-cpu-x64.json");
+        var json = File.ReadAllText(path);
+
+        var result = LocalRuntimeCatalogParser.Parse(json);
+
+        Assert.Empty(result.Errors);
+        Assert.Equal("whisper-cpp-b5454-cpu-x64-prerelease", result.CatalogId);
+        Assert.Contains(
+            "prerelease",
+            result.CandidateStatus,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "not-verified",
+            result.CandidateStatus,
+            StringComparison.Ordinal);
+
+        var runtime = Assert.Single(result.Catalog.Runtimes);
+        Assert.Equal("whisper-cpp-b5454-cpu-x64", runtime.RuntimeId);
+        Assert.True(runtime.HasVerifiedRuntime);
+        Assert.Contains(
+            "b5454",
+            runtime.Revision,
+            StringComparison.Ordinal);
+        Assert.Equal("MIT", runtime.LicenseId);
+        Assert.StartsWith("https://github.com/ggml-org/whisper.cpp/", runtime.SourceUrl, StringComparison.Ordinal);
+
+        var executable = Assert.Single(
+            runtime.RequiredFiles,
+            file => string.Equals(
+                file.RelativePath,
+                "Release/whisper-cli.exe",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.True(executable.SizeBytes > 0);
+        Assert.Matches("^[0-9a-f]{64}$", executable.Sha256);
+        Assert.Equal(41, runtime.RequiredFiles.Count);
+
+        Assert.Equal(
+            new[]
+            {
+                "--model", "{modelPath}",
+                "--file", "{inputPath}",
+                "--language", "{language}",
+                "--no-timestamps",
+            },
+            runtime.Execution.Arguments);
+        Assert.Equal(LocalRuntimeExecutionProfile.PlainText, runtime.Execution.OutputFormat);
+
+        Assert.Empty(result.Catalog.Models);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "src", "client-windows", "Pim.Client.App", "LocalRuntime", "whisper-cpp-b5454-cpu-x64.json")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not find repository root.");
+    }
 }

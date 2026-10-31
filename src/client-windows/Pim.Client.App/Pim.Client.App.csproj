@@ -22,6 +22,9 @@
     <Resource Include="app.ico" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="LocalRuntime\*.json"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\..\scripts\fix-keystats-session.ps1"
              Link="fix-keystats-session.ps1"
              CopyToOutputDirectory="PreserveNewest"
