@@ -63,21 +63,156 @@ public sealed record LocalModelManifest(
         && !string.IsNullOrWhiteSpace(Revision);
 }
 
+public enum LocalRuntimeArtifactKind
+{
+    File,
+    Zip,
+}
+
+public sealed record LocalRuntimeFileManifest(
+    string RelativePath,
+    long SizeBytes,
+    string Sha256)
+{
+    public bool IsValid =>
+        LocalRuntimeManifest.IsValidRelativePath(RelativePath)
+        && SizeBytes > 0
+        && LocalModelManifest.IsValidSha256(Sha256);
+}
+
+public sealed record LocalRuntimeExecutionProfile(
+    IReadOnlyList<string> Arguments,
+    TimeSpan Timeout,
+    string OutputFormat)
+{
+    public const string WhisperCppJson = "whisper.cpp-json";
+    public const string PlainText = "plain-text";
+
+    public static IReadOnlySet<string> SupportedPlaceholders { get; } =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "modelPath",
+            "inputPath",
+            "language",
+        };
+
+    public bool IsValid =>
+        Arguments is { Count: > 0 }
+        && Timeout >= TimeSpan.FromSeconds(1)
+        && Timeout <= TimeSpan.FromHours(1)
+        && (string.Equals(OutputFormat, WhisperCppJson, StringComparison.Ordinal)
+            || string.Equals(OutputFormat, PlainText, StringComparison.Ordinal));
+}
+
 public sealed record LocalRuntimeManifest(
     string RuntimeId,
     string DisplayName,
-    string ExecutableFileName,
+    string ArtifactFileName,
     string SourceUrl,
     string LicenseId,
     string LicenseUrl,
     string Revision,
-    string Sha256)
+    string Sha256,
+    long SizeBytes,
+    LocalRuntimeArtifactKind ArtifactKind,
+    string ExecutableRelativePath,
+    IReadOnlyList<LocalRuntimeFileManifest> RequiredFiles,
+    LocalRuntimeExecutionProfile Execution)
 {
+    private static readonly Regex RelativePathSegmentPattern =
+        new("^[A-Za-z0-9_][A-Za-z0-9._+ -]{0,127}$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex PlaceholderPattern =
+        new("\\{([^{}]+)\\}", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly HashSet<string> WindowsReservedNames =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "CON", "PRN", "AUX", "NUL", "CLOCK$",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        };
+
     public bool HasVerifiedRuntime =>
         LocalModelManifest.IsValidSha256(Sha256)
+        && SizeBytes > 0
         && !string.IsNullOrWhiteSpace(LicenseId)
         && !string.IsNullOrWhiteSpace(Revision)
-        && LocalModelManifest.IsValidArtifactFileName(ExecutableFileName);
+        && LocalModelManifest.IsValidArtifactFileName(ArtifactFileName)
+        && IsValidRelativePath(ExecutableRelativePath)
+        && ExecutableRelativePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+        && RequiredFiles is { Count: > 0 }
+        && RequiredFiles.All(file => file.IsValid)
+        && RequiredFiles
+            .Select(file => file.RelativePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count() == RequiredFiles.Count
+        && RequiredFiles.Any(file => string.Equals(
+            file.RelativePath,
+            ExecutableRelativePath,
+            StringComparison.OrdinalIgnoreCase))
+        && (ArtifactKind != LocalRuntimeArtifactKind.File
+            || (RequiredFiles.Count == 1
+                && string.Equals(
+                    RequiredFiles[0].RelativePath,
+                    ArtifactFileName,
+                    StringComparison.OrdinalIgnoreCase)))
+        && Execution.IsValid
+        && Execution.Arguments.All(IsSafeArgumentTemplate);
+
+    public static bool IsValidRelativePath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || value.Length > 240
+            || Path.IsPathRooted(value)
+            || value.StartsWith("/", StringComparison.Ordinal)
+            || value.StartsWith("\\", StringComparison.Ordinal)
+            || value.Contains(':', StringComparison.Ordinal)
+            || value.Contains('\0', StringComparison.Ordinal)
+            || value.Contains('\\', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var segments = value.Split('/');
+        return segments.Length > 0
+               && segments.All(segment =>
+                   segment.Length > 0
+                   && segment is not "." and not ".."
+                   && RelativePathSegmentPattern.IsMatch(segment)
+                   && !segment.EndsWith(".", StringComparison.Ordinal)
+                   && !segment.EndsWith(" ", StringComparison.Ordinal)
+                   && !IsWindowsReservedName(segment));
+    }
+
+    public static string NormalizeRelativePath(string value) =>
+        value.Replace('/', Path.DirectorySeparatorChar);
+
+    public static bool IsSafeArgumentTemplate(string? argument)
+    {
+        if (argument is null || argument.Contains('\0', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (Match match in PlaceholderPattern.Matches(argument))
+        {
+            if (!LocalRuntimeExecutionProfile.SupportedPlaceholders.Contains(match.Groups[1].Value))
+            {
+                return false;
+            }
+        }
+
+        var withoutPlaceholders = PlaceholderPattern.Replace(argument, string.Empty);
+        return !withoutPlaceholders.Contains('{', StringComparison.Ordinal)
+               && !withoutPlaceholders.Contains('}', StringComparison.Ordinal);
+    }
+
+    private static bool IsWindowsReservedName(string segment)
+    {
+        var stem = segment.Split('.', 2)[0].TrimEnd(' ', '.');
+        return WindowsReservedNames.Contains(stem);
+    }
 }
 
 public sealed record LocalRuntimeCatalog(
@@ -126,6 +261,46 @@ public sealed record ModelInstallStatus(
 }
 
 public sealed record ModelInstallProgress(long BytesReceived, long ExpectedBytes, ModelInstallState State);
+
+public enum RuntimeInstallState
+{
+    NotInstalled,
+    Downloading,
+    Extracting,
+    Verifying,
+    Installed,
+    Corrupt,
+    Cancelled,
+    Failed,
+}
+
+public sealed record RuntimeInstallationRecord(
+    string RuntimeId,
+    string AccountId,
+    string Revision,
+    string Sha256,
+    long SizeBytes,
+    string ArtifactFileName,
+    LocalRuntimeArtifactKind ArtifactKind,
+    string VersionDirectoryName,
+    string ExecutableRelativePath,
+    IReadOnlyList<LocalRuntimeFileManifest> RequiredFiles,
+    DateTimeOffset InstalledAtUtc);
+
+public sealed record RuntimeInstallStatus(
+    RuntimeInstallState State,
+    RuntimeInstallationRecord? Installation,
+    string? ReasonCode,
+    string? Detail,
+    DateTimeOffset UpdatedAtUtc)
+{
+    public bool IsExecutable => State == RuntimeInstallState.Installed && Installation is not null;
+}
+
+public sealed record RuntimeInstallProgress(
+    long BytesReceived,
+    long ExpectedBytes,
+    RuntimeInstallState State);
 
 public sealed record ResourceSnapshot(
     DateTimeOffset MeasuredAtUtc,
@@ -192,6 +367,7 @@ public static class LocalRuntimeReasonCodes
     public const string AccountRequired = "account-required";
     public const string ManifestUnverified = "manifest-unverified";
     public const string RuntimeUnverified = "runtime-unverified";
+    public const string RuntimeManifestUnverified = "runtime-manifest-unverified";
     public const string SourceNotHttps = "source-not-https";
     public const string DiskInsufficient = "disk-insufficient";
     public const string DownloadFailed = "download-failed";
@@ -202,6 +378,19 @@ public static class LocalRuntimeReasonCodes
     public const string Cancelled = "cancelled";
     public const string ExecutableHashMismatch = "executable-hash-mismatch";
     public const string ExecutableMissing = "executable-missing";
+    public const string ArchiveInvalid = "archive-invalid";
+    public const string ArchiveEntryUnsafe = "archive-entry-unsafe";
+    public const string ArchiveLimitExceeded = "archive-limit-exceeded";
+    public const string RuntimeFileMissing = "runtime-file-missing";
+    public const string RuntimeFileHashMismatch = "runtime-file-hash-mismatch";
+    public const string RuntimeOwnershipMismatch = "runtime-ownership-mismatch";
+    public const string RuntimeInstallCorrupt = "runtime-install-corrupt";
+    public const string ModelNotInstalled = "model-not-installed";
+    public const string RuntimeNotInstalled = "runtime-not-installed";
+    public const string RevisionMismatch = "revision-mismatch";
+    public const string InputMissing = "input-missing";
+    public const string InvalidExecutionProfile = "invalid-execution-profile";
+    public const string OutputParseFailed = "output-parse-failed";
     public const string ProcessStartFailed = "process-start-failed";
     public const string JobCreateFailed = "job-create-failed";
     public const string JobAssignFailed = "job-assign-failed";

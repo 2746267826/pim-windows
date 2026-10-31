@@ -301,6 +301,27 @@ public sealed class ModelInstallStore
         return ReadStatusAsync(normalizedAccount, modelId, verifyArtifactPresence: true);
     }
 
+    public string? ResolveArtifactPath(
+        string accountId,
+        ModelInstallationRecord installation)
+    {
+        ArgumentNullException.ThrowIfNull(installation);
+        var normalizedAccount = NormalizeAccount(accountId);
+        if (!string.Equals(
+                installation.AccountId,
+                normalizedAccount,
+                StringComparison.Ordinal)
+            || !LocalModelManifest.IsValidModelId(installation.ModelId)
+            || !LocalModelManifest.IsValidArtifactFileName(installation.ArtifactFileName))
+        {
+            return null;
+        }
+
+        return Path.Combine(
+            ModelDirectory(normalizedAccount, installation.ModelId),
+            installation.ArtifactFileName);
+    }
+
     public async Task<IReadOnlyList<ModelInstallStatus>> ListAsync(string accountId)
     {
         var normalizedAccount = NormalizeAccount(accountId);

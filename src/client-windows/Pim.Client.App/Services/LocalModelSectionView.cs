@@ -9,6 +9,13 @@ public sealed record LocalModelSectionItem(
     bool Executable,
     string StatusText);
 
+public sealed record LocalRuntimeSectionItem(
+    string RuntimeId,
+    string DisplayName,
+    bool Installable,
+    bool Executable,
+    string StatusText);
+
 /// <summary>Pure formatting for the 本地模型 section; unit-tested without WPF.</summary>
 public static class LocalModelSectionView
 {
@@ -47,6 +54,48 @@ public static class LocalModelSectionView
         var sizeText = $"{manifest.SizeBytes / (1024.0 * 1024):F1} MB";
         var verified = manifest.HasVerifiedArtifact ? "摘要已登记" : "未登记摘要";
         return $"{stateText}{detail} · {sizeText} · {verified} · 修订 {manifest.Revision}";
+    }
+
+    public static LocalRuntimeSectionItem ToRuntimeItem(
+        LocalRuntimeManifest manifest,
+        RuntimeInstallStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(status);
+
+        return new LocalRuntimeSectionItem(
+            manifest.RuntimeId,
+            manifest.DisplayName,
+            manifest.HasVerifiedRuntime,
+            status.IsExecutable,
+            FormatRuntimeStatus(manifest, status));
+    }
+
+    public static string FormatRuntimeStatus(
+        LocalRuntimeManifest manifest,
+        RuntimeInstallStatus status)
+    {
+        var stateText = status.State switch
+        {
+            RuntimeInstallState.NotInstalled => "未安装",
+            RuntimeInstallState.Downloading => "下载中",
+            RuntimeInstallState.Extracting => "解包中",
+            RuntimeInstallState.Verifying => "校验中",
+            RuntimeInstallState.Installed => "已安装",
+            RuntimeInstallState.Corrupt => "已损坏",
+            RuntimeInstallState.Cancelled => "已取消",
+            RuntimeInstallState.Failed => "失败",
+            _ => status.State.ToString(),
+        };
+
+        var detail = status.ReasonCode is null
+            ? string.Empty
+            : $"（原因 {status.ReasonCode}）";
+        var sizeText = $"{manifest.SizeBytes / (1024.0 * 1024):F1} MB";
+        var verification = manifest.HasVerifiedRuntime
+            ? $"{manifest.RequiredFiles.Count} 个文件摘要已登记"
+            : "运行时文件摘要未登记";
+        return $"{stateText}{detail} · {sizeText} · {verification} · 修订 {manifest.Revision}";
     }
 
     public static string FormatCatalogProblem(IReadOnlyList<string> errors) =>

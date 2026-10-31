@@ -41,6 +41,9 @@ internal static class Program
                 Flood(int.TryParse(Value(args, "--bytes", "200000"), out var bytes) ? bytes : 200000);
                 return 0;
 
+            case "whisper-json":
+                return WhisperJson(args);
+
             default:
                 Console.Error.WriteLine("HELPER_UNKNOWN_MODE");
                 return 64;
@@ -103,6 +106,29 @@ internal static class Program
         Console.Error.WriteLine("FLOOD_STDERR");
         Console.Out.Flush();
         Console.Error.Flush();
+    }
+
+    private static int WhisperJson(string[] args)
+    {
+        var modelPath = Value(args, "--model", string.Empty);
+        var inputPath = Value(args, "--input", string.Empty);
+        var language = Value(args, "--language", "auto");
+        if (string.IsNullOrWhiteSpace(modelPath)
+            || !File.Exists(modelPath)
+            || string.IsNullOrWhiteSpace(inputPath)
+            || !File.Exists(inputPath)
+            || string.IsNullOrWhiteSpace(language))
+        {
+            Console.Error.WriteLine("HELPER_INPUT_INVALID");
+            return 65;
+        }
+
+        Console.Out.WriteLine(
+            "{\"transcription\":[{\"timestamps\":{\"from\":\"00:00:00.000\",\"to\":\"00:00:01.250\"}," +
+            "\"offsets\":{\"from\":0,\"to\":1250},\"text\":\" synthetic transcript \"}]," +
+            "\"text\":\"synthetic transcript\"}");
+        Console.Out.Flush();
+        return 0;
     }
 
     private static string Value(string[] args, string name, string fallback)

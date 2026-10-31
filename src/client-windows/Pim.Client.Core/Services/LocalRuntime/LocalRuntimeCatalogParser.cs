@@ -103,9 +103,9 @@ public static class LocalRuntimeCatalogParser
             return (null, $"runtime-id-invalid: {entry.RuntimeId}");
         }
 
-        if (!LocalModelManifest.IsValidArtifactFileName(entry.ExecutableFileName))
+        if (!LocalModelManifest.IsValidArtifactFileName(entry.ArtifactFileName))
         {
-            return (null, $"runtime-executable-invalid: {id}");
+            return (null, $"runtime-artifact-invalid: {id}");
         }
 
         if (!TryValidateSource(entry.SourceUrl, out var sourceError))
@@ -124,15 +124,96 @@ public static class LocalRuntimeCatalogParser
             return (null, $"runtime-sha-invalid: {id}");
         }
 
+        if (entry.SizeBytes <= 0)
+        {
+            return (null, $"runtime-size-invalid: {id}");
+        }
+
+        if (!TryParseArtifactKind(entry.ArchiveKind, out var artifactKind))
+        {
+            return (null, $"runtime-archive-kind-invalid: {id}");
+        }
+
+        var executablePath = entry.ExecutablePath?.Trim() ?? string.Empty;
+        if (!LocalRuntimeManifest.IsValidRelativePath(executablePath)
+            || !executablePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return (null, $"runtime-executable-invalid: {id}");
+        }
+
+        var requiredFiles = new List<LocalRuntimeFileManifest>();
+        var filePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in entry.Files ?? Array.Empty<RuntimeFileEntry>())
+        {
+            var path = file.Path?.Trim() ?? string.Empty;
+            var fileSha = (file.Sha256 ?? string.Empty).Trim().ToLowerInvariant();
+            if (!LocalRuntimeManifest.IsValidRelativePath(path)
+                || file.SizeBytes <= 0
+                || !LocalModelManifest.IsValidSha256(fileSha))
+            {
+                return (null, $"runtime-file-invalid: {id}: {file.Path}");
+            }
+
+            if (!filePaths.Add(path))
+            {
+                return (null, $"runtime-file-duplicate: {id}: {path}");
+            }
+
+            requiredFiles.Add(new LocalRuntimeFileManifest(path, file.SizeBytes, fileSha));
+        }
+
+        if (requiredFiles.Count == 0
+            || !filePaths.Contains(executablePath))
+        {
+            return (null, $"runtime-required-files-invalid: {id}");
+        }
+
+        if (artifactKind == LocalRuntimeArtifactKind.File
+            && (requiredFiles.Count != 1
+                || !string.Equals(requiredFiles[0].RelativePath, executablePath, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(requiredFiles[0].RelativePath, entry.ArtifactFileName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return (null, $"runtime-file-artifact-invalid: {id}");
+        }
+
+        var arguments = entry.Execution?.Arguments ?? Array.Empty<string>();
+        if (arguments.Length == 0
+            || arguments.Any(argument => !LocalRuntimeManifest.IsSafeArgumentTemplate(argument)))
+        {
+            return (null, $"runtime-arguments-invalid: {id}");
+        }
+
+        var timeoutSeconds = entry.Execution?.TimeoutSeconds ?? 0;
+        if (timeoutSeconds is < 1 or > 3600)
+        {
+            return (null, $"runtime-timeout-invalid: {id}");
+        }
+
+        var outputFormat = entry.Execution?.OutputFormat?.Trim()
+                           ?? LocalRuntimeExecutionProfile.WhisperCppJson;
+        if (!string.Equals(outputFormat, LocalRuntimeExecutionProfile.WhisperCppJson, StringComparison.Ordinal)
+            && !string.Equals(outputFormat, LocalRuntimeExecutionProfile.PlainText, StringComparison.Ordinal))
+        {
+            return (null, $"runtime-output-format-invalid: {id}");
+        }
+
         return (new LocalRuntimeManifest(
             id,
             string.IsNullOrWhiteSpace(entry.DisplayName) ? id : entry.DisplayName.Trim(),
-            entry.ExecutableFileName!.Trim(),
+            entry.ArtifactFileName!.Trim(),
             entry.SourceUrl!.Trim(),
             entry.LicenseId?.Trim() ?? string.Empty,
             entry.LicenseUrl?.Trim() ?? string.Empty,
             entry.Revision?.Trim() ?? string.Empty,
-            sha), null);
+            sha,
+            entry.SizeBytes,
+            artifactKind,
+            executablePath,
+            requiredFiles,
+            new LocalRuntimeExecutionProfile(
+                arguments.ToArray(),
+                TimeSpan.FromSeconds(timeoutSeconds),
+                outputFormat)), null);
     }
 
     private static (LocalModelManifest? Model, string? Error) ValidateModel(ModelEntry entry)
@@ -233,6 +314,26 @@ public static class LocalRuntimeCatalogParser
         return true;
     }
 
+    private static bool TryParseArtifactKind(
+        string? value,
+        out LocalRuntimeArtifactKind kind)
+    {
+        if (string.Equals(value, "zip", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = LocalRuntimeArtifactKind.Zip;
+            return true;
+        }
+
+        if (string.Equals(value, "file", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = LocalRuntimeArtifactKind.File;
+            return true;
+        }
+
+        kind = default;
+        return false;
+    }
+
     private sealed class CatalogDocument
     {
         [JsonPropertyName("schemaVersion")]
@@ -264,12 +365,31 @@ public static class LocalRuntimeCatalogParser
     {
         public string? RuntimeId { get; set; }
         public string? DisplayName { get; set; }
-        public string? ExecutableFileName { get; set; }
+        public string? ArtifactFileName { get; set; }
         public string? SourceUrl { get; set; }
         public string? LicenseId { get; set; }
         public string? LicenseUrl { get; set; }
         public string? Revision { get; set; }
         public string? Sha256 { get; set; }
+        public long SizeBytes { get; set; }
+        public string? ArchiveKind { get; set; }
+        public string? ExecutablePath { get; set; }
+        public RuntimeFileEntry[]? Files { get; set; }
+        public RuntimeExecutionEntry? Execution { get; set; }
+    }
+
+    private sealed class RuntimeFileEntry
+    {
+        public string? Path { get; set; }
+        public long SizeBytes { get; set; }
+        public string? Sha256 { get; set; }
+    }
+
+    private sealed class RuntimeExecutionEntry
+    {
+        public string[]? Arguments { get; set; }
+        public int TimeoutSeconds { get; set; }
+        public string? OutputFormat { get; set; }
     }
 
     private sealed class ResourceEntry

@@ -48,8 +48,16 @@ public static class Startup
             LocalRuntimePaths.DefaultRoot,
             sp.GetRequiredService<IArtifactDownloader>(),
             sp.GetRequiredService<IDiskSpaceProbe>()));
+        services.AddSingleton(sp => new RuntimeInstallStore(
+            LocalRuntimePaths.DefaultRoot,
+            sp.GetRequiredService<IArtifactDownloader>(),
+            sp.GetRequiredService<IDiskSpaceProbe>()));
         services.AddSingleton(_ => new OwnedProcessRegistry(LocalRuntimePaths.OwnedProcessesFile()));
         services.AddSingleton<ControlledProcessRunner>();
+        services.AddSingleton<IControlledProcessRunner>(
+            sp => sp.GetRequiredService<ControlledProcessRunner>());
+        services.AddSingleton<LocalRuntimeAccountGuard>();
+        services.AddSingleton<ILocalSpeechRuntimeAdapter, LocalRuntimeExecutionAdapter>();
         services.AddSingleton<IResourceSnapshotProvider, WindowsResourceSnapshotProvider>();
         services.AddSingleton<TrayIcon>();
 

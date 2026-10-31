@@ -40,6 +40,26 @@ public class LocalModelSectionViewTests
         Assert.Contains("未登记摘要", item.StatusText);
     }
 
+    [Fact]
+    public void ToRuntimeItem_IncludesClosedWorldFileCountAndReason()
+    {
+        var runtime = Runtime(verified: true);
+        var status = new RuntimeInstallStatus(
+            RuntimeInstallState.Corrupt,
+            null,
+            LocalRuntimeReasonCodes.RuntimeFileHashMismatch,
+            "runner.dll digest differs",
+            DateTimeOffset.UtcNow);
+
+        var item = LocalModelSectionView.ToRuntimeItem(runtime, status);
+
+        Assert.True(item.Installable);
+        Assert.False(item.Executable);
+        Assert.Contains("已损坏", item.StatusText);
+        Assert.Contains("2 个文件摘要已登记", item.StatusText);
+        Assert.Contains(LocalRuntimeReasonCodes.RuntimeFileHashMismatch, item.StatusText);
+    }
+
     private static LocalModelManifest Manifest(bool verified) =>
         new(
             "model-a",
@@ -53,4 +73,27 @@ public class LocalModelSectionViewTests
             1024 * 1024,
             "model.bin",
             LocalResourceRequirements.None);
+
+    private static LocalRuntimeManifest Runtime(bool verified) =>
+        new(
+            "runtime-a",
+            "Runtime A",
+            "runtime.zip",
+            "https://example.invalid/runtime.zip",
+            "MIT",
+            "https://example.invalid/LICENSE",
+            "r1",
+            verified ? new string('a', 64) : string.Empty,
+            2048,
+            LocalRuntimeArtifactKind.Zip,
+            "runner.exe",
+            new[]
+            {
+                new LocalRuntimeFileManifest("runner.exe", 1024, new string('a', 64)),
+                new LocalRuntimeFileManifest("runner.dll", 1024, new string('b', 64)),
+            },
+            new LocalRuntimeExecutionProfile(
+                new[] { "{inputPath}" },
+                TimeSpan.FromSeconds(30),
+                LocalRuntimeExecutionProfile.PlainText));
 }

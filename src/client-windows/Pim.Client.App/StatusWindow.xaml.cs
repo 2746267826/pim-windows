@@ -23,6 +23,7 @@ public partial class StatusWindow : Window
     private readonly KeyStatsOneClickFixService _fixService;
     private readonly EndpointHeartbeatReporter? _endpointHeartbeat;
     private readonly ModelInstallStore _modelInstallStore;
+    private readonly RuntimeInstallStore _runtimeInstallStore;
 
     private string _lastDiagnosticsReport = string.Empty;
     private string _trackerState = "Unknown";
@@ -44,6 +45,7 @@ public partial class StatusWindow : Window
         _fixService = new KeyStatsOneClickFixService(_processManager, new KeyStatsLocalStatsClient());
         _endpointHeartbeat = App.Services.GetService<EndpointHeartbeatReporter>();
         _modelInstallStore = App.Services.GetRequiredService<ModelInstallStore>();
+        _runtimeInstallStore = App.Services.GetRequiredService<RuntimeInstallStore>();
 
         var config = DaemonConfig.Load();
         ServerUrlBox.Text = config.ServerUrl;

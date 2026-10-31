@@ -22,12 +22,29 @@ public class LocalRuntimeCatalogTests
             {
               "runtimeId": "whisper-cpp-cpu",
               "displayName": "whisper.cpp CPU",
-              "executableFileName": "whisper-cli.exe",
-              "sourceUrl": "https://example.invalid/whisper-cli.exe",
+              "artifactFileName": "whisper-bin-x64.zip",
+              "sourceUrl": "https://example.invalid/whisper-bin-x64.zip",
               "licenseId": "MIT",
               "licenseUrl": "https://example.invalid/LICENSE",
               "revision": "v1.0.0",
-              "sha256": "{{ShaB}}"
+              "sha256": "{{ShaB}}",
+              "sizeBytes": 4096,
+              "archiveKind": "zip",
+              "executablePath": "whisper-cli.exe",
+              "files": [
+                { "path": "whisper-cli.exe", "sizeBytes": 1024, "sha256": "{{ShaB}}" },
+                { "path": "whisper.dll", "sizeBytes": 2048, "sha256": "{{ShaA}}" }
+              ],
+              "execution": {
+                "arguments": [
+                  "--model", "{modelPath}",
+                  "--file", "{inputPath}",
+                  "--language", "{language}",
+                  "--output-json"
+                ],
+                "timeoutSeconds": 300,
+                "outputFormat": "whisper.cpp-json"
+              }
             }
           ],
           "models": [
@@ -55,6 +72,9 @@ public class LocalRuntimeCatalogTests
         Assert.Single(result.Catalog.Runtimes);
         Assert.True(result.Catalog.Models[0].HasVerifiedArtifact);
         Assert.True(result.Catalog.Runtimes[0].HasVerifiedRuntime);
+        Assert.Equal(LocalRuntimeArtifactKind.Zip, result.Catalog.Runtimes[0].ArtifactKind);
+        Assert.Equal(2, result.Catalog.Runtimes[0].RequiredFiles.Count);
+        Assert.Equal("whisper-cli.exe", result.Catalog.Runtimes[0].ExecutableRelativePath);
         Assert.Equal(2, result.Catalog.Models[0].Resources.CpuCores);
     }
 
@@ -125,6 +145,52 @@ public class LocalRuntimeCatalogTests
 
         Assert.Empty(result.Catalog.Models);
         Assert.Contains(result.Errors, error => error.StartsWith("catalog-schema-unsupported", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Parse_RejectsRuntimeWithUnsafeOrIncompleteExecution()
+    {
+        var json = $$"""
+        {
+          "schemaVersion": 1,
+          "runtimes": [
+            {
+              "runtimeId": "traversal",
+              "artifactFileName": "runtime.zip",
+              "sourceUrl": "https://example.invalid/runtime.zip",
+              "revision": "r1",
+              "sha256": "{{ShaB}}",
+              "sizeBytes": 4096,
+              "archiveKind": "zip",
+              "executablePath": "../evil.exe",
+              "files": [
+                { "path": "../evil.exe", "sizeBytes": 1, "sha256": "{{ShaA}}" }
+              ],
+              "execution": { "arguments": [ "{inputPath}" ], "timeoutSeconds": 30 }
+            },
+            {
+              "runtimeId": "missing-dll",
+              "artifactFileName": "runtime.zip",
+              "sourceUrl": "https://example.invalid/runtime.zip",
+              "revision": "r1",
+              "sha256": "{{ShaB}}",
+              "sizeBytes": 4096,
+              "archiveKind": "zip",
+              "executablePath": "runner.exe",
+              "files": [
+                { "path": "runner.exe", "sizeBytes": 1, "sha256": "{{ShaA}}" }
+              ],
+              "execution": { "arguments": [ "{unknown}" ], "timeoutSeconds": 30 }
+            }
+          ]
+        }
+        """;
+
+        var result = LocalRuntimeCatalogParser.Parse(json);
+
+        Assert.Empty(result.Catalog.Runtimes);
+        Assert.Contains(result.Errors, error => error.StartsWith("runtime-executable-invalid", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, error => error.StartsWith("runtime-arguments-invalid", StringComparison.Ordinal));
     }
 
     [Fact]

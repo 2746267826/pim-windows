@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <!-- 显式列出用例文件：清单即范围，新增文件时必须显式加入 -->
+    <Compile Include="../ClientWindows/Pim.Client.App.Tests.AssemblyInfo.cs" />
     <Compile Include="../ClientWindows/BootstrapLogTests.cs" />
     <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/DaemonLoggerShutdownTests.cs" />
@@ -32,6 +33,7 @@
     <Compile Include="../ClientWindows/WindowsPlannedOfflineWiringTests.cs" />
     <Compile Include="../ClientWindows/WindowsStatusCenterTests.cs" />
     <Compile Include="../ClientWindows/LocalModelSectionViewTests.cs" />
+    <Compile Include="../ClientWindows/LocalRuntimeExecutionAdapterTests.cs" />
     <Compile Include="../ClientWindows/WindowsControlledProcessRunnerTests.cs" />
     <Compile Include="../ClientWindows/WindowsResourceSnapshotProviderTests.cs" />
   </ItemGroup>

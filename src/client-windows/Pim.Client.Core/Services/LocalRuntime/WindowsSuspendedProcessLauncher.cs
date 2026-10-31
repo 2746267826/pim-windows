@@ -49,6 +49,8 @@ internal static class WindowsSuspendedProcessLauncher
         var nul = IntPtr.Zero;
         var nulOpened = false;
         Process? process = null;
+        StreamReader? stdoutReader = null;
+        StreamReader? stderrReader = null;
         ProcessInformation processInformation = default;
         try
         {
@@ -110,32 +112,34 @@ internal static class WindowsSuspendedProcessLauncher
             }
 
             process = Process.GetProcessById(processInformation.ProcessId);
-            var stdout = CreateReader(stdoutRead);
+            stdoutReader = CreateReader(stdoutRead);
             stdoutRead = IntPtr.Zero;
-            var stderr = CreateReader(stderrRead);
+            stderrReader = CreateReader(stderrRead);
             stderrRead = IntPtr.Zero;
 
             launch = new SuspendedLaunch(
                 process,
                 processInformation.ProcessHandle,
                 processInformation.ThreadHandle,
-                stdout,
-                stderr);
+                stdoutReader,
+                stderrReader);
             processInformation = default;
             return true;
         }
         finally
         {
-            if (launch is null && process is not null)
+            if (launch is null && processInformation.ProcessHandle != IntPtr.Zero)
             {
                 // Creation succeeded but handle/stream setup failed: the process is
                 // still suspended, so terminate it rather than leaking an orphan.
-                if (processInformation.ProcessHandle != IntPtr.Zero)
-                {
-                    _ = TerminateProcess(processInformation.ProcessHandle, 1);
-                }
+                _ = TerminateProcess(processInformation.ProcessHandle, 1);
+            }
 
-                process.Dispose();
+            if (launch is null)
+            {
+                stdoutReader?.Dispose();
+                stderrReader?.Dispose();
+                process?.Dispose();
             }
 
             CloseIfValid(stdoutWrite);
