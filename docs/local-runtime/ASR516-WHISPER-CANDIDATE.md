@@ -57,3 +57,14 @@ ZIP 下载，也不代表真实推理、性能、硬件兼容性已验收。用�
 3. 添加固定 `files`、`executablePath`、无 shell 参数模板和输出解析验收；
 4. 使用合成音频完成安装、摘要、取消、损坏、账号切换和受控进程树测试；
 5. 真实音频、付费调用和硬件 benchmark 必须另行获得授权，不能由本元数据调查推定 `PASS`。
+
+## 2026-10-31 追加更正 / Additive metadata correction
+
+上文“尚未验证 ZIP 内逐文件元数据”的记录已被后续只读复核更新：仓库内的显式手动候选
+`src/client-windows/Pim.Client.App/LocalRuntime/whisper-cpp-b5454-cpu-x64.json` 记录了
+`whisper-bin-x64.zip` 的 41 个文件条目、逐文件大小与 SHA-256，并继续固定 archive 大小/摘要和
+`b5454@d1be6fde11ac6e0407606b4e42fe72d34add8037`。该候选标记为 prerelease，只有用户显式手动安装
+才会下载和解包；不会自动下载、自动执行或自动登记模型。
+
+此更正只覆盖 ZIP 文件级元数据。模型列表仍为空，真实模型下载/推理、参数兼容性、VC++ 依赖、
+CPU 指令集、性能、资源基线和目标硬件仍未验证。
