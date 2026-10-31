@@ -7,6 +7,29 @@ namespace Pim.UnitTests.ClientWindows;
 public class WindowsStatusCenterTests
 {
     [Fact]
+    public void StatusWindow_LocalRuntimeAsyncUpdates_AreGuardedAfterClose()
+    {
+        var backlog = File.ReadAllText(RepoPath(
+            "src", "client-windows", "Pim.Client.App", "StatusWindow.LocalAsrBacklog.cs"));
+        var models = File.ReadAllText(RepoPath(
+            "src", "client-windows", "Pim.Client.App", "StatusWindow.LocalModels.cs"));
+
+        Assert.Contains("_localAsrBacklogViewClosed = true;", backlog);
+        Assert.Contains(
+            "await _localAsrBacklog.InitializeAsync();",
+            backlog);
+        Assert.Contains(
+            "if (_localAsrBacklogViewClosed)",
+            backlog);
+        Assert.Contains(
+            "if (_localAsrBacklog is not null && !_localAsrBacklogViewClosed)",
+            models);
+        Assert.Contains(
+            "await selection.SelectAsync(scope, runtime.RuntimeId, model.ModelId);",
+            models);
+    }
+
+    [Fact]
     public void StatusWindow_DeclaresFourSectionsAndKeyStatsActions()
     {
         var xaml = File.ReadAllText(RepoPath("src", "client-windows", "Pim.Client.App", "StatusWindow.xaml"));

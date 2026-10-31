@@ -74,11 +74,30 @@ public static class Startup
         });
         services.AddSingleton<ILocalAsrNodeTransport>(
             sp => sp.GetRequiredService<LocalAsrApiTransport>());
+        services.AddSingleton(_ => new LocalRuntimeCatalogProvider());
+        services.AddSingleton<ILocalAsrWorkerSelectionStore>(
+            _ => new LocalAsrWorkerSelectionStore(LocalRuntimePaths.DefaultRoot));
+        services.AddSingleton(sp => new LocalAsrWorkerCoordinator(
+            sp.GetRequiredService<LocalAsrApiTransport>(),
+            sp.GetRequiredService<InstalledLocalAsrArtifactVerifier>(),
+            sp.GetRequiredService<LocalRuntimeAccountGuard>(),
+            sp.GetRequiredService<ILocalSpeechRuntimeAdapter>(),
+            sp.GetRequiredService<IResourceSnapshotProvider>(),
+            sp.GetRequiredService<LocalRuntimeCatalogProvider>(),
+            sp.GetRequiredService<ILocalAsrWorkerSelectionStore>(),
+            () => CurrentLocalAsrScope(sp.GetRequiredService<AuthService>()),
+            LocalRuntimePaths.DefaultRoot));
+        services.AddSingleton<ILocalAsrWorkerRunner>(
+            sp => sp.GetRequiredService<LocalAsrWorkerCoordinator>());
+        services.AddSingleton<ILocalAsrWorkerSelection>(
+            sp => sp.GetRequiredService<LocalAsrWorkerCoordinator>());
+        services.AddSingleton<ILocalAsrWorkerRunnerAvailability>(
+            sp => sp.GetRequiredService<LocalAsrWorkerCoordinator>());
         services.AddSingleton<ILocalAsrSchedulerSettingsStore>(
             _ => new LocalAsrSchedulerSettingsStore(
                 LocalRuntimePaths.SchedulerSettingsFile()));
         services.AddSingleton(sp => new LocalAsrBacklogViewModel(
-            sp.GetService<ILocalAsrWorkerRunner>(),
+            sp.GetRequiredService<ILocalAsrWorkerRunner>(),
             sp.GetRequiredService<ILocalAsrSchedulerSettingsStore>()));
         services.AddSingleton<TrayIcon>();
 

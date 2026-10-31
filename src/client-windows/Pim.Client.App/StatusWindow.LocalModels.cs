@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Windows;
+using Microsoft.Extensions.DependencyInjection;
 using Pim.Client.Core.Models.LocalRuntime;
 using Pim.Client.Core.Services.LocalRuntime;
 using Pim.Client.App.Services;
@@ -31,6 +32,11 @@ public partial class StatusWindow
 
     private async Task RefreshLocalModelsAsync()
     {
+        if (_localAsrBacklogViewClosed)
+        {
+            return;
+        }
+
         LocalModelStateText.Text = "正在读取本地运行时目录…";
         try
         {
@@ -42,28 +48,24 @@ public partial class StatusWindow
             LocalModelStateText.Text = "恢复上次安装状态失败：" + ex.GetType().Name;
         }
 
-        var catalogPath = LocalRuntimePaths.CatalogFile();
-        if (!File.Exists(catalogPath))
+        if (_localAsrBacklogViewClosed)
         {
-            _manifestById = new Dictionary<string, LocalModelManifest>();
-            _runtimeManifestById = new Dictionary<string, LocalRuntimeManifest>();
-            LocalModelsList.ItemsSource = null;
-            LocalRuntimesList.ItemsSource = null;
-            LocalModelStateText.Text =
-                "未找到运行时目录 catalog.json（" + catalogPath + "）。" +
-                "本机不会自动下载任何模型；由管理员放入目录后才会出现可安装条目。";
-            LocalRuntimeStateText.Text = "未找到运行时目录；不会自动下载或执行任何运行时。";
             return;
         }
 
         LocalRuntimeCatalogParseResult parse;
+        string catalogueLabel;
         try
         {
-            parse = LocalRuntimeCatalogParser.Parse(
-                await File.ReadAllTextAsync(catalogPath, Encoding.UTF8));
+            (parse, catalogueLabel) = await LoadRuntimeCatalogAsync();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            if (_localAsrBacklogViewClosed)
+            {
+                return;
+            }
+
             _manifestById = new Dictionary<string, LocalModelManifest>();
             _runtimeManifestById = new Dictionary<string, LocalRuntimeManifest>();
             LocalModelsList.ItemsSource = null;
@@ -73,6 +75,12 @@ public partial class StatusWindow
             return;
         }
 
+        if (_localAsrBacklogViewClosed)
+        {
+            return;
+        }
+
+        LocalModelStateText.Text = catalogueLabel;
         _manifestById = parse.Catalog.Models.ToDictionary(model => model.ModelId, StringComparer.Ordinal);
         _runtimeManifestById = parse.Catalog.Runtimes.ToDictionary(
             runtime => runtime.RuntimeId,
@@ -117,16 +125,24 @@ public partial class StatusWindow
             }
         }
 
+        if (_localAsrBacklogViewClosed)
+        {
+            return;
+        }
+
         LocalModelsList.ItemsSource = items;
         LocalRuntimesList.ItemsSource = runtimeItems;
-        LocalModelStateText.Text = items.Count == 0
+        var catalogProblem = LocalModelSectionView.FormatCatalogProblem(parse.Errors);
+        var modelSummary = items.Count == 0
             ? "运行时目录中没有模型条目。"
-            : LocalModelSectionView.FormatCatalogProblem(parse.Errors) is { Length: > 0 } problem
-                ? problem
-                : $"已加载 {items.Count} 个模型条目。安装、校验、卸载均为手动操作。";
-        LocalRuntimeStateText.Text = runtimeItems.Count == 0
-            ? "运行时目录中没有可安装运行时。"
-            : $"已加载 {runtimeItems.Count} 个运行时条目。归档解包和逐文件摘要校验均为手动操作。";
+            : $"已加载 {items.Count} 个模型条目。安装、校验、卸载均为手动操作。";
+        LocalModelStateText.Text = string.IsNullOrEmpty(catalogProblem)
+            ? catalogueLabel + " " + modelSummary
+            : catalogueLabel + " " + catalogProblem;
+        var runtimeSummary = runtimeItems.Count == 0
+            ? "当前目录没有可安装运行时。"
+            : $"已加载 {runtimeItems.Count} 个运行时条目。安装、解包和逐文件摘要校验均为手动操作。";
+        LocalRuntimeStateText.Text = catalogueLabel + " " + runtimeSummary;
     }
 
     private async void OnInstallModel(object sender, RoutedEventArgs e)
@@ -404,6 +420,68 @@ public partial class StatusWindow
         }
     }
 
+    private static async Task<(LocalRuntimeCatalogParseResult Parse, string CatalogueLabel)>
+        LoadRuntimeCatalogAsync()
+    {
+        var provider = App.Services.GetRequiredService<LocalRuntimeCatalogProvider>();
+        var loaded = await provider.LoadAsync();
+        return (loaded.Parse, loaded.CatalogueLabel);
+    }
+
+    private async void OnSelectAsrModel(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetSelectedManifest(out var model, out var error))
+        {
+            LocalModelStateText.Text = error;
+            return;
+        }
+
+        var accountId = _authService.CurrentUserId;
+        var scope = CurrentLocalAsrScope();
+        if (accountId is null || scope is null)
+        {
+            LocalModelStateText.Text = "请先登录，再选择本地 ASR 模型。";
+            return;
+        }
+
+        if (!_runtimeManifestById.TryGetValue(model.RuntimeId, out var runtime))
+        {
+            LocalModelStateText.Text = "该模型对应的运行时不在当前目录中，不能启用 ASR。";
+            return;
+        }
+
+        try
+        {
+            var selection = App.Services.GetRequiredService<ILocalAsrWorkerSelection>();
+            var result = await selection.SelectAsync(scope, runtime.RuntimeId, model.ModelId);
+            if (_localAsrBacklogViewClosed)
+            {
+                return;
+            }
+
+            LocalModelStateText.Text = result.Selected
+                ? $"已将 {model.DisplayName} 设为本地 ASR 模型；节点注册与心跳已完成。"
+                : $"未启用 ASR：{result.Detail ?? result.ReasonCode ?? "未知原因"}";
+            await RefreshLocalModelsAsync();
+            if (_localAsrBacklog is not null && !_localAsrBacklogViewClosed)
+            {
+                await _localAsrBacklog.RefreshRunnerAvailabilityAsync();
+            }
+        }
+        catch (Exception ex) when (
+            ex is IOException
+                or UnauthorizedAccessException
+                or ArgumentException
+                or InvalidOperationException)
+        {
+            if (_localAsrBacklogViewClosed)
+            {
+                return;
+            }
+
+            LocalModelStateText.Text = "启用本地 ASR 失败：" + ex.GetType().Name;
+        }
+    }
     private bool TryGetSelectedManifest(out LocalModelManifest manifest, out string error)
     {
         if (LocalModelsList.SelectedItem is not LocalModelSectionItem item)

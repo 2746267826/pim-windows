@@ -46,6 +46,7 @@ public partial class StatusWindow : Window
         _endpointHeartbeat = App.Services.GetService<EndpointHeartbeatReporter>();
         _modelInstallStore = App.Services.GetRequiredService<ModelInstallStore>();
         _runtimeInstallStore = App.Services.GetRequiredService<RuntimeInstallStore>();
+        InitializeLocalAsrBacklog();
 
         var config = DaemonConfig.Load();
         ServerUrlBox.Text = config.ServerUrl;
@@ -690,6 +691,7 @@ public partial class StatusWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        DisposeLocalAsrBacklog();
         _refreshGate.Dispose();
         base.OnClosed(e);
     }

@@ -420,6 +420,11 @@
                                     Style="{StaticResource PimSecondaryButton}"
                                     Margin="0,0,8,6"
                                     Click="OnVerifyModel"/>
+                            <Button x:Name="SelectAsrModelButton"
+                                    Content="用于本地 ASR"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnSelectAsrModel"/>
                             <Button x:Name="UninstallModelButton"
                                     Content="卸载所选"
                                     Style="{StaticResource PimSecondaryButton}"
@@ -492,6 +497,46 @@
 
                         <TextBlock x:Name="LocalRuntimeStateText"
                                    Text="正在读取运行时目录…"
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   Foreground="{StaticResource PimTextBrush}"/>
+
+                        <Border Height="1"
+                                Margin="0,20,0,16"
+                                Background="{StaticResource PimBorderBrush}"/>
+
+                        <TextBlock Text="ASR 后台处理"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource PimTextBrush}"/>
+                        <TextBlock Text="登录服务器并取得任务凭据后，后台处理才会启用。ASR 服务尚未连接时自动与手动入口保持禁用；切换账号或服务器会先停止旧运行并撤回旧能力。"
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   Foreground="{StaticResource PimMutedTextBrush}"
+                                   Margin="0,6,0,12"/>
+
+                        <CheckBox x:Name="AutoAsrCheckBox"
+                                  Content="自动处理排队任务"
+                                  Foreground="{StaticResource PimTextBrush}"
+                                  Margin="0,0,0,10"
+                                  Checked="OnAutoAsrToggled"
+                                  Unchecked="OnAutoAsrToggled"/>
+
+                        <WrapPanel Margin="0,0,0,10">
+                            <Button x:Name="ProcessAsrOnceButton"
+                                    Content="立即处理一次"
+                                    Style="{StaticResource PimPrimaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnProcessAsrOnce"/>
+                            <Button x:Name="StopAsrButton"
+                                    Content="停止并清退"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnStopAsr"/>
+                        </WrapPanel>
+
+                        <TextBlock x:Name="LocalAsrBacklogStateText"
+                                   Text="正在读取 ASR 后台处理状态…"
                                    TextWrapping="Wrap"
                                    FontSize="12"
                                    Foreground="{StaticResource PimTextBrush}"/>

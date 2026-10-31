@@ -13,6 +13,9 @@ public static class LocalRuntimePaths
 
     public static string OwnedProcessesFile(string? root = null) =>
         Path.Combine(root ?? DefaultRoot, "owned-processes.json");
+
+    public static string SchedulerSettingsFile(string? root = null) =>
+        Path.Combine(root ?? DefaultRoot, "asr-scheduler-settings.json");
 }
 
 /// <summary>Default disk-space probe backed by DriveInfo.</summary>

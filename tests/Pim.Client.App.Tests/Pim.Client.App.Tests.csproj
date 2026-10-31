@@ -35,6 +35,8 @@
     <Compile Include="../ClientWindows/LocalModelSectionViewTests.cs" />
     <Compile Include="../ClientWindows/LocalAsrBacklogViewModelTests.cs" />
     <Compile Include="../ClientWindows/LocalAsrCompositionTests.cs" />
+    <Compile Include="../ClientWindows/LocalAsrWorkerCoordinatorTests.cs" />
+    <Compile Include="../ClientWindows/LocalRuntimeCatalogProviderTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeExecutionAdapterTests.cs" />
     <Compile Include="../ClientWindows/WindowsControlledProcessRunnerTests.cs" />
     <Compile Include="../ClientWindows/WindowsResourceSnapshotProviderTests.cs" />

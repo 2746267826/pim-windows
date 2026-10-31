@@ -22,6 +22,8 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private LocalAsrSchedulerSettings _settings = LocalAsrSchedulerSettings.Defaults;
     private LocalAccountScope? _scope;
+    private bool _runnerRunnable;
+    private string? _runnerStatusText;
     private long _scopeGeneration;
     private RunState? _activeRun;
     private CancellationTokenSource? _automaticLoop;
@@ -47,6 +49,8 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
         TimeSpan? boundedStopTimeout = null)
     {
         _runner = runner;
+        _runnerRunnable = runner is not null
+            && runner is not ILocalAsrWorkerRunnerAvailability;
         _settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
         _now = now ?? (() => DateTimeOffset.UtcNow);
         _boundedStopTimeout = boundedStopTimeout ?? TimeSpan.FromSeconds(2);
@@ -60,7 +64,16 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public bool IsWorkerAvailable => _runner is not null;
+    public bool IsWorkerAvailable
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _runner is not null && _runnerRunnable;
+            }
+        }
+    }
 
     public bool IsInitialized
     {
@@ -176,7 +189,8 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
     {
         ThrowIfDisposed();
         var load = await _settingsStore.LoadAsync(cancellationToken).ConfigureAwait(false);
-        var requested = load.Settings.AutomaticProcessingEnabled && IsWorkerAvailable;
+        await RefreshRunnerAvailabilityCoreAsync(scope: null, cancellationToken).ConfigureAwait(false);
+        var requested = load.Settings.AutomaticProcessingEnabled;
         lock (_sync)
         {
             _settings = load.Settings with
@@ -185,13 +199,17 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
             };
             _automaticProcessingRequested = requested;
             _initialized = true;
-            _statusText = IsWorkerAvailable
-                ? load.ResetToSafeDefaults
+            _statusText = requested && !IsWorkerAvailable
+                ? "自动处理已请求；登录服务器并选择已安装的本地模型后开始。"
+                : IsWorkerAvailable
+                    ? load.ResetToSafeDefaults
                     ? $"后台处理设置无效，已恢复为关闭自动处理（{load.Detail}）。"
                     : requested
                         ? "自动处理已请求；登录服务器并绑定账号后开始。"
                         : "后台处理已就绪，等待手动或自动触发。"
-                : "ASR 服务尚未连接：需要登录服务器并取得任务凭据；当前不会发起本地或网络任务。";
+                : _runner is null
+                    ? "ASR 服务尚未连接：需要登录服务器并取得任务凭据；当前不会发起本地或网络任务。"
+                    : _runnerStatusText ?? "ASR 服务已连接，但尚未选择已安装的本地模型。";
         }
 
         OnPropertyChanged(nameof(IsInitialized));
@@ -241,6 +259,9 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
                     .ConfigureAwait(false);
             }
 
+            await RefreshRunnerAvailabilityCoreAsync(scope, cancellationToken)
+                .ConfigureAwait(false);
+
             lock (_sync)
             {
                 if (_disposeRequested)
@@ -262,7 +283,10 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
                         ? _automaticProcessingRequested
                             ? "已绑定当前账号与服务器，准备自动处理。"
                             : "已绑定当前账号与服务器，等待手动或自动触发。"
-                        : "当前账号已绑定，但 ASR 服务尚未连接，处理保持禁用。";
+                        : _runner is null
+                            ? "当前账号已绑定，但 ASR 服务尚未连接，处理保持禁用。"
+                            : _runnerStatusText
+                                ?? "当前账号已绑定，但尚未选择已安装的本地模型。";
             }
 
             OnPropertyChanged(nameof(IsScopeReady));
@@ -325,6 +349,45 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
         return true;
     }
 
+    public async Task RefreshRunnerAvailabilityAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            LocalAccountScope? scope;
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                scope = _scope;
+            }
+
+            await RefreshRunnerAvailabilityCoreAsync(scope, cancellationToken).ConfigureAwait(false);
+            lock (_sync)
+            {
+                _statusText = scope is null
+                    ? "未登录：后台处理不会读取旧账号或旧服务器的任务。"
+                    : IsWorkerAvailable
+                        ? _automaticProcessingRequested
+                            ? "已绑定当前账号与服务器，准备自动处理。"
+                            : "已绑定当前账号与服务器，等待手动或自动触发。"
+                        : _runnerStatusText
+                            ?? "当前账号已绑定，但尚未选择已安装的本地模型。";
+            }
+
+            OnPropertyChanged(nameof(IsWorkerAvailable));
+            OnPropertyChanged(nameof(StatusText));
+            if (scope is not null && IsWorkerAvailable)
+            {
+                StartAutomaticLoopIfRequested();
+            }
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
     public async Task<LocalAsrWorkerRunResult?> ProcessOnceAsync(
         LocalAsrWorkTrigger trigger,
         CancellationToken cancellationToken = default)
@@ -334,6 +397,16 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
         {
             SetStatus("处理未启动：ASR 服务尚未连接，请先登录服务器并取得任务凭据。");
             return null;
+        }
+
+        if (!IsWorkerAvailable)
+        {
+            var detail = _runnerStatusText ?? "尚未选择已安装且校验通过的本地 ASR 模型。";
+            SetStatus("处理未启动：" + detail);
+            return LocalAsrWorkerRunResult.WithoutTask(
+                LocalAsrWorkerRunStatus.InvalidConfiguration,
+                LocalRuntimeReasonCodes.InvalidConfiguration,
+                detail);
         }
 
         LocalAccountScope scope;
@@ -563,7 +636,7 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
             if (_disposed
                 || _disposeRequested
                 || !_automaticProcessingRequested
-                || _runner is null
+                || !IsWorkerAvailable
                 || _scope is null
                 || _automaticLoop is not null)
             {
@@ -691,6 +764,50 @@ internal sealed class LocalAsrBacklogViewModel : INotifyPropertyChanged, IAsyncD
 
         OnPropertyChanged(nameof(AutomaticProcessingRequested));
         OnPropertyChanged(nameof(StatusText));
+    }
+
+    private async Task RefreshRunnerAvailabilityCoreAsync(
+        LocalAccountScope? scope,
+        CancellationToken cancellationToken)
+    {
+        if (_runner is not ILocalAsrWorkerRunnerAvailability availability)
+        {
+            lock (_sync)
+            {
+                _runnerRunnable = _runner is not null;
+                _runnerStatusText = null;
+            }
+
+            return;
+        }
+
+        try
+        {
+            await availability
+                .RefreshAvailabilityAsync(scope, cancellationToken)
+                .ConfigureAwait(false);
+            lock (_sync)
+            {
+                _runnerRunnable = availability.IsRunnable;
+                _runnerStatusText = availability.StatusText;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (
+            ex is IOException
+                or UnauthorizedAccessException
+                or ArgumentException
+                or InvalidOperationException)
+        {
+            lock (_sync)
+            {
+                _runnerRunnable = false;
+                _runnerStatusText = "ASR 服务或本地模型校验暂不可用：" + ex.GetType().Name;
+            }
+        }
     }
 
     private async Task<bool> StopAutomaticLoopAsync()

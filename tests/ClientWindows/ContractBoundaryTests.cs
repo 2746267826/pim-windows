@@ -36,6 +36,13 @@ public class ContractBoundaryTests
     /// <summary>operation 清单：客户端实际使用的接口，生成器/门禁都读它。</summary>
     private const string OperationsRelativePath = "scripts/contract/client-operations.json";
 
+    private static readonly string[] AllowedBaseAddressLiterals =
+    {
+        "/",
+        "/api/v1",
+        "/api/v1/",
+    };
+
     /// <summary>生成物：契约 DTO 与 operation 定义（均由 scripts/contract/generate-csharp.py 产出）。</summary>
     private static readonly string[] GeneratedArtifacts =
     {
@@ -79,19 +86,22 @@ public class ContractBoundaryTests
     public void ApiClient_ContainsNoHardcodedContractPathLiterals()
     {
         var source = File.ReadAllText(RepoPath("src", "client-windows", "Pim.Client.Core", "Services", "ApiClient.cs"));
-
-        // 只允许基础地址前缀；任何接口路径都必须来自生成物（ContractOperations）。
-        var allowed = new[] { "/api/v1/" };
-        var literals = StringLiterals(source)
-            .Where(literal => literal.StartsWith("/", StringComparison.Ordinal))
-            .Where(literal => !allowed.Contains(literal, StringComparer.Ordinal))
-            .Distinct()
-            .OrderBy(x => x, StringComparer.Ordinal)
-            .ToList();
+        var literals = FindHardcodedContractPathLiterals(source);
 
         Assert.True(
             literals.Count == 0,
             "ApiClient.cs 里不得出现硬编码接口路径字面量（路径必须来自契约生成物）：" + string.Join(", ", literals));
+    }
+
+    [Fact]
+    public void HardcodedPathGuard_RejectsARealOperationLiteral()
+    {
+        const string source =
+            "var path = \"/api/v1/native-notes/asr-routing/leases/claim\";";
+
+        Assert.Contains(
+            "/api/v1/native-notes/asr-routing/leases/claim",
+            FindHardcodedContractPathLiterals(source));
     }
 
     [Fact]
@@ -165,6 +175,19 @@ public class ContractBoundaryTests
         }
     }
 
+    private static List<string> FindHardcodedContractPathLiterals(string source)
+    {
+        // Base-address construction is not an operation path. Only these exact
+        // literals are exempt; a concrete contract path must still come from
+        // ContractOperations.
+        return StringLiterals(source)
+            .Where(literal => literal.StartsWith("/", StringComparison.Ordinal))
+            .Where(literal => !AllowedBaseAddressLiterals.Contains(literal, StringComparer.Ordinal))
+            .Distinct()
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToList();
+    }
+
     /// <summary>
     /// The generator hashes the contract bytes on the canonical LF checkout
     /// (`args.contract.read_bytes()` in scripts/contract/generate-csharp.py).
@@ -235,7 +258,9 @@ public class ContractBoundaryBehaviorTests
 
         foreach (var testCase in cases)
         {
-            var handler = new RecordingHandler(testCase.ResponseBody);
+            var handler = new RecordingHandler(
+                testCase.ResponseBody,
+                testCase.ResponseFactory);
             var api = new ApiClient(() => handler);
 
             await testCase.Invoke(api, testCase.Request);
@@ -243,7 +268,10 @@ public class ContractBoundaryBehaviorTests
             var sent = Assert.Single(handler.Requests);
             Assert.Equal(testCase.Method, sent.Method);
             // 带路由参数的 operation：契约里是模板，实际请求是填好并转义后的路径。
-            Assert.Equal(testCase.Path.Replace("{deviceId}", "PC-01"), sent.Path);
+            Assert.Equal(
+                testCase.ExpectedPath
+                    ?? testCase.Path.Replace("{deviceId}", "PC-01"),
+                sent.Path);
 
             if (testCase.Request is null)
             {
@@ -535,7 +563,9 @@ public class ContractBoundaryBehaviorTests
         string Path,
         object? Request,
         Func<ApiClient, object?, Task> Invoke,
-        string ResponseBody = EnvelopeBody);
+        string ResponseBody = EnvelopeBody,
+        Func<HttpResponseMessage>? ResponseFactory = null,
+        string? ExpectedPath = null);
 
     private static List<OperationCase> OperationCases() => new()
     {
@@ -632,7 +662,136 @@ public class ContractBoundaryBehaviorTests
         // 契约基址 /api/v1 之外的 host 根路径：守护程序「检查更新」用它。
         new("GET", "/api/client/shell/latest", null,
             (api, _) => api.GetClientShellLatestAsync()),
+        new("POST", "/api/v1/native-notes/asr-routing/nodes/register",
+            new RegisterNoteAsrNodeRequest
+            {
+                Capabilities = new List<string> { "local-asr" },
+                Enabled = true,
+                ModelId = "model-a",
+                ModelRevision = "revision-a",
+                ModelVerified = true,
+                NodeId = "22222222-2222-2222-2222-222222222222",
+                NodeIdExternal = "PC-01",
+                ResourceSnapshotJson = "{}",
+                RuntimeId = "runtime-a",
+                RuntimeVersion = "runtime-r1",
+                SampledAt = DateTimeOffset.Parse("2026-10-14T00:00:00Z"),
+            },
+            (api, req) => api.RegisterNativeAsrNodeAsync((RegisterNoteAsrNodeRequest)req!)),
+        new("POST", "/api/v1/native-notes/asr-routing/nodes/{nodeId}/heartbeat",
+            new NoteAsrNodeHeartbeatRequest
+            {
+                Capabilities = new List<string> { "local-asr" },
+                ModelId = "model-a",
+                ModelRevision = "revision-a",
+                ModelVerified = true,
+                NodeId = "22222222-2222-2222-2222-222222222222",
+                ResourceSnapshotJson = "{}",
+                RuntimeId = "runtime-a",
+                RuntimeVersion = "runtime-r1",
+                SampledAt = DateTimeOffset.Parse("2026-10-14T00:00:00Z"),
+            },
+            (api, req) => api.HeartbeatNativeAsrNodeAsync(
+                "22222222-2222-2222-2222-222222222222",
+                (NoteAsrNodeHeartbeatRequest)req!),
+            ExpectedPath: "/api/v1/native-notes/asr-routing/nodes/22222222-2222-2222-2222-222222222222/heartbeat"),
+        new("POST", "/api/v1/native-notes/asr-routing/nodes/{nodeId}/withdraw",
+            null,
+            (api, _) => api.WithdrawNativeAsrNodeAsync(
+                "22222222-2222-2222-2222-222222222222"),
+            ExpectedPath: "/api/v1/native-notes/asr-routing/nodes/22222222-2222-2222-2222-222222222222/withdraw"),
+        new("POST", "/api/v1/native-notes/asr-routing/leases/claim",
+            new ClaimNoteAsrTaskRequest
+            {
+                IdempotencyKey = "claim-key",
+                LeaseSeconds = 120,
+                NodeId = "22222222-2222-2222-2222-222222222222",
+            },
+            (api, req) => api.ClaimNativeAsrLeaseAsync((ClaimNoteAsrTaskRequest)req!)),
+        new("POST", "/api/v1/native-notes/asr-routing/leases/{leaseId}/renew",
+            new NoteAsrLeaseHeartbeatRequest
+            {
+                FencingToken = 7,
+                LeaseId = "33333333-3333-3333-3333-333333333333",
+                LeaseToken = "44444444-4444-4444-4444-444444444444",
+            },
+            (api, req) => api.RenewNativeAsrLeaseAsync(
+                "33333333-3333-3333-3333-333333333333",
+                (NoteAsrLeaseHeartbeatRequest)req!),
+            ExpectedPath: "/api/v1/native-notes/asr-routing/leases/33333333-3333-3333-3333-333333333333/renew"),
+        new("GET", "/api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content",
+            null,
+            async (api, _) =>
+            {
+                await using var response = await api.GetNativeAsrSegmentContentAsync(
+                    "33333333-3333-3333-3333-333333333333",
+                    2,
+                    "44444444-4444-4444-4444-444444444444",
+                    7,
+                    1024);
+                Assert.NotNull(response);
+            },
+            ResponseFactory: SuccessfulSegmentResponse,
+            ExpectedPath: "/api/v1/native-notes/asr-routing/leases/33333333-3333-3333-3333-333333333333/segments/2/content"),
+        new("POST", "/api/v1/native-notes/asr-routing/leases/{attemptId}/ack",
+            new NoteAsrAckRequest
+            {
+                CoverageJson = "{}",
+                ErrorCode = string.Empty,
+                ErrorMessage = string.Empty,
+                FencingToken = 7,
+                Kind = "segment",
+                LeaseId = "33333333-3333-3333-3333-333333333333",
+                LeaseToken = "44444444-4444-4444-4444-444444444444",
+                ProviderHandle =
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                Result = "Succeeded",
+                ResultText = "hello",
+                SegmentIndex = 2,
+            },
+            (api, req) => api.AckNativeAsrAttemptAsync(
+                "55555555-5555-5555-5555-555555555555",
+                (NoteAsrAckRequest)req!),
+            ExpectedPath: "/api/v1/native-notes/asr-routing/leases/55555555-5555-5555-5555-555555555555/ack"),
     };
+
+    private static HttpResponseMessage SuccessfulSegmentResponse()
+    {
+        var content = new ByteArrayContent("RIFFwav"u8.ToArray());
+        content.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue("audio/wav");
+        var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = content,
+        };
+        response.Headers.TryAddWithoutValidation(
+            "X-Content-SHA256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        response.Headers.TryAddWithoutValidation(
+            "X-Pim-Attempt-Id",
+            "55555555-5555-5555-5555-555555555555");
+        response.Headers.TryAddWithoutValidation("X-Pim-Fencing-Token", "7");
+        response.Headers.TryAddWithoutValidation(
+            "X-Pim-Lease-Id",
+            "33333333-3333-3333-3333-333333333333");
+        response.Headers.TryAddWithoutValidation(
+            "X-Pim-Node-Id",
+            "22222222-2222-2222-2222-222222222222");
+        response.Headers.TryAddWithoutValidation(
+            "X-Pim-Owner-Id",
+            "11111111-1111-1111-1111-111111111111");
+        response.Headers.TryAddWithoutValidation("X-Pim-Samples", "20");
+        response.Headers.TryAddWithoutValidation("X-Pim-Segment-Index", "2");
+        response.Headers.TryAddWithoutValidation("X-Pim-Source-File-Index", "0");
+        response.Headers.TryAddWithoutValidation("X-Pim-Source-Offset-Samples", "10");
+        response.Headers.TryAddWithoutValidation(
+            "X-Pim-Source-SHA256",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        response.Headers.TryAddWithoutValidation(
+            "X-Pim-Version-Id",
+            "66666666-6666-6666-6666-666666666666");
+        return response;
+    }
 
     private static List<string> DeclaredOperations()
     {
@@ -694,8 +853,15 @@ public class ContractBoundaryBehaviorTests
     private sealed class RecordingHandler : System.Net.Http.HttpMessageHandler
     {
         private readonly string _responseBody;
+        private readonly Func<System.Net.Http.HttpResponseMessage>? _responseFactory;
 
-        public RecordingHandler(string responseBody = EnvelopeBody) => _responseBody = responseBody;
+        public RecordingHandler(
+            string responseBody = EnvelopeBody,
+            Func<System.Net.Http.HttpResponseMessage>? responseFactory = null)
+        {
+            _responseBody = responseBody;
+            _responseFactory = responseFactory;
+        }
 
         public List<(string Method, string Path, string? Body)> Requests { get; } = new();
 
@@ -707,6 +873,11 @@ public class ContractBoundaryBehaviorTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
 
             Requests.Add((request.Method.Method, request.RequestUri!.AbsolutePath, body));
+
+            if (_responseFactory is not null)
+            {
+                return _responseFactory();
+            }
 
             // 契约给信封标了必填字段（code/message/timestamp），所以桩响应必须带上它们 ——
             // 这才是服务端真实会发出的形状。个别 operation 的 data 非可空，由调用方传入专用 body。

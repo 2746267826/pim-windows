@@ -50,6 +50,20 @@ public static class LocalRuntimeCatalogParser
             return new LocalRuntimeCatalogParseResult(LocalRuntimeCatalog.Empty, errors);
         }
 
+        if (document.CandidateStatus is { Length: > 128 })
+        {
+            errors.Add("catalog-candidate-status-invalid");
+            return new LocalRuntimeCatalogParseResult(LocalRuntimeCatalog.Empty, errors);
+        }
+
+        if (document.CatalogueId is { Length: > 128 }
+            || (document.CatalogueId is not null
+                && !LocalModelManifest.IsValidModelId(document.CatalogueId.Trim())))
+        {
+            errors.Add("catalog-catalogue-id-invalid");
+            return new LocalRuntimeCatalogParseResult(LocalRuntimeCatalog.Empty, errors);
+        }
+
         var runtimes = new List<LocalRuntimeManifest>();
         var runtimeIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in document.Runtimes ?? Array.Empty<RuntimeEntry>())
@@ -92,8 +106,13 @@ public static class LocalRuntimeCatalogParser
 
         return new LocalRuntimeCatalogParseResult(
             new LocalRuntimeCatalog(models, runtimes),
-            errors);
+            errors,
+            NormalizeOptionalText(document.CatalogueId),
+            NormalizeOptionalText(document.CandidateStatus));
     }
+
+    private static string? NormalizeOptionalText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static (LocalRuntimeManifest? Runtime, string? Error) ValidateRuntime(RuntimeEntry entry)
     {
@@ -338,6 +357,12 @@ public static class LocalRuntimeCatalogParser
     {
         [JsonPropertyName("schemaVersion")]
         public int SchemaVersion { get; set; }
+
+        [JsonPropertyName("catalogueId")]
+        public string? CatalogueId { get; set; }
+
+        [JsonPropertyName("candidateStatus")]
+        public string? CandidateStatus { get; set; }
 
         [JsonPropertyName("models")]
         public ModelEntry[]? Models { get; set; }

@@ -368,6 +368,45 @@ public sealed class LocalAsrBacklogViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task SavedAutomaticPreference_SurvivesUnavailableStartupAndActivatesLater()
+    {
+        var store = new LocalAsrSchedulerSettingsStore(SettingsPath());
+        await store.SaveAsync(new LocalAsrSchedulerSettings(
+            AutomaticProcessingEnabled: true,
+            PollIntervalSeconds: 5,
+            MaxConsecutiveFailures: 3,
+            UpdatedAtUtc: DateTimeOffset.MinValue));
+        var firstCall = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new AvailabilityRunner((_, _, _) =>
+        {
+            firstCall.TrySetResult(true);
+            return Task.FromResult(Result(LocalAsrWorkerRunStatus.NoWork));
+        })
+        {
+            IsRunnable = false,
+        };
+        await using var viewModel = new LocalAsrBacklogViewModel(runner, store);
+
+        await viewModel.InitializeAsync();
+
+        Assert.True(viewModel.AutomaticProcessingRequested);
+        Assert.False(viewModel.AutomaticProcessingActive);
+        Assert.Contains("自动处理已请求", viewModel.StatusText);
+
+        runner.IsRunnable = true;
+        await viewModel.SetScopeAsync(Scope);
+        await firstCall.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(viewModel.AutomaticProcessingRequested);
+        Assert.True(viewModel.AutomaticProcessingActive);
+        Assert.True((await store.LoadAsync()).Settings.AutomaticProcessingEnabled);
+
+        await viewModel.SetAutomaticProcessingAsync(false);
+        await viewModel.SetScopeAsync(null);
+    }
+
+    [Fact]
     public async Task FatalAutomaticRun_DisablesAndPersistsAutomaticProcessing()
     {
         var store = new LocalAsrSchedulerSettingsStore(SettingsPath());
@@ -397,10 +436,8 @@ public sealed class LocalAsrBacklogViewModelTests : IDisposable
             () => !viewModel.AutomaticProcessingRequested,
             TimeSpan.FromSeconds(2));
         await WaitUntilAsync(
-            () => File.Exists(SettingsPath())
-                && File.ReadAllText(SettingsPath()).Contains(
-                    "\"automaticProcessingEnabled\": false",
-                    StringComparison.Ordinal),
+            () => PersistedSettingsContain(
+                "\"automaticProcessingEnabled\": false"),
             TimeSpan.FromSeconds(2));
 
         var persistedAfterDisable = await store.LoadAsync();
@@ -423,6 +460,25 @@ public sealed class LocalAsrBacklogViewModelTests : IDisposable
             boundedStopTimeout: boundedStopTimeout);
 
     private string SettingsPath() => Path.Combine(_root, "scheduler.json");
+
+    private bool PersistedSettingsContain(string expected)
+    {
+        try
+        {
+            return File.Exists(SettingsPath())
+                && File.ReadAllText(SettingsPath()).Contains(
+                    expected,
+                    StringComparison.Ordinal);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     private static LocalAsrWorkerRunResult Result(LocalAsrWorkerRunStatus status) =>
         new(
@@ -449,7 +505,7 @@ public sealed class LocalAsrBacklogViewModelTests : IDisposable
         }
     }
 
-    private sealed class ScriptedRunner : ILocalAsrWorkerRunner
+    private class ScriptedRunner : ILocalAsrWorkerRunner
     {
         private readonly Func<
             LocalAccountScope,
@@ -506,5 +562,29 @@ public sealed class LocalAsrBacklogViewModelTests : IDisposable
 
             return result;
         }
+    }
+
+    private sealed class AvailabilityRunner : ScriptedRunner, ILocalAsrWorkerRunnerAvailability
+    {
+        public AvailabilityRunner(
+            Func<
+                LocalAccountScope,
+                LocalAsrWorkTrigger,
+                CancellationToken,
+                Task<LocalAsrWorkerRunResult>> handler)
+            : base(handler)
+        {
+        }
+
+        public bool IsRunnable { get; set; }
+
+        public string StatusText => IsRunnable
+            ? "available"
+            : "local model not installed";
+
+        public Task RefreshAvailabilityAsync(
+            LocalAccountScope? scope,
+            CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 }

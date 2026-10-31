@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Pim.Client.App.Services;
+using Pim.Client.Core.Services;
 using Pim.Client.Core.Services.LocalRuntime;
 
 namespace Pim.Client.App;
@@ -11,6 +12,7 @@ public partial class StatusWindow
 {
     private LocalAsrBacklogViewModel? _localAsrBacklog;
     private bool _updatingLocalAsrBacklogUi;
+    private bool _localAsrBacklogViewClosed;
 
     private void InitializeLocalAsrBacklog()
     {
@@ -21,7 +23,7 @@ public partial class StatusWindow
 
     private async Task InitializeLocalAsrBacklogAsync()
     {
-        if (_localAsrBacklog is null)
+        if (_localAsrBacklog is null || _localAsrBacklogViewClosed)
         {
             return;
         }
@@ -29,6 +31,11 @@ public partial class StatusWindow
         try
         {
             await _localAsrBacklog.InitializeAsync();
+            if (_localAsrBacklogViewClosed)
+            {
+                return;
+            }
+
             await SyncLocalAsrBacklogScopeAsync();
         }
         catch (Exception ex) when (
@@ -42,36 +49,49 @@ public partial class StatusWindow
         }
         finally
         {
-            UpdateLocalAsrBacklogView();
+            if (!_localAsrBacklogViewClosed)
+            {
+                UpdateLocalAsrBacklogView();
+            }
         }
     }
 
     private async Task SyncLocalAsrBacklogScopeAsync()
     {
-        if (_localAsrBacklog is null)
+        if (_localAsrBacklog is null || _localAsrBacklogViewClosed)
         {
             return;
         }
 
-        LocalAccountScope? scope = null;
-        if (_authService.IsAuthenticated
-            && !string.IsNullOrWhiteSpace(_authService.CurrentUserId)
-            && Uri.TryCreate(_authService.ServerUrl, UriKind.Absolute, out var serverUri)
-            && (serverUri.Scheme == Uri.UriSchemeHttps
-                || serverUri.Scheme == Uri.UriSchemeHttp))
-        {
-            // 仅用于边界比对；真实请求仍走 ApiClient 配置的完整 base URL（含子路径）。
-            scope = new LocalAccountScope(
-                serverUri.GetLeftPart(UriPartial.Authority),
-                _authService.CurrentUserId);
-        }
+        var scope = CurrentLocalAsrScope();
 
         await _localAsrBacklog.SetScopeAsync(scope);
     }
 
+    private LocalAccountScope? CurrentLocalAsrScope()
+    {
+        if (!_authService.IsAuthenticated
+            || string.IsNullOrWhiteSpace(_authService.CurrentUserId))
+        {
+            return null;
+        }
+
+        try
+        {
+            var serverUrl = ApiClient.NormalizeServerUrl(_authService.ServerUrl);
+            return new LocalAccountScope(serverUrl, _authService.CurrentUserId);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
     private async void OnAutoAsrToggled(object sender, RoutedEventArgs e)
     {
-        if (_updatingLocalAsrBacklogUi || _localAsrBacklog is null)
+        if (_updatingLocalAsrBacklogUi
+            || _localAsrBacklog is null
+            || _localAsrBacklogViewClosed)
         {
             return;
         }
@@ -100,7 +120,7 @@ public partial class StatusWindow
 
     private async void OnProcessAsrOnce(object sender, RoutedEventArgs e)
     {
-        if (_localAsrBacklog is null)
+        if (_localAsrBacklog is null || _localAsrBacklogViewClosed)
         {
             return;
         }
@@ -123,7 +143,7 @@ public partial class StatusWindow
 
     private async void OnStopAsr(object sender, RoutedEventArgs e)
     {
-        if (_localAsrBacklog is null)
+        if (_localAsrBacklog is null || _localAsrBacklogViewClosed)
         {
             return;
         }
@@ -156,7 +176,9 @@ public partial class StatusWindow
 
     private void UpdateLocalAsrBacklogView()
     {
-        if (_localAsrBacklog is null || LocalAsrBacklogStateText is null)
+        if (_localAsrBacklog is null
+            || _localAsrBacklogViewClosed
+            || LocalAsrBacklogStateText is null)
         {
             return;
         }
@@ -191,6 +213,7 @@ public partial class StatusWindow
 
     private void DisposeLocalAsrBacklog()
     {
+        _localAsrBacklogViewClosed = true;
         if (_localAsrBacklog is null)
         {
             return;

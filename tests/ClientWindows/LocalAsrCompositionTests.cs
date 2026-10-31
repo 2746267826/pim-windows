@@ -8,7 +8,7 @@ namespace Pim.Client.App.Tests;
 public sealed class LocalAsrCompositionTests
 {
     [Fact]
-    public async Task Composition_RegistersTypedTransportAndVerifierWithoutSelectingAModel()
+    public async Task Composition_RegistersTypedTransportAndDelayedRunnerWithoutSelectingAModel()
     {
         var services = Startup.ConfigureServices();
         await using var asyncDisposable = services as IAsyncDisposable;
@@ -17,7 +17,8 @@ public sealed class LocalAsrCompositionTests
         Assert.IsType<LocalAsrApiTransport>(
             services.GetRequiredService<ILocalAsrNodeTransport>());
         Assert.NotNull(services.GetRequiredService<InstalledLocalAsrArtifactVerifier>());
-        Assert.Null(services.GetService<ILocalAsrWorkerRunner>());
+        Assert.IsType<LocalAsrWorkerCoordinator>(
+            services.GetRequiredService<ILocalAsrWorkerRunner>());
         Assert.False(services.GetRequiredService<LocalAsrBacklogViewModel>().IsWorkerAvailable);
     }
 }
