@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -24,8 +25,11 @@ namespace Pim.Client.Core.Services;
 /// </summary>
 public class ApiClient
 {
+    private readonly object _clientSync = new();
     private HttpClient _httpClient;
     private readonly Func<HttpMessageHandler> _messageHandlerFactory;
+    private long _clientGeneration;
+    private long _externalCredentialGeneration;
 
     /// <summary>
     /// 令牌续期回调（主动到期前续期与 401 被动续期**共用**）。返回 true 表示续期成功。
@@ -73,21 +77,39 @@ public class ApiClient
     {
         var normalized = NormalizeServerUrl(baseUrl);
         var uri = new Uri(normalized.TrimEnd('/') + "/api/v1/");
+        lock (_clientSync)
+        {
+            var previous = _httpClient;
 
-        // Build a fresh HttpClient so we can safely change the base address
-        // even after the previous client has started sending requests.
-        var newClient = new HttpClient(_messageHandlerFactory()) { BaseAddress = uri };
+            // Build a fresh HttpClient so changing the deployment identity can
+            // never redirect an already-started request or its auth retry.
+            var newClient = new HttpClient(_messageHandlerFactory()) { BaseAddress = uri };
 
-        // Preserve the current auth header
-        if (_httpClient.DefaultRequestHeaders.Authorization is { } auth)
-            newClient.DefaultRequestHeaders.Authorization = auth;
+            // Credentials belong to one canonical API deployment, including its
+            // PathBase. A host-only comparison would leak a token when the same
+            // host serves another deployment under a different path.
+            if (SameCanonicalApiRoot(previous.BaseAddress, uri)
+                && previous.DefaultRequestHeaders.Authorization is { } auth)
+            {
+                newClient.DefaultRequestHeaders.Authorization = auth;
+            }
 
-        // Atomically swap (safe because HttpClient disposal is immediate
-        // on .NET — all in-flight operations are cancelled by the OS).
-        Interlocked.Exchange(ref _httpClient, newClient).Dispose();
+            _httpClient = newClient;
+            _clientGeneration++;
+            previous.Dispose();
+        }
     }
 
-    public string CurrentBaseUrl => _httpClient.BaseAddress?.ToString().TrimEnd('/') ?? "";
+    public string CurrentBaseUrl
+    {
+        get
+        {
+            lock (_clientSync)
+            {
+                return _httpClient.BaseAddress?.ToString().TrimEnd('/') ?? "";
+            }
+        }
+    }
 
     public static string NormalizeServerUrl(string baseUrl)
     {
@@ -109,13 +131,27 @@ public class ApiClient
 
     public void SetAccessToken(string token)
     {
-        _httpClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", token);
+        lock (_clientSync)
+        {
+            _httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", token);
+            if (!InsideTokenRenewal.Value)
+            {
+                _externalCredentialGeneration++;
+            }
+        }
     }
 
     public void ClearAccessToken()
     {
-        _httpClient.DefaultRequestHeaders.Authorization = null;
+        lock (_clientSync)
+        {
+            _httpClient.DefaultRequestHeaders.Authorization = null;
+            if (!InsideTokenRenewal.Value)
+            {
+                _externalCredentialGeneration++;
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -226,6 +262,148 @@ public class ApiClient
         => SendAsync<ClientShellLatestResponse>(
             ContractOperation.GetClientShellLatest, null, null, ct, allowTokenRenewal: false);
 
+    /// <summary><c>POST /api/v1/native-notes/asr-routing/nodes/register</c>。</summary>
+    public Task<NoteAsrNodeDtoApiResponse?> RegisterNativeAsrNodeAsync(
+        RegisterNoteAsrNodeRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<NoteAsrNodeDtoApiResponse>(
+            ContractOperation.RegisterNativeAsrNode,
+            request,
+            ct);
+
+    /// <summary><c>POST /api/v1/native-notes/asr-routing/nodes/{nodeId}/heartbeat</c>。</summary>
+    public Task<NoteAsrNodeDtoApiResponse?> HeartbeatNativeAsrNodeAsync(
+        string nodeId,
+        NoteAsrNodeHeartbeatRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteAsrNodeDtoApiResponse>(
+            ContractOperation.HeartbeatNativeAsrNode,
+            [("nodeId", nodeId)],
+            request,
+            ct);
+
+    /// <summary><c>POST /api/v1/native-notes/asr-routing/nodes/{nodeId}/withdraw</c>（无请求体）。</summary>
+    public Task<NoteAsrNodeDtoApiResponse?> WithdrawNativeAsrNodeAsync(
+        string nodeId,
+        CancellationToken ct = default)
+        => SendAsync<NoteAsrNodeDtoApiResponse>(
+            ContractOperation.WithdrawNativeAsrNode,
+            [("nodeId", nodeId)],
+            null,
+            ct);
+
+    /// <summary><c>POST /api/v1/native-notes/asr-routing/leases/claim</c>。</summary>
+    public Task<NoteAsrClaimDtoApiResponse?> ClaimNativeAsrLeaseAsync(
+        ClaimNoteAsrTaskRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<NoteAsrClaimDtoApiResponse>(
+            ContractOperation.ClaimNativeAsrLease,
+            request,
+            ct);
+
+    /// <summary><c>POST /api/v1/native-notes/asr-routing/leases/{leaseId}/renew</c>。</summary>
+    public Task<NoteAsrLeaseDtoApiResponse?> RenewNativeAsrLeaseAsync(
+        string leaseId,
+        NoteAsrLeaseHeartbeatRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteAsrLeaseDtoApiResponse>(
+            ContractOperation.RenewNativeAsrLease,
+            [("leaseId", leaseId)],
+            request,
+            ct);
+
+    /// <summary>
+    /// <c>GET /api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content</c>。
+    /// The returned response owns a bounded, response-header-read stream and must be disposed.
+    /// </summary>
+    public async Task<NativeAsrSegmentDownload?> GetNativeAsrSegmentContentAsync(
+        string leaseId,
+        int segmentIndex,
+        string leaseToken,
+        long fencingToken,
+        long maxContentBytes,
+        CancellationToken ct = default)
+    {
+        if (!Guid.TryParse(leaseId, out var parsedLeaseId) || parsedLeaseId == Guid.Empty)
+            throw new ArgumentException("leaseId must be a non-empty UUID", nameof(leaseId));
+        if (segmentIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(segmentIndex));
+        if (!Guid.TryParse(leaseToken, out var parsedLeaseToken) || parsedLeaseToken == Guid.Empty)
+            throw new ArgumentException("leaseToken must be a non-empty UUID", nameof(leaseToken));
+        if (fencingToken <= 0)
+            throw new ArgumentOutOfRangeException(nameof(fencingToken));
+        if (maxContentBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxContentBytes));
+
+        var relativePath = ContractOperation.GetNativeAsrSegmentContent.Resolve(
+            ("leaseId", parsedLeaseId.ToString("D")),
+            ("segmentIndex", segmentIndex.ToString(CultureInfo.InvariantCulture)));
+
+        var clientLease = CaptureClientLease();
+        var response = await SendResponseWithAuthRetryAsync(
+            () =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, relativePath);
+                request.Headers.TryAddWithoutValidation(
+                    "X-Pim-Lease-Token",
+                    parsedLeaseToken.ToString("D"));
+                request.Headers.TryAddWithoutValidation(
+                    "X-Pim-Fencing-Token",
+                    fencingToken.ToString(CultureInfo.InvariantCulture));
+                return clientLease.Client.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    ct);
+            },
+            ct,
+            allowTokenRenewal: true,
+            clientLease: clientLease).ConfigureAwait(false);
+
+        try
+        {
+            response.EnsureSuccessStatusCode();
+
+            var mediaType = response.Content.Headers.ContentType?.MediaType;
+            if (!string.Equals(mediaType, "audio/wav", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    "native ASR segment response must use audio/wav content type");
+            }
+
+            var declaredLength = response.Content.Headers.ContentLength;
+            if (declaredLength is > 0 && declaredLength.Value > maxContentBytes)
+            {
+                throw new InvalidDataException(
+                    "native ASR segment declared content length exceeds the configured limit");
+            }
+
+            var headers = ParseNativeAsrSegmentHeaders(response);
+            var content = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            var bounded = new BoundedHttpResponseStream(
+                content,
+                response,
+                maxContentBytes,
+                ownsResponse: true);
+            return new NativeAsrSegmentDownload(headers, bounded);
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary><c>POST /api/v1/native-notes/asr-routing/leases/{attemptId}/ack</c>。</summary>
+    public Task<NoteAsrAckDtoApiResponse?> AckNativeAsrAttemptAsync(
+        string attemptId,
+        NoteAsrAckRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteAsrAckDtoApiResponse>(
+            ContractOperation.AckNativeAsrAttempt,
+            [("attemptId", attemptId)],
+            request,
+            ct);
+
     // -----------------------------------------------------------------------
     // 内部实现：只接受生成物里的 operation，平静态类型化的请求体
     // -----------------------------------------------------------------------
@@ -246,29 +424,54 @@ public class ApiClient
     {
         var relativePath = operation.Resolve(routeValues ?? []);
 
+        var clientLease = CaptureClientLease();
         return await SendWithAuthRetryAsync<TResponse>(
-            () => SendHttpAsync(operation, relativePath, body, ct), ct, allowTokenRenewal);
+            () => SendHttpAsync(clientLease.Client, operation, relativePath, body, ct),
+            ct,
+            allowTokenRenewal,
+            clientLease);
     }
 
     private Task<HttpResponseMessage> SendHttpAsync(
+        HttpClient client,
         ContractOperation operation,
         string relativePath,
         object? body,
         CancellationToken ct)
         => operation.HttpMethod switch
         {
-            "GET" => _httpClient.GetAsync(relativePath, ct),
+            "GET" => client.GetAsync(relativePath, ct),
             "POST" => body is null
-                ? _httpClient.PostAsync(relativePath, null, ct)
-                : _httpClient.PostAsJsonAsync(relativePath, body, ct),
-            "PUT" => _httpClient.PutAsJsonAsync(relativePath, body, ct),
-            "DELETE" => _httpClient.DeleteAsync(relativePath, ct),
+                ? client.PostAsync(relativePath, null, ct)
+                : client.PostAsJsonAsync(relativePath, body, ct),
+            "PUT" => client.PutAsJsonAsync(relativePath, body, ct),
+            "DELETE" => client.DeleteAsync(relativePath, ct),
             _ => throw new NotSupportedException(
                 $"{operation.HttpMethod} {operation.PathTemplate}：本仓的 HTTP 边界尚未支持该方法"),
         };
 
     private async Task<T?> SendWithAuthRetryAsync<T>(
-        Func<Task<HttpResponseMessage>> request, CancellationToken ct, bool allowTokenRenewal = true)
+        Func<Task<HttpResponseMessage>> request,
+        CancellationToken ct,
+        bool allowTokenRenewal,
+        ClientLease clientLease)
+    {
+        using var response = await SendResponseWithAuthRetryAsync(
+            request,
+            ct,
+            allowTokenRenewal,
+            clientLease).ConfigureAwait(false);
+
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadFromJsonAsync<T>(ct).ConfigureAwait(false);
+    }
+
+    private async Task<HttpResponseMessage> SendResponseWithAuthRetryAsync(
+        Func<Task<HttpResponseMessage>> request,
+        CancellationToken ct,
+        bool allowTokenRenewal,
+        ClientLease clientLease)
     {
         // 到期前主动续期（REQ-5）：令牌进入临期窗口就先换新，再发本次请求。
         if (allowTokenRenewal)
@@ -281,31 +484,78 @@ public class ApiClient
         // 不能用"收到 401 时"的代数 —— 那样后来者会误判为"还没人换过"再续期一次，
         // 把前一个请求刚拿到的新令牌又轮换掉，导致它的重试撞上 401（并发下的连锁失败）。
         var versionAtSend = Interlocked.Read(ref _tokenRenewalVersion);
-        var response = await request();
-        var firstHopMs = sw.ElapsedMilliseconds;
-
-        if (allowTokenRenewal
-            && response.StatusCode == HttpStatusCode.Unauthorized
-            && RenewTokenAsync is not null)
+        HttpResponseMessage? response = null;
+        try
         {
-            // 被动兜底：仍然保留"401 → 续期 → 重试一次"，但并发到达的多个 401 只会产生**一次**
-            // 真实续期（旧实现用 volatile bool 直接跳过后来者，被跳过的请求拿着旧令牌继续走，
-            // 最终 EnsureSuccessStatusCode 抛 401 —— 上传循环把它当"客户端错误"丢掉整批数据）。
-            if (await RenewTokenAfterUnauthorizedAsync(versionAtSend, ct))
+            response = await StartPinnedRequest(clientLease, request).ConfigureAwait(false);
+            var firstHopMs = sw.ElapsedMilliseconds;
+
+            if (allowTokenRenewal
+                && response.StatusCode == HttpStatusCode.Unauthorized
+                && RenewTokenAsync is not null)
             {
-                sw.Restart();
-                response = await request();
-                RequestTiming?.Invoke($"{response.RequestMessage?.Method} {response.RequestMessage?.RequestUri} (after refresh)", sw.ElapsedMilliseconds);
+                // 被动兜底：仍然保留"401 → 续期 → 重试一次"，但并发到达的多个 401 只会产生**一次**
+                // 真实续期（旧实现用 volatile bool 直接跳过后来者，被跳过的请求拿着旧令牌继续走，
+                // 最终 EnsureSuccessStatusCode 抛 401 —— 上传循环把它当"客户端错误"丢掉整批数据）。
+                if (await RenewTokenAfterUnauthorizedAsync(versionAtSend, ct))
+                {
+                    response.Dispose();
+                    response = null;
+                    sw.Restart();
+                    response = await StartPinnedRequest(clientLease, request).ConfigureAwait(false);
+                    RequestTiming?.Invoke($"{response.RequestMessage?.Method} {response.RequestMessage?.RequestUri} (after refresh)", sw.ElapsedMilliseconds);
+                }
+                else
+                {
+                    RequestTiming?.Invoke($"{response.RequestMessage?.Method} {response.RequestMessage?.RequestUri}", firstHopMs);
+                }
             }
+            else
+            {
+                RequestTiming?.Invoke($"{response.RequestMessage?.Method} {response.RequestMessage?.RequestUri}", firstHopMs);
+            }
+
+            return response;
         }
-        else
+        catch
         {
-            RequestTiming?.Invoke($"{response.RequestMessage?.Method} {response.RequestMessage?.RequestUri}", firstHopMs);
+            response?.Dispose();
+            throw;
         }
+    }
 
-        response.EnsureSuccessStatusCode();
+    private ClientLease CaptureClientLease()
+    {
+        lock (_clientSync)
+        {
+            return new ClientLease(
+                _httpClient,
+                _clientGeneration,
+                _externalCredentialGeneration);
+        }
+    }
 
-        return await response.Content.ReadFromJsonAsync<T>(ct);
+    private Task<HttpResponseMessage> StartPinnedRequest(
+        ClientLease lease,
+        Func<Task<HttpResponseMessage>> request)
+    {
+        lock (_clientSync)
+        {
+            if (_clientGeneration != lease.Generation
+                || !ReferenceEquals(_httpClient, lease.Client))
+            {
+                throw new HttpRequestException(
+                    "API deployment changed while the request was in flight; the request was not sent");
+            }
+
+            if (_externalCredentialGeneration != lease.ExternalCredentialGeneration)
+            {
+                throw new HttpRequestException(
+                    "API credentials changed while the request was in flight; the request was not sent");
+            }
+
+            return request();
+        }
     }
 
     /// <summary>
@@ -389,7 +639,9 @@ public class ApiClient
             InsideTokenRenewal.Value = true;
             try
             {
-                if (!await RenewTokenAsync().ConfigureAwait(false))
+                var renewTokenAsync = RenewTokenAsync;
+                if (renewTokenAsync is null
+                    || !await renewTokenAsync().ConfigureAwait(false))
                 {
                     return false;
                 }
@@ -406,5 +658,341 @@ public class ApiClient
         {
             _tokenRenewalGate.Release();
         }
+    }
+
+    private static bool SameCanonicalApiRoot(Uri? previous, Uri next)
+    {
+        if (previous is null)
+        {
+            return false;
+        }
+
+        return string.Equals(previous.Scheme, next.Scheme, StringComparison.OrdinalIgnoreCase)
+               && string.Equals(previous.IdnHost, next.IdnHost, StringComparison.OrdinalIgnoreCase)
+               && previous.Port == next.Port
+               && string.Equals(
+                   ApiRootPath(previous.AbsolutePath),
+                   ApiRootPath(next.AbsolutePath),
+                   StringComparison.Ordinal);
+    }
+
+    private static string ApiRootPath(string absolutePath)
+    {
+        const string apiSuffix = "/api/v1";
+        var path = (absolutePath == "/" ? string.Empty : absolutePath).TrimEnd('/');
+        if (path.EndsWith(apiSuffix, StringComparison.Ordinal))
+        {
+            path = path[..^apiSuffix.Length];
+        }
+
+        return path.Length == 0 ? "/" : path;
+    }
+
+    private static NativeAsrSegmentHeaders ParseNativeAsrSegmentHeaders(
+        HttpResponseMessage response)
+    {
+        var attemptId = ParseGuidHeader(response, "X-Pim-Attempt-Id");
+        var versionId = ParseGuidHeader(response, "X-Pim-Version-Id");
+        var leaseId = ParseGuidHeader(response, "X-Pim-Lease-Id");
+        var nodeId = ParseGuidHeader(response, "X-Pim-Node-Id");
+        var ownerId = RequireSingleHeader(response, "X-Pim-Owner-Id");
+        var fencingToken = ParseInt64Header(response, "X-Pim-Fencing-Token");
+        if (fencingToken <= 0)
+        {
+            throw new InvalidDataException("X-Pim-Fencing-Token must be positive");
+        }
+
+        var segmentIndex = ParseInt32Header(response, "X-Pim-Segment-Index");
+        if (segmentIndex < 0)
+        {
+            throw new InvalidDataException("X-Pim-Segment-Index must be non-negative");
+        }
+
+        var sourceFileIndex = ParseInt32Header(response, "X-Pim-Source-File-Index");
+        if (sourceFileIndex < 0)
+        {
+            throw new InvalidDataException("X-Pim-Source-File-Index must be non-negative");
+        }
+
+        var sourceOffsetSamples = ParseInt64Header(response, "X-Pim-Source-Offset-Samples");
+        if (sourceOffsetSamples < 0)
+        {
+            throw new InvalidDataException("X-Pim-Source-Offset-Samples must be non-negative");
+        }
+
+        var samples = ParseInt64Header(response, "X-Pim-Samples");
+        if (samples <= 0)
+        {
+            throw new InvalidDataException("X-Pim-Samples must be positive");
+        }
+
+        var sourceSha256 = ParseSha256Header(response, "X-Pim-Source-SHA256");
+        var contentSha256 = ParseSha256Header(response, "X-Content-SHA256");
+
+        return new NativeAsrSegmentHeaders(
+            attemptId,
+            versionId,
+            leaseId,
+            nodeId,
+            ownerId,
+            fencingToken,
+            segmentIndex,
+            sourceFileIndex,
+            sourceOffsetSamples,
+            samples,
+            sourceSha256,
+            contentSha256);
+    }
+
+    private static string RequireSingleHeader(HttpResponseMessage response, string name)
+    {
+        if (!response.Headers.TryGetValues(name, out var values))
+        {
+            throw new InvalidDataException($"native ASR segment response is missing {name}");
+        }
+
+        var materialized = values.Select(value => value.Trim()).ToArray();
+        if (materialized.Length != 1 || string.IsNullOrWhiteSpace(materialized[0]))
+        {
+            throw new InvalidDataException(
+                $"native ASR segment response must contain exactly one {name}");
+        }
+
+        return materialized[0];
+    }
+
+    private static Guid ParseGuidHeader(HttpResponseMessage response, string name)
+    {
+        var value = RequireSingleHeader(response, name);
+        if (!Guid.TryParse(value, out var parsed) || parsed == Guid.Empty)
+        {
+            throw new InvalidDataException($"{name} is not a non-empty UUID");
+        }
+
+        return parsed;
+    }
+
+    private static long ParseInt64Header(HttpResponseMessage response, string name)
+    {
+        var value = RequireSingleHeader(response, name);
+        if (!long.TryParse(
+                value,
+                NumberStyles.AllowLeadingSign,
+                CultureInfo.InvariantCulture,
+                out var parsed))
+        {
+            throw new InvalidDataException($"{name} is not a valid Int64");
+        }
+
+        return parsed;
+    }
+
+    private static int ParseInt32Header(HttpResponseMessage response, string name)
+    {
+        var value = RequireSingleHeader(response, name);
+        if (!int.TryParse(
+                value,
+                NumberStyles.AllowLeadingSign,
+                CultureInfo.InvariantCulture,
+                out var parsed))
+        {
+            throw new InvalidDataException($"{name} is not a valid Int32");
+        }
+
+        return parsed;
+    }
+
+    private static string ParseSha256Header(HttpResponseMessage response, string name)
+    {
+        var value = RequireSingleHeader(response, name);
+        if (value.Length != 64
+            || value.Any(character => !Uri.IsHexDigit(character)))
+        {
+            throw new InvalidDataException($"{name} is not a SHA-256 digest");
+        }
+
+        return value.ToLowerInvariant();
+    }
+
+    private sealed record ClientLease(
+        HttpClient Client,
+        long Generation,
+        long ExternalCredentialGeneration);
+}
+
+public sealed record NativeAsrSegmentHeaders(
+    Guid AttemptId,
+    Guid VersionId,
+    Guid LeaseId,
+    Guid NodeId,
+    string OwnerIdentity,
+    long FencingToken,
+    int SegmentIndex,
+    int SourceFileIndex,
+    long SourceOffsetSamples,
+    long Samples,
+    string SourceSha256,
+    string ContentSha256);
+
+/// <summary>
+/// Owned native ASR segment response. Disposing the stream also disposes the
+/// underlying HTTP response; callers must not keep the stream after disposal.
+/// </summary>
+public sealed class NativeAsrSegmentDownload : IAsyncDisposable, IDisposable
+{
+    private int _disposed;
+
+    internal NativeAsrSegmentDownload(NativeAsrSegmentHeaders headers, Stream content)
+    {
+        Headers = headers;
+        Content = content;
+    }
+
+    public NativeAsrSegmentHeaders Headers { get; }
+
+    public Stream Content { get; }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        Content.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        await Content.DisposeAsync().ConfigureAwait(false);
+    }
+}
+
+internal sealed class BoundedHttpResponseStream : Stream
+{
+    private readonly Stream _inner;
+    private HttpResponseMessage? _response;
+    private readonly long _maxBytes;
+    private long _bytesRead;
+    private int _disposed;
+
+    public BoundedHttpResponseStream(
+        Stream inner,
+        HttpResponseMessage response,
+        long maxBytes,
+        bool ownsResponse)
+    {
+        _inner = inner;
+        _response = ownsResponse ? response : null;
+        _maxBytes = maxBytes;
+    }
+
+    public override bool CanRead => !IsDisposed && _inner.CanRead;
+
+    public override bool CanSeek => false;
+
+    public override bool CanWrite => false;
+
+    public override long Length => throw new NotSupportedException();
+
+    public override long Position
+    {
+        get => _bytesRead;
+        set => throw new NotSupportedException();
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        ThrowIfDisposed();
+        var read = _inner.Read(buffer, offset, count);
+        Account(read);
+        return read;
+    }
+
+    public override async ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var read = await _inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+        Account(read);
+        return read;
+    }
+
+    public override Task<int> ReadAsync(
+        byte[] buffer,
+        int offset,
+        int count,
+        CancellationToken cancellationToken)
+        => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+    public override void Flush()
+    {
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            DisposeCoreAsync(disposing: true).AsTask().GetAwaiter().GetResult();
+        }
+
+        base.Dispose(disposing);
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        await DisposeCoreAsync(disposing: true).ConfigureAwait(false);
+        GC.SuppressFinalize(this);
+    }
+
+    private async ValueTask DisposeCoreAsync(bool disposing)
+    {
+        if (!disposing || Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await _inner.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _response, null)?.Dispose();
+        }
+    }
+
+    private void Account(int bytes)
+    {
+        if (bytes <= 0)
+        {
+            return;
+        }
+
+        _bytesRead = checked(_bytesRead + bytes);
+        if (_bytesRead > _maxBytes)
+        {
+            throw new InvalidDataException(
+                "native ASR segment response exceeded the configured content limit");
+        }
+    }
+
+    private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
     }
 }

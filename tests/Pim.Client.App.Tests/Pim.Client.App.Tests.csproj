@@ -33,6 +33,8 @@
     <Compile Include="../ClientWindows/WindowsPlannedOfflineWiringTests.cs" />
     <Compile Include="../ClientWindows/WindowsStatusCenterTests.cs" />
     <Compile Include="../ClientWindows/LocalModelSectionViewTests.cs" />
+    <Compile Include="../ClientWindows/LocalAsrBacklogViewModelTests.cs" />
+    <Compile Include="../ClientWindows/LocalAsrCompositionTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeExecutionAdapterTests.cs" />
     <Compile Include="../ClientWindows/WindowsControlledProcessRunnerTests.cs" />
     <Compile Include="../ClientWindows/WindowsResourceSnapshotProviderTests.cs" />

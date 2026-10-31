@@ -41,6 +41,7 @@
     <Compile Include="../ClientWindows/LocalRuntimeCatalogTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeAccountGuardTests.cs" />
     <Compile Include="../ClientWindows/LocalAsrWorkerEngineTests.cs" />
+    <Compile Include="../ClientWindows/LocalAsrApiTransportTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeResourceBackoffTests.cs" />
     <Compile Include="../ClientWindows/ModelInstallStoreTests.cs" />
     <Compile Include="../ClientWindows/RuntimeInstallStoreTests.cs" />
