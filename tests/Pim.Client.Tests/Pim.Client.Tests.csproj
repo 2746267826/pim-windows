@@ -33,6 +33,11 @@
     <Compile Include="../ClientWindows/KeyStatsLocalStatsClientTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsOneClickFixServiceTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsProcessManagerTests.cs" />
+    <Compile Include="../ClientWindows/ControlledProcessRunnerCoreTests.cs" />
+    <Compile Include="../ClientWindows/LocalRuntimeCatalogTests.cs" />
+    <Compile Include="../ClientWindows/LocalRuntimeAccountGuardTests.cs" />
+    <Compile Include="../ClientWindows/LocalRuntimeResourceBackoffTests.cs" />
+    <Compile Include="../ClientWindows/ModelInstallStoreTests.cs" />
     <Compile Include="../ClientWindows/NativeTrackerTimelineTests.cs" />
     <Compile Include="../ClientWindows/SiteChannelEndToEndTests.cs" />
     <Compile Include="../ClientWindows/SiteChannelTests.cs" />

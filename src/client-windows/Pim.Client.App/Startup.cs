@@ -1,5 +1,7 @@
+using System.Net.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Pim.Client.Core.Services;
+using Pim.Client.Core.Services.LocalRuntime;
 
 namespace Pim.Client.App;
 
@@ -39,6 +41,16 @@ public static class Startup
         services.AddSingleton<Pim.Client.Core.Services.NotificationActionRouter>();
         services.AddSingleton<EndpointCollectionBoundaryService>();
         services.AddSingleton<NotificationActionRouter>();
+        services.AddSingleton<IArtifactDownloader>(
+            _ => new HttpArtifactDownloader(new HttpClient { Timeout = Timeout.InfiniteTimeSpan }));
+        services.AddSingleton<IDiskSpaceProbe, DriveInfoDiskSpaceProbe>();
+        services.AddSingleton(sp => new ModelInstallStore(
+            LocalRuntimePaths.DefaultRoot,
+            sp.GetRequiredService<IArtifactDownloader>(),
+            sp.GetRequiredService<IDiskSpaceProbe>()));
+        services.AddSingleton(_ => new OwnedProcessRegistry(LocalRuntimePaths.OwnedProcessesFile()));
+        services.AddSingleton<ControlledProcessRunner>();
+        services.AddSingleton<IResourceSnapshotProvider, WindowsResourceSnapshotProvider>();
         services.AddSingleton<TrayIcon>();
 
         return services.BuildServiceProvider();

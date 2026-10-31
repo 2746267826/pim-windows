@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Pim.Client.Core;
 using Pim.Client.Core.Models;
 using Pim.Client.Core.Services;
+using Pim.Client.Core.Services.LocalRuntime;
 
 namespace Pim.Client.App;
 
@@ -21,6 +22,7 @@ public partial class StatusWindow : Window
     private readonly KeyStatsProcessManager _processManager;
     private readonly KeyStatsOneClickFixService _fixService;
     private readonly EndpointHeartbeatReporter? _endpointHeartbeat;
+    private readonly ModelInstallStore _modelInstallStore;
 
     private string _lastDiagnosticsReport = string.Empty;
     private string _trackerState = "Unknown";
@@ -41,10 +43,12 @@ public partial class StatusWindow : Window
         _processManager = App.Services.GetRequiredService<KeyStatsProcessManager>();
         _fixService = new KeyStatsOneClickFixService(_processManager, new KeyStatsLocalStatsClient());
         _endpointHeartbeat = App.Services.GetService<EndpointHeartbeatReporter>();
+        _modelInstallStore = App.Services.GetRequiredService<ModelInstallStore>();
 
         var config = DaemonConfig.Load();
         ServerUrlBox.Text = config.ServerUrl;
         AutoStartCheckBox.IsChecked = config.AutoStart;
+        OnLocalModelsRefresh(this, new RoutedEventArgs());
         RefreshAll();
     }
 

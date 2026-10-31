@@ -1,0 +1,283 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Pim.Client.Core.Models.LocalRuntime;
+
+namespace Pim.Client.Core.Services.LocalRuntime;
+
+/// <summary>
+/// Parses the operator-supplied local runtime catalog. Invalid entries are
+/// excluded from the usable catalog and reported, never silently promoted to
+/// executable.
+/// </summary>
+public static class LocalRuntimeCatalogParser
+{
+    private static readonly JsonSerializerOptions Options = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
+
+    public static LocalRuntimeCatalogParseResult Parse(string json)
+    {
+        var errors = new List<string>();
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            errors.Add("catalog-empty");
+            return new LocalRuntimeCatalogParseResult(LocalRuntimeCatalog.Empty, errors);
+        }
+
+        CatalogDocument? document;
+        try
+        {
+            document = JsonSerializer.Deserialize<CatalogDocument>(json, Options);
+        }
+        catch (JsonException ex)
+        {
+            errors.Add($"catalog-json-invalid: {ex.Message}");
+            return new LocalRuntimeCatalogParseResult(LocalRuntimeCatalog.Empty, errors);
+        }
+
+        if (document is null)
+        {
+            errors.Add("catalog-json-invalid: document is null");
+            return new LocalRuntimeCatalogParseResult(LocalRuntimeCatalog.Empty, errors);
+        }
+
+        if (document.SchemaVersion != 1)
+        {
+            errors.Add($"catalog-schema-unsupported: {document.SchemaVersion}");
+            return new LocalRuntimeCatalogParseResult(LocalRuntimeCatalog.Empty, errors);
+        }
+
+        var runtimes = new List<LocalRuntimeManifest>();
+        var runtimeIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in document.Runtimes ?? Array.Empty<RuntimeEntry>())
+        {
+            var validation = ValidateRuntime(entry);
+            if (validation.Error is not null)
+            {
+                errors.Add(validation.Error);
+                continue;
+            }
+
+            if (!runtimeIds.Add(validation.Runtime!.RuntimeId))
+            {
+                errors.Add($"runtime-duplicate: {validation.Runtime.RuntimeId}");
+                continue;
+            }
+
+            runtimes.Add(validation.Runtime);
+        }
+
+        var models = new List<LocalModelManifest>();
+        var modelIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in document.Models ?? Array.Empty<ModelEntry>())
+        {
+            var validation = ValidateModel(entry);
+            if (validation.Error is not null)
+            {
+                errors.Add(validation.Error);
+                continue;
+            }
+
+            if (!modelIds.Add(validation.Model!.ModelId))
+            {
+                errors.Add($"model-duplicate: {validation.Model.ModelId}");
+                continue;
+            }
+
+            models.Add(validation.Model);
+        }
+
+        return new LocalRuntimeCatalogParseResult(
+            new LocalRuntimeCatalog(models, runtimes),
+            errors);
+    }
+
+    private static (LocalRuntimeManifest? Runtime, string? Error) ValidateRuntime(RuntimeEntry entry)
+    {
+        var id = entry.RuntimeId?.Trim() ?? string.Empty;
+        if (!LocalModelManifest.IsValidModelId(id))
+        {
+            return (null, $"runtime-id-invalid: {entry.RuntimeId}");
+        }
+
+        if (!LocalModelManifest.IsValidArtifactFileName(entry.ExecutableFileName))
+        {
+            return (null, $"runtime-executable-invalid: {id}");
+        }
+
+        if (!TryValidateSource(entry.SourceUrl, out var sourceError))
+        {
+            return (null, $"runtime-source-invalid: {id}: {sourceError}");
+        }
+
+        if (!TryValidateOptionalHttps(entry.LicenseUrl, out var licenseError))
+        {
+            return (null, $"runtime-license-url-invalid: {id}: {licenseError}");
+        }
+
+        var sha = (entry.Sha256 ?? string.Empty).Trim().ToLowerInvariant();
+        if (sha.Length > 0 && !LocalModelManifest.IsValidSha256(sha))
+        {
+            return (null, $"runtime-sha-invalid: {id}");
+        }
+
+        return (new LocalRuntimeManifest(
+            id,
+            string.IsNullOrWhiteSpace(entry.DisplayName) ? id : entry.DisplayName.Trim(),
+            entry.ExecutableFileName!.Trim(),
+            entry.SourceUrl!.Trim(),
+            entry.LicenseId?.Trim() ?? string.Empty,
+            entry.LicenseUrl?.Trim() ?? string.Empty,
+            entry.Revision?.Trim() ?? string.Empty,
+            sha), null);
+    }
+
+    private static (LocalModelManifest? Model, string? Error) ValidateModel(ModelEntry entry)
+    {
+        var id = entry.ModelId?.Trim() ?? string.Empty;
+        if (!LocalModelManifest.IsValidModelId(id))
+        {
+            return (null, $"model-id-invalid: {entry.ModelId}");
+        }
+
+        if (!LocalModelManifest.IsValidArtifactFileName(entry.ArtifactFileName))
+        {
+            return (null, $"model-artifact-invalid: {id}");
+        }
+
+        if (!TryValidateSource(entry.SourceUrl, out var sourceError))
+        {
+            return (null, $"model-source-invalid: {id}: {sourceError}");
+        }
+
+        if (!TryValidateOptionalHttps(entry.LicenseUrl, out var licenseError))
+        {
+            return (null, $"model-license-url-invalid: {id}: {licenseError}");
+        }
+
+        if (entry.SizeBytes <= 0)
+        {
+            return (null, $"model-size-invalid: {id}");
+        }
+
+        var sha = (entry.Sha256 ?? string.Empty).Trim().ToLowerInvariant();
+        if (sha.Length > 0 && !LocalModelManifest.IsValidSha256(sha))
+        {
+            return (null, $"model-sha-invalid: {id}");
+        }
+
+        var resources = entry.Resources ?? new ResourceEntry();
+        if (resources.CpuCores is <= 0
+            || resources.MemoryBytes is <= 0
+            || resources.VramBytes is <= 0)
+        {
+            return (null, $"model-resources-invalid: {id}");
+        }
+
+        if (!resources.GpuRequired && resources.VramBytes is not null)
+        {
+            return (null, $"model-resources-invalid: {id}: vram declared without gpuRequired");
+        }
+
+        return (new LocalModelManifest(
+            id,
+            string.IsNullOrWhiteSpace(entry.DisplayName) ? id : entry.DisplayName.Trim(),
+            entry.RuntimeId?.Trim() ?? string.Empty,
+            entry.LicenseId?.Trim() ?? string.Empty,
+            entry.LicenseUrl?.Trim() ?? string.Empty,
+            entry.SourceUrl!.Trim(),
+            entry.Revision?.Trim() ?? string.Empty,
+            sha,
+            entry.SizeBytes,
+            entry.ArtifactFileName!.Trim(),
+            new LocalResourceRequirements(
+                resources.CpuCores,
+                resources.MemoryBytes,
+                resources.GpuRequired,
+                resources.VramBytes,
+                resources.RequireAcPower)), null);
+    }
+
+    private static bool TryValidateSource(string? value, out string error)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            error = "source must be an absolute https URL";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryValidateOptionalHttps(string? value, out string error)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            error = "licence URL must be an absolute https URL";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private sealed class CatalogDocument
+    {
+        [JsonPropertyName("schemaVersion")]
+        public int SchemaVersion { get; set; }
+
+        [JsonPropertyName("models")]
+        public ModelEntry[]? Models { get; set; }
+
+        [JsonPropertyName("runtimes")]
+        public RuntimeEntry[]? Runtimes { get; set; }
+    }
+
+    private sealed class ModelEntry
+    {
+        public string? ModelId { get; set; }
+        public string? DisplayName { get; set; }
+        public string? RuntimeId { get; set; }
+        public string? LicenseId { get; set; }
+        public string? LicenseUrl { get; set; }
+        public string? SourceUrl { get; set; }
+        public string? Revision { get; set; }
+        public string? Sha256 { get; set; }
+        public long SizeBytes { get; set; }
+        public string? ArtifactFileName { get; set; }
+        public ResourceEntry? Resources { get; set; }
+    }
+
+    private sealed class RuntimeEntry
+    {
+        public string? RuntimeId { get; set; }
+        public string? DisplayName { get; set; }
+        public string? ExecutableFileName { get; set; }
+        public string? SourceUrl { get; set; }
+        public string? LicenseId { get; set; }
+        public string? LicenseUrl { get; set; }
+        public string? Revision { get; set; }
+        public string? Sha256 { get; set; }
+    }
+
+    private sealed class ResourceEntry
+    {
+        public int? CpuCores { get; set; }
+        public long? MemoryBytes { get; set; }
+        public bool GpuRequired { get; set; }
+        public long? VramBytes { get; set; }
+        public bool RequireAcPower { get; set; }
+    }
+}
