@@ -33,25 +33,10 @@ public class WindowsControlledProcessRunnerTests
     }
 
     [Fact]
-    public async Task DeepVerifiedExecutablePath_LaunchesWithoutLegacyCwdLimit()
+    public async Task DeepVerifiedExecutablePath_FailsClosedWithoutExplicitCwdFallbackOptIn()
     {
-        var cleanupRoot = Path.Combine(
-            Path.GetTempPath(),
-            "pim-deep-runner-" + Guid.NewGuid().ToString("N"));
-        var root = Path.Combine(
-            cleanupRoot,
-            new string('a', 120),
-            new string('b', 100));
-        try
+        await WithDeepHelperAsync(async (root, executable) =>
         {
-            Directory.CreateDirectory(root);
-            foreach (var source in Directory.EnumerateFiles(Path.GetDirectoryName(HelperPath)!))
-            {
-                File.Copy(source, Path.Combine(root, Path.GetFileName(source)));
-            }
-
-            var executable = Path.Combine(root, Path.GetFileName(HelperPath));
-            Assert.True(executable.Length > 248);
             var result = await new ControlledProcessRunner().StartAsync(
                 new RuntimeLaunchSpec(
                     executable,
@@ -60,13 +45,29 @@ public class WindowsControlledProcessRunnerTests
                     Sha256(executable),
                     TimeSpan.FromSeconds(30)));
 
+            Assert.False(result.Succeeded);
+            Assert.Equal(LocalRuntimeReasonCodes.ProcessStartFailed, result.ErrorCode);
+            Assert.Contains("create-process-267", result.StandardError);
+        });
+    }
+
+    [Fact]
+    public async Task DeepVerifiedExecutablePath_LaunchesOnlyWithExplicitCwdFallbackOptIn()
+    {
+        await WithDeepHelperAsync(async (root, executable) =>
+        {
+            var result = await new ControlledProcessRunner().StartAsync(
+                new RuntimeLaunchSpec(
+                    executable,
+                    new[] { "--mode", "ok" },
+                    root,
+                    Sha256(executable),
+                    TimeSpan.FromSeconds(30),
+                    AllowCwdFallbackWhenInvalid: true));
+
             Assert.True(result.Succeeded, result.ErrorCode + " " + result.StandardError);
             Assert.Contains("HELPER_OK", result.StandardOutput);
-        }
-        finally
-        {
-            TryDeleteDirectory(cleanupRoot);
-        }
+        });
     }
 
     [Fact]
@@ -230,6 +231,33 @@ public class WindowsControlledProcessRunnerTests
 
     private static string Sha256(string path) =>
         Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
+    private static async Task WithDeepHelperAsync(Func<string, string, Task> action)
+    {
+        var cleanupRoot = Path.Combine(
+            Path.GetTempPath(),
+            "pim-deep-runner-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(
+            cleanupRoot,
+            new string('a', 120),
+            new string('b', 100));
+        try
+        {
+            Directory.CreateDirectory(root);
+            foreach (var source in Directory.EnumerateFiles(Path.GetDirectoryName(HelperPath)!))
+            {
+                File.Copy(source, Path.Combine(root, Path.GetFileName(source)));
+            }
+
+            var executable = Path.Combine(root, Path.GetFileName(HelperPath));
+            Assert.True(executable.Length > 248);
+            await action(root, executable);
+        }
+        finally
+        {
+            TryDeleteDirectory(cleanupRoot);
+        }
+    }
 
     private static async Task<int> WaitForChildPidAsync(string pidFile)
     {

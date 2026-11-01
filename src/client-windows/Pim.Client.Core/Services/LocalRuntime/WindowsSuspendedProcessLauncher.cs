@@ -24,6 +24,7 @@ internal static class WindowsSuspendedProcessLauncher
     private const uint OpenExisting = 3;
     private const int InsufficientBuffer = 122;
     private const int ErrorDirectory = 267;
+    private const int LegacyMaxDirectoryPathLength = 248;
     private const int ProcThreadAttributeHandleList = 0x00020002;
 
     public static bool TryStart(
@@ -134,7 +135,7 @@ internal static class WindowsSuspendedProcessLauncher
             if (!created)
             {
                 var firstError = Marshal.GetLastWin32Error();
-                if (firstError != ErrorDirectory)
+                if (!CanRetryWithoutWorkingDirectory(spec, firstError))
                 {
                     error = $"create-process-{firstError};cwd={spec.WorkingDirectory}";
                     return false;
@@ -142,9 +143,9 @@ internal static class WindowsSuspendedProcessLauncher
 
                 // CreateProcessW still enforces the legacy current-directory path limit
                 // even when long-path process/image paths are otherwise available.
-                // The executable is already an absolute, verified path and all asset
-                // arguments are absolute, so retry without an invalid CWD rather than
-                // failing a runtime solely because its install path is deep.
+                // Fall back only for profiles that explicitly cannot rely on a working
+                // directory; inheriting the parent CWD can change relative dependency
+                // resolution and must never be a generic retry.
                 commandLine = BuildCommandLine(spec.ExecutablePath, spec.Arguments);
                 created = CreateProcessW(
                     nativeExecutablePath,
@@ -227,6 +228,15 @@ internal static class WindowsSuspendedProcessLauncher
             }
         }
     }
+
+    private static bool CanRetryWithoutWorkingDirectory(
+        RuntimeLaunchSpec spec,
+        int errorCode) =>
+        errorCode == ErrorDirectory
+        && spec.AllowCwdFallbackWhenInvalid
+        && Path.IsPathFullyQualified(spec.ExecutablePath)
+        && Path.IsPathFullyQualified(spec.WorkingDirectory)
+        && spec.WorkingDirectory.Length >= LegacyMaxDirectoryPathLength;
 
     private static bool TryCreateHandleListAttribute(
         IntPtr[] handles,

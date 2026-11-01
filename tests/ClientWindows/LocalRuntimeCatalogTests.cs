@@ -43,7 +43,8 @@ public class LocalRuntimeCatalogTests
                   "--output-json"
                 ],
                 "timeoutSeconds": 300,
-                "outputFormat": "whisper.cpp-json"
+                "outputFormat": "whisper.cpp-json",
+                "allowCwdFallbackWhenInvalid": true
               }
             }
           ],
@@ -75,6 +76,7 @@ public class LocalRuntimeCatalogTests
         Assert.Equal(LocalRuntimeArtifactKind.Zip, result.Catalog.Runtimes[0].ArtifactKind);
         Assert.Equal(2, result.Catalog.Runtimes[0].RequiredFiles.Count);
         Assert.Equal("whisper-cli.exe", result.Catalog.Runtimes[0].ExecutableRelativePath);
+        Assert.True(result.Catalog.Runtimes[0].Execution.AllowCwdFallbackWhenInvalid);
         Assert.Equal(2, result.Catalog.Models[0].Resources.CpuCores);
     }
 
@@ -258,6 +260,7 @@ public class LocalRuntimeCatalogTests
                 "--no-timestamps",
             },
             runtime.Execution.Arguments);
+        Assert.False(runtime.Execution.AllowCwdFallbackWhenInvalid);
         Assert.Equal(LocalRuntimeExecutionProfile.PlainText, runtime.Execution.OutputFormat);
 
         Assert.Empty(result.Catalog.Models);

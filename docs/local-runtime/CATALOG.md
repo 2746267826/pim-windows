@@ -79,6 +79,11 @@
 `{inputPath}`、`{language}` 三个占位符。路径、参数和输出格式由目录固定，不允许运行时任意拼接命令行。
 `outputFormat` 当前支持 `whisper.cpp-json` 与 `plain-text`。
 
+`execution.allowCwdFallbackWhenInvalid` 默认 `false`。只有明确确认运行时没有任何相对路径依赖时，
+目录作者才可显式设为 `true`；仅当原始工作目录为绝对超长路径且 Windows 返回
+`ERROR_DIRECTORY (267)` 时，客户端才会在子进程创建前放弃继承父进程工作目录。普通路径、
+相对路径和其他启动错误始终 fail-closed。
+
 ## 安全规则 / Safety rules
 
 - 运行时 ZIP 的大小和 SHA-256 在解包前校验。每个 EXE/DLL 还必须在 `files` 中登记大小和 SHA-256，

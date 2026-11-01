@@ -254,7 +254,8 @@ public sealed class LocalRuntimeExecutionAdapter : ILocalSpeechRuntimeAdapter
                         workingDirectory,
                         executableDigest,
                         runtimeManifest.Execution.Timeout,
-                        MaxOutputBytes),
+                        MaxOutputBytes,
+                        runtimeManifest.Execution.AllowCwdFallbackWhenInvalid),
                     token)
                 .ConfigureAwait(false);
 

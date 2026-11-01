@@ -83,7 +83,8 @@ public sealed record LocalRuntimeFileManifest(
 public sealed record LocalRuntimeExecutionProfile(
     IReadOnlyList<string> Arguments,
     TimeSpan Timeout,
-    string OutputFormat)
+    string OutputFormat,
+    bool AllowCwdFallbackWhenInvalid = false)
 {
     public const string WhisperCppJson = "whisper.cpp-json";
     public const string PlainText = "plain-text";
@@ -329,7 +330,8 @@ public sealed record RuntimeLaunchSpec(
     string WorkingDirectory,
     string ExpectedSha256,
     TimeSpan Timeout,
-    int MaxOutputBytes = 64 * 1024);
+    int MaxOutputBytes = 64 * 1024,
+    bool AllowCwdFallbackWhenInvalid = false);
 
 public sealed record RuntimeLaunchResult(
     bool Succeeded,

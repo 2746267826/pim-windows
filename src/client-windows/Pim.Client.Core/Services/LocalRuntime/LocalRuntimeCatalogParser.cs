@@ -232,7 +232,8 @@ public static class LocalRuntimeCatalogParser
             new LocalRuntimeExecutionProfile(
                 arguments.ToArray(),
                 TimeSpan.FromSeconds(timeoutSeconds),
-                outputFormat)), null);
+                outputFormat,
+                entry.Execution?.AllowCwdFallbackWhenInvalid ?? false)), null);
     }
 
     private static (LocalModelManifest? Model, string? Error) ValidateModel(ModelEntry entry)
@@ -415,6 +416,7 @@ public static class LocalRuntimeCatalogParser
         public string[]? Arguments { get; set; }
         public int TimeoutSeconds { get; set; }
         public string? OutputFormat { get; set; }
+        public bool AllowCwdFallbackWhenInvalid { get; set; }
     }
 
     private sealed class ResourceEntry
