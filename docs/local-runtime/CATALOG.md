@@ -81,8 +81,8 @@
 
 `execution.allowCwdFallbackWhenInvalid` 默认 `false`。只有明确确认运行时没有任何相对路径依赖时，
 目录作者才可显式设为 `true`；仅当原始工作目录为绝对超长路径且 Windows 返回
-`ERROR_DIRECTORY (267)` 时，客户端才会在子进程创建前放弃继承父进程工作目录。普通路径、
-相对路径和其他启动错误始终 fail-closed。
+`ERROR_DIRECTORY (267)` 时，客户端才会在子进程创建前放弃原超长工作目录并继承父进程工作目录。
+普通路径、相对路径和其他启动错误始终 fail-closed。
 
 ## 安全规则 / Safety rules
 

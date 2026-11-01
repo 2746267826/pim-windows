@@ -330,19 +330,20 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
         await runtimeStore.InstallAsync(runtime.Manifest, "account-a");
         var input = Path.Combine(_root, "input.wav");
         await File.WriteAllBytesAsync(input, InputBytes);
+        var runner = new StubProcessRunner(new RuntimeLaunchResult(
+            Succeeded: true,
+            ExitCode: 0,
+            Cancelled: false,
+            TimedOut: false,
+            OutputTruncated: true,
+            StandardOutput: "truncated text",
+            StandardError: string.Empty,
+            ErrorCode: null,
+            Duration: TimeSpan.Zero));
         var adapter = new LocalRuntimeExecutionAdapter(
             runtimeStore,
             modelStore,
-            new StubProcessRunner(new RuntimeLaunchResult(
-                Succeeded: true,
-                ExitCode: 0,
-                Cancelled: false,
-                TimedOut: false,
-                OutputTruncated: true,
-                StandardOutput: "truncated text",
-                StandardError: string.Empty,
-                ErrorCode: null,
-                Duration: TimeSpan.Zero)),
+            runner,
             new LocalRuntimeAccountGuard());
 
         var result = await adapter.ExecuteAsync(
@@ -350,6 +351,7 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
             model.Manifest,
             new LocalSpeechExecutionRequest(Scope, input, "en"));
 
+        Assert.True(runner.LastSpec?.AllowCwdFallbackWhenInvalid);
         Assert.False(result.Succeeded);
         Assert.Equal(LocalRuntimeReasonCodes.OutputTruncated, result.ErrorCode);
         Assert.True(result.Process?.OutputTruncated);
@@ -456,7 +458,8 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
                     "--language", "{language}",
                 },
                 TimeSpan.FromSeconds(30),
-                outputFormat)), bytes);
+                outputFormat,
+                true)), bytes);
     }
 
     private static string Sha256(byte[] bytes) =>
@@ -499,9 +502,14 @@ public sealed class LocalRuntimeExecutionAdapterTests : IDisposable
             _result = result;
         }
 
+        public RuntimeLaunchSpec? LastSpec { get; private set; }
+
         public Task<RuntimeLaunchResult> StartAsync(
             RuntimeLaunchSpec spec,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(_result);
+            CancellationToken cancellationToken = default)
+        {
+            LastSpec = spec;
+            return Task.FromResult(_result);
+        }
     }
 }
