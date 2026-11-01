@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <!-- 显式列出用例文件：清单即范围，新增文件时必须显式加入 -->
+    <Compile Include="../ClientWindows/Pim.Client.App.Tests.AssemblyInfo.cs" />
     <Compile Include="../ClientWindows/BootstrapLogTests.cs" />
     <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/DaemonLoggerShutdownTests.cs" />
@@ -31,13 +32,32 @@
     <Compile Include="../ClientWindows/WindowsDaemonPrimaryPathTests.cs" />
     <Compile Include="../ClientWindows/WindowsPlannedOfflineWiringTests.cs" />
     <Compile Include="../ClientWindows/WindowsStatusCenterTests.cs" />
+    <Compile Include="../ClientWindows/LocalModelSectionViewTests.cs" />
+    <Compile Include="../ClientWindows/LocalAsrBacklogViewModelTests.cs" />
+    <Compile Include="../ClientWindows/LocalAsrCompositionTests.cs" />
+    <Compile Include="../ClientWindows/LocalAsrWorkerCoordinatorTests.cs" />
+    <Compile Include="../ClientWindows/LocalRuntimeCatalogProviderTests.cs" />
+    <Compile Include="../ClientWindows/LocalRuntimeExecutionAdapterTests.cs" />
+    <Compile Include="../ClientWindows/WindowsControlledProcessRunnerTests.cs" />
+    <Compile Include="../ClientWindows/WindowsResourceSnapshotProviderTests.cs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../../src/client-windows/Pim.Client.App/Pim.Client.App.csproj" />
     <ProjectReference Include="../../src/client-windows/Pim.Client.Core/Pim.Client.Core.csproj" />
     <ProjectReference Include="../../src/client-windows/Pim.Client.Infrastructure/Pim.Client.Infrastructure.csproj" />
+    <ProjectReference Include="../Pim.LocalRuntime.Helper/Pim.LocalRuntime.Helper.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <Target Name="CopyLocalRuntimeHelper" AfterTargets="Build">
+    <ItemGroup>
+      <LocalRuntimeHelperFiles Include="$(MSBuildThisFileDirectory)..\Pim.LocalRuntime.Helper\bin\$(Configuration)\net8.0\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(LocalRuntimeHelperFiles)"
+          DestinationFolder="$(OutDir)helper\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 e38d1991b372174a3a4bac10df0a35eee90de92d268a5f1d35762d76da07f0f9)
+//   契约快照      : contract/openapi.json (sha256 e5c555e2864e182f98242b0bbe50b156f755e9ea18dd5c57724518edd6bd8d76)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -77,6 +77,20 @@ public sealed class AuthResponseApiResponse
     /// <summary>契约字段 <c>timestamp</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
     public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.ClaimNoteAsrTaskRequest</c>（request）。</summary>
+public sealed class ClaimNoteAsrTaskRequest
+{
+    /// <summary>契约字段 <c>idempotencyKey</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("idempotencyKey")]
+    public required string IdempotencyKey { get; set; }
+    /// <summary>契约字段 <c>leaseSeconds</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("leaseSeconds")]
+    public int LeaseSeconds { get; set; }
+    /// <summary>契约字段 <c>nodeId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("nodeId")]
+    public required string NodeId { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.ClientShellLatestResponse</c>（response）。</summary>
@@ -531,6 +545,359 @@ public sealed class LoginRequest
     public required string Username { get; set; }
 }
 
+/// <summary>契约 <c>components.schemas.NoteAsrAckDto</c>（response）。</summary>
+public sealed class NoteAsrAckDto
+{
+    /// <summary>契约字段 <c>duplicate</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("duplicate")]
+    public required bool Duplicate { get; set; }
+    /// <summary>契约字段 <c>fencingToken</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("fencingToken")]
+    public required long FencingToken { get; set; }
+    /// <summary>契约字段 <c>leaseId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("leaseId")]
+    public required string LeaseId { get; set; }
+    /// <summary>契约字段 <c>status</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("status")]
+    public required string Status { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrAckDtoApiResponse</c>（response）。</summary>
+public sealed class NoteAsrAckDtoApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public NoteAsrAckDto? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrAckRequest</c>（request）。</summary>
+public sealed class NoteAsrAckRequest
+{
+    /// <summary>契约字段 <c>coverageJson</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("coverageJson")]
+    public string? CoverageJson { get; set; }
+    /// <summary>契约字段 <c>errorCode</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("errorCode")]
+    public string? ErrorCode { get; set; }
+    /// <summary>契约字段 <c>errorMessage</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("errorMessage")]
+    public string? ErrorMessage { get; set; }
+    /// <summary>契约字段 <c>fencingToken</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("fencingToken")]
+    public required long FencingToken { get; set; }
+    /// <summary>契约字段 <c>kind</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("kind")]
+    public required string Kind { get; set; }
+    /// <summary>契约字段 <c>leaseId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("leaseId")]
+    public required string LeaseId { get; set; }
+    /// <summary>契约字段 <c>leaseToken</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("leaseToken")]
+    public required string LeaseToken { get; set; }
+    /// <summary>契约字段 <c>providerHandle</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("providerHandle")]
+    public string? ProviderHandle { get; set; }
+    /// <summary>契约字段 <c>result</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("result")]
+    public required string Result { get; set; }
+    /// <summary>契约字段 <c>resultText</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("resultText")]
+    public string? ResultText { get; set; }
+    /// <summary>契约字段 <c>segmentIndex</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("segmentIndex")]
+    public required int SegmentIndex { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrClaimDto</c>（response）。</summary>
+public sealed class NoteAsrClaimDto
+{
+    /// <summary>契约字段 <c>execution</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("execution")]
+    public NoteAsrExecutionDto? Execution { get; set; }
+    /// <summary>契约字段 <c>lease</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("lease")]
+    public NoteAsrLeaseDto? Lease { get; set; }
+    /// <summary>契约字段 <c>leaseId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("leaseId")]
+    public string? LeaseId { get; set; }
+    /// <summary>契约字段 <c>status</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("status")]
+    public required string Status { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrClaimDtoApiResponse</c>（response）。</summary>
+public sealed class NoteAsrClaimDtoApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public NoteAsrClaimDto? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrExecutionDto</c>（response）。</summary>
+public sealed class NoteAsrExecutionDto
+{
+    /// <summary>契约字段 <c>attemptId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("attemptId")]
+    public required string AttemptId { get; set; }
+    /// <summary>契约字段 <c>configRevision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("configRevision")]
+    public required string ConfigRevision { get; set; }
+    /// <summary>契约字段 <c>consentVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("consentVersion")]
+    public required string ConsentVersion { get; set; }
+    /// <summary>契约字段 <c>expectedSegments</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("expectedSegments")]
+    public required int ExpectedSegments { get; set; }
+    /// <summary>契约字段 <c>inputSha256</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("inputSha256")]
+    public required string InputSha256 { get; set; }
+    /// <summary>契约字段 <c>language</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("language")]
+    public required string Language { get; set; }
+    /// <summary>契约字段 <c>localModelId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("localModelId")]
+    public string? LocalModelId { get; set; }
+    /// <summary>契约字段 <c>localModelRevision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("localModelRevision")]
+    public string? LocalModelRevision { get; set; }
+    /// <summary>契约字段 <c>noteId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("noteId")]
+    public required string NoteId { get; set; }
+    /// <summary>契约字段 <c>ownerId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("ownerId")]
+    public required string OwnerId { get; set; }
+    /// <summary>契约字段 <c>route</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("route")]
+    public required string Route { get; set; }
+    /// <summary>契约字段 <c>segments</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("segments")]
+    public required System.Collections.Generic.List<NoteAsrSegmentInputDto> Segments { get; set; }
+    /// <summary>契约字段 <c>serverNow</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("serverNow")]
+    public required System.DateTimeOffset ServerNow { get; set; }
+    /// <summary>契约字段 <c>serverOrigin</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("serverOrigin")]
+    public required string ServerOrigin { get; set; }
+    /// <summary>契约字段 <c>taskId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("taskId")]
+    public required string TaskId { get; set; }
+    /// <summary>契约字段 <c>versionId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("versionId")]
+    public required string VersionId { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrLeaseDto</c>（response）。</summary>
+public sealed class NoteAsrLeaseDto
+{
+    /// <summary>契约字段 <c>attemptId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("attemptId")]
+    public required string AttemptId { get; set; }
+    /// <summary>契约字段 <c>expiresAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("expiresAt")]
+    public required System.DateTimeOffset ExpiresAt { get; set; }
+    /// <summary>契约字段 <c>fencingToken</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("fencingToken")]
+    public required long FencingToken { get; set; }
+    /// <summary>契约字段 <c>leaseId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("leaseId")]
+    public required string LeaseId { get; set; }
+    /// <summary>契约字段 <c>leaseToken</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("leaseToken")]
+    public required string LeaseToken { get; set; }
+    /// <summary>契约字段 <c>ownerId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("ownerId")]
+    public string? OwnerId { get; set; }
+    /// <summary>契约字段 <c>route</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("route")]
+    public required string Route { get; set; }
+    /// <summary>契约字段 <c>serverNow</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("serverNow")]
+    public System.DateTimeOffset ServerNow { get; set; }
+    /// <summary>契约字段 <c>serverOrigin</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("serverOrigin")]
+    public string? ServerOrigin { get; set; }
+    /// <summary>契约字段 <c>stopRequested</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("stopRequested")]
+    public bool StopRequested { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrLeaseDtoApiResponse</c>（response）。</summary>
+public sealed class NoteAsrLeaseDtoApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public NoteAsrLeaseDto? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrLeaseHeartbeatRequest</c>（request）。</summary>
+public sealed class NoteAsrLeaseHeartbeatRequest
+{
+    /// <summary>契约字段 <c>fencingToken</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("fencingToken")]
+    public required long FencingToken { get; set; }
+    /// <summary>契约字段 <c>leaseId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("leaseId")]
+    public required string LeaseId { get; set; }
+    /// <summary>契约字段 <c>leaseToken</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("leaseToken")]
+    public required string LeaseToken { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrNodeDto</c>（response）。</summary>
+public sealed class NoteAsrNodeDto
+{
+    /// <summary>契约字段 <c>capabilities</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("capabilities")]
+    public required System.Collections.Generic.List<string> Capabilities { get; set; }
+    /// <summary>契约字段 <c>claimable</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("claimable")]
+    public required bool Claimable { get; set; }
+    /// <summary>契约字段 <c>createdAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("createdAt")]
+    public required System.DateTimeOffset CreatedAt { get; set; }
+    /// <summary>契约字段 <c>enabled</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("enabled")]
+    public required bool Enabled { get; set; }
+    /// <summary>契约字段 <c>lastHeartbeatAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("lastHeartbeatAt")]
+    public required System.DateTimeOffset LastHeartbeatAt { get; set; }
+    /// <summary>契约字段 <c>modelId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelId")]
+    public required string ModelId { get; set; }
+    /// <summary>契约字段 <c>modelRevision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelRevision")]
+    public required string ModelRevision { get; set; }
+    /// <summary>契约字段 <c>modelVerified</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelVerified")]
+    public required bool ModelVerified { get; set; }
+    /// <summary>契约字段 <c>nodeId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("nodeId")]
+    public required string NodeId { get; set; }
+    /// <summary>契约字段 <c>nodeIdExternal</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("nodeIdExternal")]
+    public required string NodeIdExternal { get; set; }
+    /// <summary>契约字段 <c>resourceSnapshotJson</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("resourceSnapshotJson")]
+    public string? ResourceSnapshotJson { get; set; }
+    /// <summary>契约字段 <c>runtimeId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("runtimeId")]
+    public string? RuntimeId { get; set; }
+    /// <summary>契约字段 <c>runtimeVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("runtimeVersion")]
+    public string? RuntimeVersion { get; set; }
+    /// <summary>契约字段 <c>sampledAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sampledAt")]
+    public System.DateTimeOffset? SampledAt { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrNodeDtoApiResponse</c>（response）。</summary>
+public sealed class NoteAsrNodeDtoApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public NoteAsrNodeDto? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrNodeHeartbeatRequest</c>（request）。</summary>
+public sealed class NoteAsrNodeHeartbeatRequest
+{
+    /// <summary>契约字段 <c>capabilities</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("capabilities")]
+    public required System.Collections.Generic.List<string> Capabilities { get; set; }
+    /// <summary>契约字段 <c>modelId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelId")]
+    public required string ModelId { get; set; }
+    /// <summary>契约字段 <c>modelRevision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelRevision")]
+    public required string ModelRevision { get; set; }
+    /// <summary>契约字段 <c>modelVerified</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelVerified")]
+    public required bool ModelVerified { get; set; }
+    /// <summary>契约字段 <c>nodeId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("nodeId")]
+    public required string NodeId { get; set; }
+    /// <summary>契约字段 <c>resourceSnapshotJson</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("resourceSnapshotJson")]
+    public string? ResourceSnapshotJson { get; set; }
+    /// <summary>契约字段 <c>runtimeId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("runtimeId")]
+    public string? RuntimeId { get; set; }
+    /// <summary>契约字段 <c>runtimeVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("runtimeVersion")]
+    public string? RuntimeVersion { get; set; }
+    /// <summary>契约字段 <c>sampledAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sampledAt")]
+    public System.DateTimeOffset? SampledAt { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrSegmentInputDto</c>（response）。</summary>
+public sealed class NoteAsrSegmentInputDto
+{
+    /// <summary>契约字段 <c>chunkIndex</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("chunkIndex")]
+    public required int ChunkIndex { get; set; }
+    /// <summary>契约字段 <c>contentEndpoint</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("contentEndpoint")]
+    public required string ContentEndpoint { get; set; }
+    /// <summary>契约字段 <c>index</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("index")]
+    public required int Index { get; set; }
+    /// <summary>契约字段 <c>recordingId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("recordingId")]
+    public required string RecordingId { get; set; }
+    /// <summary>契约字段 <c>recordingSegment</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("recordingSegment")]
+    public required int RecordingSegment { get; set; }
+    /// <summary>契约字段 <c>samples</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("samples")]
+    public required long Samples { get; set; }
+    /// <summary>契约字段 <c>sourceFileIndex</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceFileIndex")]
+    public required int SourceFileIndex { get; set; }
+    /// <summary>契约字段 <c>sourceOffsetSamples</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceOffsetSamples")]
+    public required long SourceOffsetSamples { get; set; }
+    /// <summary>契约字段 <c>sourceSha256</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceSha256")]
+    public required string SourceSha256 { get; set; }
+}
+
 /// <summary>契约 <c>components.schemas.PlannedOfflineRequest</c>（request）。</summary>
 public sealed class PlannedOfflineRequest
 {
@@ -554,6 +921,44 @@ public sealed class RefreshRequest
     /// <summary>契约字段 <c>refreshToken</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("refreshToken")]
     public required string RefreshToken { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.RegisterNoteAsrNodeRequest</c>（request）。</summary>
+public sealed class RegisterNoteAsrNodeRequest
+{
+    /// <summary>契约字段 <c>capabilities</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("capabilities")]
+    public required System.Collections.Generic.List<string> Capabilities { get; set; }
+    /// <summary>契约字段 <c>enabled</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("enabled")]
+    public required bool Enabled { get; set; }
+    /// <summary>契约字段 <c>modelId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelId")]
+    public required string ModelId { get; set; }
+    /// <summary>契约字段 <c>modelRevision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelRevision")]
+    public required string ModelRevision { get; set; }
+    /// <summary>契约字段 <c>modelVerified</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelVerified")]
+    public required bool ModelVerified { get; set; }
+    /// <summary>契约字段 <c>nodeId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("nodeId")]
+    public required string NodeId { get; set; }
+    /// <summary>契约字段 <c>nodeIdExternal</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("nodeIdExternal")]
+    public required string NodeIdExternal { get; set; }
+    /// <summary>契约字段 <c>resourceSnapshotJson</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("resourceSnapshotJson")]
+    public string? ResourceSnapshotJson { get; set; }
+    /// <summary>契约字段 <c>runtimeId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("runtimeId")]
+    public string? RuntimeId { get; set; }
+    /// <summary>契约字段 <c>runtimeVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("runtimeVersion")]
+    public string? RuntimeVersion { get; set; }
+    /// <summary>契约字段 <c>sampledAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sampledAt")]
+    public System.DateTimeOffset? SampledAt { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.RegisterRequest</c>（request）。</summary>

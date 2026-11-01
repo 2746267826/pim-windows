@@ -20,6 +20,9 @@
   <ItemGroup>
     <!-- 显式列出用例文件：清单即范围，新增文件时必须显式加入（避免"悄悄不被执行"） -->
     <Compile Include="../ClientWindows/ApiClientDefaultsTests.cs" />
+    <Compile Include="../ClientWindows/ApiContentEndpointPolicyTests.cs" />
+    <Compile Include="../ClientWindows/ApiContentIntegrityValidatorTests.cs" />
+    <Compile Include="../ClientWindows/ArtifactDownloaderSecurityTests.cs" />
     <Compile Include="../ClientWindows/AuthServiceTests.cs" />
     <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/AwBucketSelectionTests.cs" />
@@ -33,6 +36,15 @@
     <Compile Include="../ClientWindows/KeyStatsLocalStatsClientTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsOneClickFixServiceTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsProcessManagerTests.cs" />
+    <Compile Include="../ClientWindows/ControlledProcessRunnerCoreTests.cs" />
+    <Compile Include="../ClientWindows/CpuLoadSamplerTests.cs" />
+    <Compile Include="../ClientWindows/LocalRuntimeCatalogTests.cs" />
+    <Compile Include="../ClientWindows/LocalRuntimeAccountGuardTests.cs" />
+    <Compile Include="../ClientWindows/LocalAsrWorkerEngineTests.cs" />
+    <Compile Include="../ClientWindows/LocalAsrApiTransportTests.cs" />
+    <Compile Include="../ClientWindows/LocalRuntimeResourceBackoffTests.cs" />
+    <Compile Include="../ClientWindows/ModelInstallStoreTests.cs" />
+    <Compile Include="../ClientWindows/RuntimeInstallStoreTests.cs" />
     <Compile Include="../ClientWindows/NativeTrackerTimelineTests.cs" />
     <Compile Include="../ClientWindows/SiteChannelEndToEndTests.cs" />
     <Compile Include="../ClientWindows/SiteChannelTests.cs" />

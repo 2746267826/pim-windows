@@ -126,7 +126,11 @@ public class EndpointHeartbeatReporterTests
         Assert.DoesNotContain("string deviceId", source);
 
         // 与守护程序心跳同源：那边用的也是 Environment.MachineName（App.xaml.cs 的调用点）。
-        var app = RepoSource("src", "client-windows", "Pim.Client.App", "App.xaml.cs");
+        // Working-tree checkouts may be CRLF (Windows) while the source is authored
+        // with LF. Normalize endings so this structural assertion is platform-neutral.
+        var app = RepoSource("src", "client-windows", "Pim.Client.App", "App.xaml.cs")
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
         Assert.Contains("DaemonHeartbeatReporter.BuildHeartbeat(\n                Environment.MachineName", app);
     }
 

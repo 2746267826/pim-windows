@@ -362,6 +362,187 @@
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
+
+            <!-- 本地模型（#516 阶段 3）：只展示目录与安装状态，下载/运行均需用户显式操作 -->
+            <TabItem Header="本地模型">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16">
+                    <StackPanel>
+                        <TextBlock Text="本地模型与运行时"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource PimTextBrush}"/>
+                        <TextBlock Text="不会自动下载或运行模型。只有登记了摘要、修订与许可的条目才允许安装；下载前会再次确认。CPU 型模型不因无 GPU 被拒绝，真正 required 但无法测量的资源会 fail-closed。"
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   Foreground="{StaticResource PimMutedTextBrush}"
+                                   Margin="0,6,0,12"/>
+
+                        <DockPanel Margin="0,0,0,10">
+                            <Button x:Name="RefreshLocalModelsButton"
+                                    Content="刷新目录"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    Click="OnLocalModelsRefresh"/>
+                        </DockPanel>
+
+                        <ListBox x:Name="LocalModelsList"
+                                 Height="240"
+                                 BorderBrush="{StaticResource PimBorderBrush}"
+                                 Background="{StaticResource PimMutedSurfaceBrush}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="{Binding DisplayName}"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{StaticResource PimTextBrush}"/>
+                                        <TextBlock Text="{Binding StatusText}"
+                                                   FontSize="11"
+                                                   TextWrapping="Wrap"
+                                                   Foreground="{StaticResource PimMutedTextBrush}"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <WrapPanel Margin="0,10,0,10">
+                            <Button x:Name="InstallModelButton"
+                                    Content="安装所选"
+                                    Style="{StaticResource PimPrimaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnInstallModel"/>
+                            <Button x:Name="CancelInstallButton"
+                                    Content="取消安装"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    IsEnabled="False"
+                                    Margin="0,0,8,6"
+                                    Click="OnCancelInstall"/>
+                            <Button x:Name="VerifyModelButton"
+                                    Content="校验摘要"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnVerifyModel"/>
+                            <Button x:Name="SelectAsrModelButton"
+                                    Content="用于本地 ASR"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnSelectAsrModel"/>
+                            <Button x:Name="UninstallModelButton"
+                                    Content="卸载所选"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnUninstallModel"/>
+                        </WrapPanel>
+
+                        <TextBlock x:Name="LocalModelStateText"
+                                   Text="正在读取本地运行时目录…"
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   Foreground="{StaticResource PimTextBrush}"/>
+
+                        <Border Height="1"
+                                Margin="0,20,0,16"
+                                Background="{StaticResource PimBorderBrush}"/>
+
+                        <TextBlock Text="运行时归档"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource PimTextBrush}"/>
+                        <TextBlock Text="运行时也必须显式安装。ZIP 只允许目录中逐项登记的 EXE/DLL，拒绝路径逃逸、符号链接、重复项和未声明文件；执行前会重新校验每个文件的大小与 SHA-256。"
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   Foreground="{StaticResource PimMutedTextBrush}"
+                                   Margin="0,6,0,12"/>
+
+                        <ListBox x:Name="LocalRuntimesList"
+                                 Height="210"
+                                 BorderBrush="{StaticResource PimBorderBrush}"
+                                 Background="{StaticResource PimMutedSurfaceBrush}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="4">
+                                        <TextBlock Text="{Binding DisplayName}"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{StaticResource PimTextBrush}"/>
+                                        <TextBlock Text="{Binding StatusText}"
+                                                   FontSize="11"
+                                                   TextWrapping="Wrap"
+                                                   Foreground="{StaticResource PimMutedTextBrush}"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <WrapPanel Margin="0,10,0,10">
+                            <Button x:Name="InstallRuntimeButton"
+                                    Content="安装运行时"
+                                    Style="{StaticResource PimPrimaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnInstallRuntime"/>
+                            <Button x:Name="CancelRuntimeInstallButton"
+                                    Content="取消运行时安装"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    IsEnabled="False"
+                                    Margin="0,0,8,6"
+                                    Click="OnCancelRuntimeInstall"/>
+                            <Button x:Name="VerifyRuntimeButton"
+                                    Content="校验逐文件摘要"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnVerifyRuntime"/>
+                            <Button x:Name="UninstallRuntimeButton"
+                                    Content="卸载运行时"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnUninstallRuntime"/>
+                        </WrapPanel>
+
+                        <TextBlock x:Name="LocalRuntimeStateText"
+                                   Text="正在读取运行时目录…"
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   Foreground="{StaticResource PimTextBrush}"/>
+
+                        <Border Height="1"
+                                Margin="0,20,0,16"
+                                Background="{StaticResource PimBorderBrush}"/>
+
+                        <TextBlock Text="ASR 后台处理"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource PimTextBrush}"/>
+                        <TextBlock Text="登录服务器并取得任务凭据后，后台处理才会启用。ASR 服务尚未连接时自动与手动入口保持禁用；切换账号或服务器会先停止旧运行并撤回旧能力。"
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   Foreground="{StaticResource PimMutedTextBrush}"
+                                   Margin="0,6,0,12"/>
+
+                        <CheckBox x:Name="AutoAsrCheckBox"
+                                  Content="自动处理排队任务"
+                                  Foreground="{StaticResource PimTextBrush}"
+                                  Margin="0,0,0,10"
+                                  Checked="OnAutoAsrToggled"
+                                  Unchecked="OnAutoAsrToggled"/>
+
+                        <WrapPanel Margin="0,0,0,10">
+                            <Button x:Name="ProcessAsrOnceButton"
+                                    Content="立即处理一次"
+                                    Style="{StaticResource PimPrimaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnProcessAsrOnce"/>
+                            <Button x:Name="StopAsrButton"
+                                    Content="停止并清退"
+                                    Style="{StaticResource PimSecondaryButton}"
+                                    Margin="0,0,8,6"
+                                    Click="OnStopAsr"/>
+                        </WrapPanel>
+
+                        <TextBlock x:Name="LocalAsrBacklogStateText"
+                                   Text="正在读取 ASR 后台处理状态…"
+                                   TextWrapping="Wrap"
+                                   FontSize="12"
+                                   Foreground="{StaticResource PimTextBrush}"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
         </TabControl>
 
         <StackPanel Grid.Row="2"

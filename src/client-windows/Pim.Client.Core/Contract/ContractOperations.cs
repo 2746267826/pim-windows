@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 e38d1991b372174a3a4bac10df0a35eee90de92d268a5f1d35762d76da07f0f9)
+//   契约快照      : contract/openapi.json (sha256 e5c555e2864e182f98242b0bbe50b156f755e9ea18dd5c57724518edd6bd8d76)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -21,14 +21,27 @@ namespace Pim.Client.Core.Contract;
 /// 并由 <c>scripts/ci/check-contract-csharp.sh</c> 在 CI 里逐字节复核。
 /// 需要契约里没有的接口时：不要在这里加，按 AGENTS.md「接口契约与门禁」把需求交给后端。
 /// </summary>
+public sealed record ContractHeader(string Name, string Kind);
+
 public sealed class ContractOperation
 {
-    private ContractOperation(string httpMethod, string pathTemplate, string relativePath)
+    private ContractOperation(
+        string httpMethod,
+        string pathTemplate,
+        string relativePath,
+        System.Collections.Generic.IReadOnlyList<ContractHeader> routeParameterKinds,
+        System.Collections.Generic.IReadOnlyList<ContractHeader> requestHeaders,
+        string responseMediaType,
+        System.Collections.Generic.IReadOnlyList<ContractHeader> responseHeaders)
     {
         HttpMethod = httpMethod;
         PathTemplate = pathTemplate;
         RelativePath = relativePath;
         RouteParameters = ParseRouteParameters(pathTemplate);
+        RouteParameterKinds = routeParameterKinds;
+        RequestHeaders = requestHeaders;
+        ResponseMediaType = responseMediaType;
+        ResponseHeaders = responseHeaders;
     }
 
     /// <summary>HTTP 方法（契约里的方法，全大写）。</summary>
@@ -42,6 +55,18 @@ public sealed class ContractOperation
 
     /// <summary>路径模板里的占位符（按出现顺序）。</summary>
     public System.Collections.Generic.IReadOnlyList<string> RouteParameters { get; }
+
+    /// <summary>路由参数的类型校验规则（uuid / int32 / int64 / plain-string）。</summary>
+    public System.Collections.Generic.IReadOnlyList<ContractHeader> RouteParameterKinds { get; }
+
+    /// <summary>契约要求的必需请求 header。</summary>
+    public System.Collections.Generic.IReadOnlyList<ContractHeader> RequestHeaders { get; }
+
+    /// <summary>2xx 响应的媒体类型；非 JSON（如 audio/wav）由客户端按流处理。</summary>
+    public string ResponseMediaType { get; }
+
+    /// <summary>契约声明的响应 header（用于下载流的身份/完整性绑定）。</summary>
+    public System.Collections.Generic.IReadOnlyList<ContractHeader> ResponseHeaders { get; }
 
     /// <summary>
     /// 用路由值填充路径模板。
@@ -68,12 +93,43 @@ public sealed class ContractOperation
         }
 
         var resolved = RelativePath;
+        var kinds = new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal);
+        foreach (var kind in RouteParameterKinds)
+        {
+            kinds[kind.Name] = kind.Kind;
+        }
+
         foreach (var parameter in RouteParameters)
         {
             if (!supplied.TryGetValue(parameter, out var value))
             {
                 throw new System.ArgumentException(
                     $"缺少路由值 {parameter}（契约路径 {PathTemplate}）", nameof(routeValues));
+            }
+
+            switch (kinds.TryGetValue(parameter, out var kind) ? kind : "plain-string")
+            {
+                case "uuid":
+                    if (!System.Guid.TryParse(value, out _))
+                    {
+                        throw new System.ArgumentException($"路由值 {parameter} 不是 UUID", nameof(routeValues));
+                    }
+
+                    break;
+                case "int32":
+                    if (!int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
+                    {
+                        throw new System.ArgumentException($"路由值 {parameter} 不是 int32", nameof(routeValues));
+                    }
+
+                    break;
+                case "int64":
+                    if (!long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
+                    {
+                        throw new System.ArgumentException($"路由值 {parameter} 不是 int64", nameof(routeValues));
+                    }
+
+                    break;
             }
 
             resolved = resolved.Replace("{" + parameter + "}", System.Uri.EscapeDataString(value), System.StringComparison.Ordinal);
@@ -110,33 +166,135 @@ public sealed class ContractOperation
     public override string ToString() => $"{HttpMethod} {PathTemplate}";
 
     public static readonly ContractOperation Login =
-        new("POST", "/api/v1/auth/login", "auth/login");
+        new("POST", "/api/v1/auth/login", "auth/login",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation Register =
-        new("POST", "/api/v1/auth/register", "auth/register");
+        new("POST", "/api/v1/auth/register", "auth/register",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation RefreshToken =
-        new("POST", "/api/v1/auth/refresh", "auth/refresh");
+        new("POST", "/api/v1/auth/refresh", "auth/refresh",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation ReportDaemonHeartbeat =
-        new("POST", "/api/v1/daemon/heartbeat", "daemon/heartbeat");
+        new("POST", "/api/v1/daemon/heartbeat", "daemon/heartbeat",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation ReportPlannedOffline =
-        new("POST", "/api/v1/daemon/planned-offline", "daemon/planned-offline");
+        new("POST", "/api/v1/daemon/planned-offline", "daemon/planned-offline",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation GetEndpointStatuses =
-        new("GET", "/api/v1/endpoints", "endpoints");
+        new("GET", "/api/v1/endpoints", "endpoints",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation GetEndpointCollectionQuality =
-        new("GET", "/api/v1/endpoints/{deviceId}/collection-quality", "endpoints/{deviceId}/collection-quality");
+        new("GET", "/api/v1/endpoints/{deviceId}/collection-quality", "endpoints/{deviceId}/collection-quality",
+            new ContractHeader[] { new("deviceId", "plain-string") },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation ReportEndpointHeartbeat =
-        new("POST", "/api/v1/endpoints/{deviceId}/heartbeat", "endpoints/{deviceId}/heartbeat");
+        new("POST", "/api/v1/endpoints/{deviceId}/heartbeat", "endpoints/{deviceId}/heartbeat",
+            new ContractHeader[] { new("deviceId", "plain-string") },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation SendEndpointNotificationAction =
-        new("POST", "/api/v1/endpoints/{deviceId}/notification-actions", "endpoints/{deviceId}/notification-actions");
+        new("POST", "/api/v1/endpoints/{deviceId}/notification-actions", "endpoints/{deviceId}/notification-actions",
+            new ContractHeader[] { new("deviceId", "plain-string") },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation UploadTrackerEvents =
-        new("POST", "/api/v1/pc/tracker/upload", "pc/tracker/upload");
+        new("POST", "/api/v1/pc/tracker/upload", "pc/tracker/upload",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation UploadSiteEvents =
-        new("POST", "/api/v1/pc/browser-tt/upload", "pc/browser-tt/upload");
+        new("POST", "/api/v1/pc/browser-tt/upload", "pc/browser-tt/upload",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation ReportTrackerHealth =
-        new("POST", "/api/v1/pc/tracker/health", "pc/tracker/health");
+        new("POST", "/api/v1/pc/tracker/health", "pc/tracker/health",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation UploadKeystatsSample =
-        new("POST", "/api/v1/pc/keystats/samples", "pc/keystats/samples");
+        new("POST", "/api/v1/pc/keystats/samples", "pc/keystats/samples",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation UploadKeystatsSnapshot =
-        new("POST", "/api/v1/pc/keystats/upload", "pc/keystats/upload");
+        new("POST", "/api/v1/pc/keystats/upload", "pc/keystats/upload",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation GetClientShellLatest =
-        new("GET", "/api/client/shell/latest", "../client/shell/latest");
+        new("GET", "/api/client/shell/latest", "../client/shell/latest",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation RegisterNativeAsrNode =
+        new("POST", "/api/v1/native-notes/asr-routing/nodes/register", "native-notes/asr-routing/nodes/register",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation HeartbeatNativeAsrNode =
+        new("POST", "/api/v1/native-notes/asr-routing/nodes/{nodeId}/heartbeat", "native-notes/asr-routing/nodes/{nodeId}/heartbeat",
+            new ContractHeader[] { new("nodeId", "uuid") },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation WithdrawNativeAsrNode =
+        new("POST", "/api/v1/native-notes/asr-routing/nodes/{nodeId}/withdraw", "native-notes/asr-routing/nodes/{nodeId}/withdraw",
+            new ContractHeader[] { new("nodeId", "uuid") },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation ClaimNativeAsrLease =
+        new("POST", "/api/v1/native-notes/asr-routing/leases/claim", "native-notes/asr-routing/leases/claim",
+            new ContractHeader[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation RenewNativeAsrLease =
+        new("POST", "/api/v1/native-notes/asr-routing/leases/{leaseId}/renew", "native-notes/asr-routing/leases/{leaseId}/renew",
+            new ContractHeader[] { new("leaseId", "uuid") },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetNativeAsrSegmentContent =
+        new("GET", "/api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content", "native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content",
+            new ContractHeader[] { new("leaseId", "uuid"), new("segmentIndex", "int32") },
+            new ContractHeader[] { new("X-Pim-Lease-Token", "uuid"), new("X-Pim-Fencing-Token", "int64") },
+            "audio/wav",
+            new ContractHeader[] { new("X-Content-SHA256", "plain-string"), new("X-Pim-Attempt-Id", "plain-string"), new("X-Pim-Fencing-Token", "int64"), new("X-Pim-Lease-Id", "plain-string"), new("X-Pim-Node-Id", "plain-string"), new("X-Pim-Owner-Id", "plain-string"), new("X-Pim-Samples", "int64"), new("X-Pim-Segment-Index", "int32"), new("X-Pim-Source-File-Index", "int32"), new("X-Pim-Source-Offset-Samples", "int64"), new("X-Pim-Source-SHA256", "plain-string"), new("X-Pim-Version-Id", "plain-string") });
+    public static readonly ContractOperation AckNativeAsrAttempt =
+        new("POST", "/api/v1/native-notes/asr-routing/leases/{attemptId}/ack", "native-notes/asr-routing/leases/{attemptId}/ack",
+            new ContractHeader[] { new("attemptId", "uuid") },
+            new ContractHeader[] {  },
+            "application/json",
+            new ContractHeader[] {  });
 }

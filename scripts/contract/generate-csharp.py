@@ -190,9 +190,84 @@ def single_ref(schema, what: str) -> str | None:
     )
 
 
-def reject_non_path_parameters(op: dict, op_path: str, path_item: dict | None = None) -> None:
-    """只支持 path 参数（由路径模板表达）：query/header/cookie 参数会被生成器丢掉，
-    丢掉的后果是「请求少带了契约要求的参数」，因此 fail-closed。
+PATH_PARAMETER_FORMATS = {
+    "uuid": "uuid",            # 路由值仍是 string，但由 ContractOperation 校验 Guid 形状
+    "int32": "int32",          # 路由值仍是 string，但由 ContractOperation 校验 int 形状
+}
+
+ALLOWED_REQUEST_HEADERS = {
+    "X-Pim-Lease-Token": "uuid",
+    "X-Pim-Fencing-Token": "int64",
+}
+
+SEGMENT_CONTENT_PATH = "/api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content"
+
+RESPONSE_HEADER_KINDS = {
+    # actual 9e96: these six response headers are plain `{type: string}` —
+    # transport 层做严格 parse/identity 校验，生成器不猜造 uuid format。
+    "X-Content-SHA256": "plain-string",
+    "X-Pim-Attempt-Id": "plain-string",
+    "X-Pim-Fencing-Token": "int64",
+    "X-Pim-Lease-Id": "plain-string",
+    "X-Pim-Node-Id": "plain-string",
+    "X-Pim-Owner-Id": "plain-string",
+    "X-Pim-Samples": "int64",
+    "X-Pim-Segment-Index": "int32",
+    "X-Pim-Source-File-Index": "int32",
+    "X-Pim-Source-Offset-Samples": "int64",
+    "X-Pim-Source-SHA256": "plain-string",
+    "X-Pim-Version-Id": "plain-string",
+}
+
+
+def validate_parameter_schema(parameter: dict, op_path: str, name: str) -> tuple[str, str]:
+    """返回 (C# 类型, 形状校验名)。只接受实际契约里出现的参数类型，
+    且只有一小撮 format 能映射成可执行校验；其它形状一律拒绝。"""
+    schema = parameter.get("schema") or {}
+    allowed_keys = {"type", "format", "description", "example", "title", "deprecated", "default", "nullable"}
+    unknown = sorted(key for key in schema if key not in allowed_keys and not key.startswith("x-"))
+    if unknown:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 的 schema 带生成器无法表达的键"
+            f"（{', '.join(unknown)}）：拒绝静默丢掉契约约束。"
+        )
+    if schema.get("$ref") is not None:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 的 schema 用了 $ref：拒绝产出。"
+        )
+    if schema.get("nullable") is True:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 声明为 nullable：拒绝产出。"
+        )
+    if "content" in parameter:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 用 content 描述（而非 schema）：拒绝产出。"
+        )
+    for forbidden in ("enum", "pattern", "minimum", "maximum", "minLength", "maxLength", "items"):
+        if forbidden in schema:
+            raise GenerationError(
+                f"operation {op_path} 的参数 {name} 带 {forbidden} 约束：生成器尚无对应校验，拒绝产出。"
+            )
+    kind = schema.get("type")
+    fmt = schema.get("format")
+    if kind == "string" and fmt == "uuid":
+        return "System.Guid", "uuid"
+    if kind == "string" and fmt is None:
+        # 兼容历史 plain-string path 参数；typed 校验属于 transport 层。
+        return "string", "plain-string"
+    if kind == "integer" and fmt in ("int32", "int64"):
+        csharp = "int" if fmt == "int32" else "long"
+        return csharp, fmt
+    raise GenerationError(
+        f"operation {op_path} 的参数 {name} 是 type={kind!r} format={fmt!r}："
+        "生成器只支持 uuid / int32 / int64 参数，拒绝静默丢掉约束。"
+    )
+
+
+def reject_non_path_parameters(op: dict, op_path: str, path_item: dict | None = None,
+                               method: str = "") -> None:
+    """只支持 path 参数和两个实际契约里的请求 header：
+    query/cookie 参数会被生成器丢掉，丢掉的后果是「请求少带了契约要求的参数」，因此 fail-closed。
 
     注意 OpenAPI 允许参数写在 **Path Item** 级（对同一路径的所有方法生效），
     只检查 operation 级会漏掉它们。
@@ -203,9 +278,6 @@ def reject_non_path_parameters(op: dict, op_path: str, path_item: dict | None = 
         location = parameter.get("in")
 
         if location == "path":
-            # path 参数由路径模板表达；但它**自带的 schema 约束**（enum/pattern/format/数值范围）
-            # 或非 string 类型，生成的边界表达不了 —— 静默丢掉等于「契约有约束、C# 边界没有」，
-            # 因此这里 fail-closed，而不是假装没看见。
             if "$ref" in parameter:
                 raise GenerationError(
                     f"operation {op_path} 的 path 参数用了 $ref（{parameter['$ref']}），"
@@ -220,37 +292,33 @@ def reject_non_path_parameters(op: dict, op_path: str, path_item: dict | None = 
                 raise GenerationError(
                     f"operation {op_path} 声明了 path 参数 {name}，但它不在路径模板里 —— 会被静默丢掉。"
                 )
-            schema = parameter.get("schema") or {}
-            # 白名单式判定：path 参数的 schema 只允许「就是 string」这一种形状。
-            # 任何其它写法（enum/pattern/format/数值范围/$ref/allOf/oneOf/anyOf/not/items…）
-            # 都是生成器表达不了的约束 —— 静默丢掉等于「契约有约束、C# 边界没有」。
-            allowed_keys = {"type", "description", "example", "title", "deprecated", "default", "nullable"}
-            unknown = sorted(key for key in schema if key not in allowed_keys and not key.startswith("x-"))
-            if unknown:
+            if parameter.get("required") is not True:
                 raise GenerationError(
-                    f"operation {op_path} 的 path 参数 {name} 的 schema 带生成器无法表达的键"
-                    f"（{', '.join(unknown)}）：需要扩展显式方法签名（例如生成枚举/校验），不能静默丢掉。"
+                    f"operation {op_path} 的 path 参数 {name} 不是 required=true：拒绝产出。"
                 )
-            if schema.get("$ref") is not None:
+            validate_parameter_schema(parameter, op_path, name)
+            continue
+
+        if location == "header":
+            if method != "GET" or op_path != SEGMENT_CONTENT_PATH:
                 raise GenerationError(
-                    f"operation {op_path} 的 path 参数 {name} 的 schema 用了 $ref，"
-                    "生成器尚未解析参数级 schema 引用，拒绝产出。"
+                    f"operation {op_path} 带 header 参数（{name}）："
+                    "只有 segment content 的契约 header 已建模，拒绝产出。"
                 )
-            if schema.get("nullable") is True:
+            if parameter.get("required") is not True or name not in ALLOWED_REQUEST_HEADERS:
                 raise GenerationError(
-                    f"operation {op_path} 的 path 参数 {name} 声明为 nullable，"
-                    "路径参数不可能是 null —— 契约形状可疑，拒绝产出。"
+                    f"operation {op_path} 的 header 参数（{name}）不在已建模的 required header 集合里。"
                 )
-            if schema.get("type") not in (None, "string"):
+            _, shape = validate_parameter_schema(parameter, op_path, name)
+            if shape != ALLOWED_REQUEST_HEADERS[name]:
                 raise GenerationError(
-                    f"operation {op_path} 的 path 参数 {name} 是 {schema.get('type')} 类型："
-                    "生成的边界只接受 string 路由值，需要先决定类型映射。"
+                    f"operation {op_path} 的 header {name} 形状 {shape} 与已建模形状不一致。"
                 )
             continue
 
         raise GenerationError(
             f"operation {op_path} 带 {location} 参数（{name}），"
-            "生成器目前只支持由路径模板表达的 path 参数 —— 需要先扩展显式方法签名。"
+            "生成器只支持 path 参数和两个已建模的 segment content header —— 需要先扩展显式方法签名。"
         )
 
 
@@ -260,17 +328,48 @@ def json_request_schema(op: dict):
     return media.get("schema") if media else None
 
 
-def success_response_schemas(op: dict) -> list[dict]:
+def success_response_schemas(op: dict, op_path: str = "") -> list[dict]:
     result = []
+    has_responses = False
     for status, response in (op.get("responses") or {}).items():
         if not str(status).startswith("2"):
             continue
+        has_responses = True
         media = (response.get("content") or {}).get("application/json")
         if media is None or media.get("schema") is None:
+            if (op_path == SEGMENT_CONTENT_PATH and str(status) == "200"
+                    and set((response.get("content") or {}).keys()) == {"audio/wav"}):
+                schema = response["content"]["audio/wav"].get("schema") or {}
+                if schema != {"type": "string", "format": "binary"}:
+                    raise GenerationError(
+                        f"operation {op_path} 的 200 audio/wav 必须是 string/binary 根 schema。"
+                    )
+                headers = response.get("headers") or {}
+                if set(headers.keys()) != set(RESPONSE_HEADER_KINDS):
+                    raise GenerationError(
+                        f"operation {op_path} 的 200 响应头必须恰好是已建模的 12 个："
+                        f"{sorted(headers.keys())}"
+                    )
+                for header_name, shape in RESPONSE_HEADER_KINDS.items():
+                    parameter = dict(headers[header_name])
+                    parameter["schema"] = headers[header_name].get("schema") or {}
+                    _, actual = validate_parameter_schema(
+                        parameter, op_path, f"response header {header_name}")
+                    if actual != shape:
+                        raise GenerationError(
+                            f"operation {op_path} 的 200 响应头 {header_name} 形状是 {actual}，"
+                            f"与已建模的 {shape} 不一致。"
+                        )
+                continue
             raise GenerationError(f"operation 的 {status} 响应不是 application/json（生成器只支持 JSON 边界）")
+        if (response.get("headers") or {}):
+            raise GenerationError(
+                f"operation {op_path} 的 {status} JSON 响应带 header："
+                "生成器只对 segment content 的 12 个响应头建模，拒绝静默丢掉。"
+            )
         single_ref(media["schema"], f"{status} 响应")
         result.append(media["schema"])
-    if not result:
+    if not has_responses:
         raise GenerationError("operation 没有任何 2xx 响应")
     return result
 
@@ -301,14 +400,15 @@ def schema_directions(contract: dict, operations: list[dict]) -> tuple[dict[str,
         method = str(entry["method"]).upper()
         op_path = str(entry["path"])
         op = operation_schema(contract, method, op_path)
-        reject_non_path_parameters(op, op_path, contract.get("paths", {}).get(op_path))
+        reject_non_path_parameters(
+            op, op_path, contract.get("paths", {}).get(op_path), method)
 
         request_schema = json_request_schema(op)
         if request_schema is not None:
             single_ref(request_schema, f"{method} {op_path} 请求体")
             request_roots.update(iter_refs(request_schema))
 
-        response_schemas = success_response_schemas(op)
+        response_schemas = success_response_schemas(op, op_path)
         for schema in response_schemas:
             response_roots.update(iter_refs(schema))
 
@@ -685,7 +785,48 @@ def relative_to_base(full_path: str) -> str:
     return "../" * ups + rest
 
 
-def render_operation_entry(entry: dict) -> list[str]:
+def operation_metadata(entry: dict, contract: dict) -> dict:
+    method = str(entry["method"]).upper()
+    full_path = str(entry["path"])
+    op = operation_schema(contract, method, full_path)
+    path_item = contract.get("paths", {}).get(full_path) or {}
+    parameters = list(path_item.get("parameters") or []) + list(op.get("parameters") or [])
+    route_kinds = []
+    request_headers = []
+    for parameter in parameters:
+        name = str(parameter.get("name") or "")
+        _, shape = validate_parameter_schema(parameter, full_path, name)
+        if parameter.get("in") == "path":
+            route_kinds.append((name, shape))
+        elif parameter.get("in") == "header":
+            request_headers.append((name, shape))
+    response_media = "application/json"
+    response_headers = []
+    for status, response in (op.get("responses") or {}).items():
+        if str(status) != "200":
+            continue
+        media_types = sorted((response.get("content") or {}).keys())
+        if media_types:
+            if media_types != ["application/json"] and full_path != SEGMENT_CONTENT_PATH:
+                raise GenerationError(f"operation {full_path} 的 200 媒体类型未建模：{media_types}")
+            response_media = media_types[0]
+        for header_name, header_schema in (response.get("headers") or {}).items():
+            parameter = {
+                "name": header_name,
+                "in": "header",
+                "schema": header_schema.get("schema") or {},
+            }
+            _, shape = validate_parameter_schema(parameter, full_path, header_name)
+            response_headers.append((header_name, shape))
+    return {
+        "routeKinds": route_kinds,
+        "requestHeaders": request_headers,
+        "responseMediaType": response_media,
+        "responseHeaders": response_headers,
+    }
+
+
+def render_operation_entry(entry: dict, contract: dict) -> list[str]:
     client_name = str(entry["apiClient"])
     if not client_name.endswith("Async"):
         raise GenerationError(f"operation 清单里的 apiClient 名必须以 Async 结尾（收到 {client_name}）")
@@ -695,9 +836,20 @@ def render_operation_entry(entry: dict) -> list[str]:
         raise GenerationError(f"operation 清单里的路径必须是绝对路径：{full_path}")
     relative = relative_to_base(full_path)
     field_name = client_name[: -len("Async")]
+    metadata = operation_metadata(entry, contract)
+    route_kinds = ", ".join(
+        f'new("{name}", "{kind}")' for name, kind in metadata["routeKinds"])
+    request_headers = ", ".join(
+        f'new("{name}", "{kind}")' for name, kind in metadata["requestHeaders"])
+    response_headers = ", ".join(
+        f'new("{name}", "{kind}")' for name, kind in metadata["responseHeaders"])
     return [
         f'    public static readonly ContractOperation {field_name} =',
-        f'        new("{method}", "{full_path}", "{relative}");',
+        f'        new("{method}", "{full_path}", "{relative}",',
+        f'            new ContractHeader[] {{ {route_kinds} }},',
+        f'            new ContractHeader[] {{ {request_headers} }},',
+        f'            "{metadata["responseMediaType"]}",',
+        f'            new ContractHeader[] {{ {response_headers} }});',
     ]
 
 
@@ -715,14 +867,27 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "/// 并由 <c>scripts/ci/check-contract-csharp.sh</c> 在 CI 里逐字节复核。",
         "/// 需要契约里没有的接口时：不要在这里加，按 AGENTS.md「接口契约与门禁」把需求交给后端。",
         "/// </summary>",
+        "public sealed record ContractHeader(string Name, string Kind);",
+        "",
         "public sealed class ContractOperation",
         "{",
-        "    private ContractOperation(string httpMethod, string pathTemplate, string relativePath)",
+        "    private ContractOperation(",
+        "        string httpMethod,",
+        "        string pathTemplate,",
+        "        string relativePath,",
+        "        System.Collections.Generic.IReadOnlyList<ContractHeader> routeParameterKinds,",
+        "        System.Collections.Generic.IReadOnlyList<ContractHeader> requestHeaders,",
+        "        string responseMediaType,",
+        "        System.Collections.Generic.IReadOnlyList<ContractHeader> responseHeaders)",
         "    {",
         "        HttpMethod = httpMethod;",
         "        PathTemplate = pathTemplate;",
         "        RelativePath = relativePath;",
         "        RouteParameters = ParseRouteParameters(pathTemplate);",
+        "        RouteParameterKinds = routeParameterKinds;",
+        "        RequestHeaders = requestHeaders;",
+        "        ResponseMediaType = responseMediaType;",
+        "        ResponseHeaders = responseHeaders;",
         "    }",
         "",
         "    /// <summary>HTTP 方法（契约里的方法，全大写）。</summary>",
@@ -736,6 +901,18 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "",
         "    /// <summary>路径模板里的占位符（按出现顺序）。</summary>",
         "    public System.Collections.Generic.IReadOnlyList<string> RouteParameters { get; }",
+        "",
+        "    /// <summary>路由参数的类型校验规则（uuid / int32 / int64 / plain-string）。</summary>",
+        "    public System.Collections.Generic.IReadOnlyList<ContractHeader> RouteParameterKinds { get; }",
+        "",
+        "    /// <summary>契约要求的必需请求 header。</summary>",
+        "    public System.Collections.Generic.IReadOnlyList<ContractHeader> RequestHeaders { get; }",
+        "",
+        "    /// <summary>2xx 响应的媒体类型；非 JSON（如 audio/wav）由客户端按流处理。</summary>",
+        "    public string ResponseMediaType { get; }",
+        "",
+        "    /// <summary>契约声明的响应 header（用于下载流的身份/完整性绑定）。</summary>",
+        "    public System.Collections.Generic.IReadOnlyList<ContractHeader> ResponseHeaders { get; }",
         "",
         "    /// <summary>",
         "    /// 用路由值填充路径模板。",
@@ -762,12 +939,43 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "        }",
         "",
         "        var resolved = RelativePath;",
+        "        var kinds = new System.Collections.Generic.Dictionary<string, string>(System.StringComparer.Ordinal);",
+        "        foreach (var kind in RouteParameterKinds)",
+        "        {",
+        "            kinds[kind.Name] = kind.Kind;",
+        "        }",
+        "",
         "        foreach (var parameter in RouteParameters)",
         "        {",
         "            if (!supplied.TryGetValue(parameter, out var value))",
         "            {",
         "                throw new System.ArgumentException(",
         "                    $\"缺少路由值 {parameter}（契约路径 {PathTemplate}）\", nameof(routeValues));",
+        "            }",
+        "",
+        "            switch (kinds.TryGetValue(parameter, out var kind) ? kind : \"plain-string\")",
+        "            {",
+        "                case \"uuid\":",
+        "                    if (!System.Guid.TryParse(value, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"路由值 {parameter} 不是 UUID\", nameof(routeValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"int32\":",
+        "                    if (!int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"路由值 {parameter} 不是 int32\", nameof(routeValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"int64\":",
+        "                    if (!long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"路由值 {parameter} 不是 int64\", nameof(routeValues));",
+        "                    }",
+        "",
+        "                    break;",
         "            }",
         "",
         "            resolved = resolved.Replace(\"{\" + parameter + \"}\", System.Uri.EscapeDataString(value), System.StringComparison.Ordinal);",
@@ -805,7 +1013,7 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "",
     ]
     for entry in operations:
-        body.extend(render_operation_entry(entry))
+        body.extend(render_operation_entry(entry, contract))
     body.append("}")
 
     return "\n".join(generated_header(contract_sha) + body).rstrip("\n") + "\n"
@@ -838,7 +1046,8 @@ def print_mapping(contract: dict, operations: list[dict]) -> None:
         op_path = str(entry["path"])
         op = operation_schema(contract, method, op_path)
         request_schema = json_request_schema(op)
-        payload = ", ".join(dict.fromkeys(ref_name(s) for s in success_response_schemas(op)))
+        payload = ", ".join(dict.fromkeys(
+            ref_name(s) for s in success_response_schemas(op, op_path)))
         print(
             f"| `{entry['apiClient']}` | `{method} {op_path}` | "
             f"`{ref_name(request_schema) if request_schema else '-'}` | `{payload}` |"

@@ -24,6 +24,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# shellcheck source=scripts/ci/contract-freshness-lib.sh
+. "$HERE/contract-freshness-lib.sh"
+pim_contract_require_python || exit $?
 
 if [ "$#" -ne 0 ]; then
   echo "refresh-contract.sh 不接受位置参数（收到：$*）。" >&2
@@ -51,7 +54,7 @@ bash "$SB/scripts/ci/fetch-contract.sh"
 
 echo ""
 echo "== ② 在沙箱里用刚拉到的快照重新生成 C# 生成物（先不碰仓） =="
-python3 "$SB/scripts/contract/generate-csharp.py" --out-dir "$SB"
+"$PIM_CONTRACT_PYTHON" "$SB/scripts/contract/generate-csharp.py" --out-dir "$SB"
 
 echo ""
 echo "== ③ 两步都成功了，才开始安装（任一步失败过，这里根本不会执行） =="
