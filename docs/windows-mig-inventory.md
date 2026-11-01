@@ -73,7 +73,7 @@
 | MIG-05 电脑记录、浏览器使用、电脑明细 | `NativeTrackerService`、`TrackerLogger`、`TrackerSessionManager`、`BrowserBridgeService`、KeyStats 采集与上传均原生保留；新增原生“电脑记录”窗口，将已结束会话写入 30 天/10,000 条/64 MB 有界本机历史，支持今天/7/30 天、类别、搜索和明细查询 | 采集强复用；本机会话查询/分类/明细已原生。服务器全量电脑记录、页面 URL 级明细与跨端历史检索仍 Web，不能标全量迁移完成 |
 | MIG-06 手机记录、历史位置 | Windows 无手机采集、地图/轨迹业务 UI | WebView-only |
 | MIG-07 应用知识库、分类树 | 无 Windows 原生业务页面或 typed operation | WebView-only |
-| MIG-08 设备列表、详情 | 新增原生设备中心，读取 typed `GET /api/v1/endpoints` 与 `GET /api/v1/endpoints/{deviceId}/collection-quality`；显示在线态、平台、App 版本、上传状态、缓存和联网限制阻止数，并可按所选设备检查采集质量 | 列表/基础详情/采集质量只读已原生；设备重命名、策略、删除与管理动作仍未迁移 |
+| MIG-08 设备列表、详情 | 新增原生设备中心，读取 typed `GET /api/v1/endpoints` 与 `GET /api/v1/endpoints/{deviceId}/collection-quality`；显示在线态、平台、App 版本、上传状态、缓存和联网限制阻止数，并可按所选设备检查采集质量 | `partial`（仅只读）：列表/基础详情/采集质量已原生；设备重命名、策略、删除与管理动作仍未迁移 |
 | MIG-09 登录、初始化、服务器、账号安全 | `LoginWindow`、`AuthService`、DPAPI token 存储、服务器地址保存均原生；用户/管理员管理仍 Web | 原生复用强；管理员边界未迁移 |
 | MIG-10 Outlook、Drive、AI、MCP 设置 | 对应设置路由由 Web 承载；Windows 本地模型/运行时有独立原生状态 UI，但不等同完整第三方设置业务 | 基础组件可复用，业务 WebView-only |
 | MIG-11 系统状态、可靠性、数据/日历管理、回收站、审计 | `StatusWindow`、Bootstrap/daemon 日志、采集状态、本地模型状态为原生；数据修复/回收站/审计仍 Web | 状态诊断部分复用，其余未迁移 |
