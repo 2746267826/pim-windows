@@ -19,6 +19,7 @@ public sealed class NativeTrackerService : IDisposable
     private readonly TrackerSessionManager _sessionManager;
     private readonly TrackerStateManager _stateManager;
     private readonly TrackerLogger _logger;
+    private readonly TrackerHistoryStore? _historyStore;
     /// <summary>
     /// 采集循环使用的时钟。生产用系统时钟；测试注入固定时钟以验证"休眠/断档补齐"这类时间相关行为
     /// （WO-ISSUES-396-400-20261007 §七.9 允许为 src/client-windows 做时钟注入）。
@@ -131,7 +132,8 @@ public sealed class NativeTrackerService : IDisposable
         BrowserBridgeService? bridge = null,
         TrackerLogger? logger = null,
         TrackerStateManager? stateManager = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        TrackerHistoryStore? historyStore = null)
     {
         _api = api;
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -139,6 +141,7 @@ public sealed class NativeTrackerService : IDisposable
         _windowResolver = windowResolver ?? new DefaultWindowResolver();
         _idleDetector = idleDetector ?? new WindowsIdleDetector();
         _logger = logger ?? new TrackerLogger(_config.LogRetentionDays);
+        _historyStore = historyStore;
         _bridge = bridge ?? new BrowserBridgeService(_config.BrowserBridgePort, _logger);
         _stateManager = stateManager ?? new TrackerStateManager();
         _sessionManager = new TrackerSessionManager(_config, _logger);
@@ -328,6 +331,23 @@ public sealed class NativeTrackerService : IDisposable
         foreach (var e in evs)
         {
             EnqueueEventSafely(e);
+        }
+
+        if (_historyStore is not null)
+        {
+            _ = RecordHistoryAsync(session);
+        }
+    }
+
+    private async Task RecordHistoryAsync(TrackerSession session)
+    {
+        try
+        {
+            await _historyStore!.AppendAsync(session).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn("Tracker", $"History append failed: {ex.Message}");
         }
     }
 

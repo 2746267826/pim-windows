@@ -70,14 +70,14 @@
 | MIG-02 日历、任务、日历本/任务本 | Shell 可打开 `/calendar`、`/tasks`；客户端 operation 清单没有日历/任务 CRUD | WebView-only |
 | MIG-03 确认中心、提醒、习惯、报告、数据中心 | Shell 路由 `/confirmations`、`/reports`、`/data-center`；`NotificationActionRouter` 可发端点通知动作，但业务页面仍 Web | 混合，业务未原生化 |
 | MIG-04 快速记录、文件 | 旧快速记录有显式 Web 兼容入口 `/quick-notes`；旧附件仍由服务端/Web；本机新笔记独立保存，二者未合并 | 旧入口保留；迁移未完成 |
-| MIG-05 电脑记录、浏览器使用、电脑明细 | `NativeTrackerService`、`TrackerLogger`、`TrackerSessionManager`、`BrowserBridgeService`、KeyStats 采集与上传均原生保留；StatusWindow 显示运行状态 | 采集强复用，查询/分类/明细 UI 仍 Web |
+| MIG-05 电脑记录、浏览器使用、电脑明细 | `NativeTrackerService`、`TrackerLogger`、`TrackerSessionManager`、`BrowserBridgeService`、KeyStats 采集与上传均原生保留；新增原生“电脑记录”窗口，将已结束会话写入 30 天/10,000 条/64 MB 有界本机历史，支持今天/7/30 天、类别、搜索和明细查询 | 采集强复用；本机会话查询/分类/明细已原生。服务器全量电脑记录、页面 URL 级明细与跨端历史检索仍 Web，不能标全量迁移完成 |
 | MIG-06 手机记录、历史位置 | Windows 无手机采集、地图/轨迹业务 UI | WebView-only |
 | MIG-07 应用知识库、分类树 | 无 Windows 原生业务页面或 typed operation | WebView-only |
-| MIG-08 设备列表、详情 | `GET /api/v1/endpoints`、端点心跳/通知 typed 边界已存在；无完整设备管理 UI | 少量基础能力，可复用但未完成 |
+| MIG-08 设备列表、详情 | 新增原生设备中心，读取 typed `GET /api/v1/endpoints` 与 `GET /api/v1/endpoints/{deviceId}/collection-quality`；显示在线态、平台、App 版本、上传状态、缓存和联网限制阻止数，并可按所选设备检查采集质量 | 列表/基础详情/采集质量只读已原生；设备重命名、策略、删除与管理动作仍未迁移 |
 | MIG-09 登录、初始化、服务器、账号安全 | `LoginWindow`、`AuthService`、DPAPI token 存储、服务器地址保存均原生；用户/管理员管理仍 Web | 原生复用强；管理员边界未迁移 |
 | MIG-10 Outlook、Drive、AI、MCP 设置 | 对应设置路由由 Web 承载；Windows 本地模型/运行时有独立原生状态 UI，但不等同完整第三方设置业务 | 基础组件可复用，业务 WebView-only |
 | MIG-11 系统状态、可靠性、数据/日历管理、回收站、审计 | `StatusWindow`、Bootstrap/daemon 日志、采集状态、本地模型状态为原生；数据修复/回收站/审计仍 Web | 状态诊断部分复用，其余未迁移 |
 | MIG-12 端点/壳入口、嵌入页、旧路由别名 | `MainShellWindow`、`EmbeddedWebViewHost`、认证与通知动作路由可复用；本批只补 `/quick-notes` 兼容入口 | 宿主复用，全量路由/占位盘点未完成 |
 | MIG-13 安装更新、托盘/通知、采集启停、队列同步、设置 | 托盘、通知路由、自动启动、更新检查、Tracker/BrowserBridge/KeyStats、守护进程退出路径均保留；`WindowsRecordingService` 为 DI 单例，关闭笔记窗口只解绑 UI 事件，不停止录音 | 生命周期复用强；仍需真实安装/升级与设备/长时验收 |
 
-结论：本批新增的是 Windows 本机主动笔记纵向能力，以及 MIG-04/MIG-13 的兼容入口和生命周期证据；没有任何 MIG-01 至 MIG-13 因本批自动销项。
+结论：本批新增的是 Windows 本机主动笔记纵向能力，以及 MIG-04/MIG-13 的兼容入口和生命周期证据；MIG-05 的本机会话查询与 MIG-08 的设备只读中心也只是按上表列出的动作部分原生化，没有任何 MIG-01 至 MIG-13 因本批自动销项。

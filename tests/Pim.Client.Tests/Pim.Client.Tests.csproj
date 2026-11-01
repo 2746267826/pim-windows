@@ -39,6 +39,7 @@
     <Compile Include="../ClientWindows/KeyStatsProcessManagerTests.cs" />
     <Compile Include="../ClientWindows/ControlledProcessRunnerCoreTests.cs" />
     <Compile Include="../ClientWindows/CpuLoadSamplerTests.cs" />
+    <Compile Include="../ClientWindows/DeviceCenterServiceTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeCatalogTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeAccountGuardTests.cs" />
     <Compile Include="../ClientWindows/LocalAsrWorkerEngineTests.cs" />
@@ -53,6 +54,7 @@
     <Compile Include="../ClientWindows/SiteChannelStatusTests.cs" />
     <Compile Include="../ClientWindows/TrackerPageAttributionTests.cs" />
     <Compile Include="../ClientWindows/TrackerStateManagerTests.cs" />
+    <Compile Include="../ClientWindows/TrackerHistoryStoreTests.cs" />
     <Compile Include="../ClientWindows/WindowsNotificationActionRouterTests.cs" />
     <Compile Include="../ClientWindows/Wo400TokenRenewalTests.cs" />
   </ItemGroup>

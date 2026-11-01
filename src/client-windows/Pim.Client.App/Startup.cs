@@ -23,6 +23,8 @@ public static class Startup
         services.AddSingleton<CloudNoteMaterialService>();
         services.AddSingleton<WindowsRecordingService>();
         services.AddSingleton<TrackerLogger>();
+        services.AddSingleton<TrackerHistoryStore>();
+        services.AddSingleton<DeviceCenterService>();
         services.AddSingleton<BrowserBridgeService>(sp =>
         {
             var cfg = DaemonConfig.Load().Tracker;
@@ -35,7 +37,14 @@ public static class Startup
             var cfg = DaemonConfig.Load().Tracker;
             var logger = sp.GetRequiredService<TrackerLogger>();
             var bridge = sp.GetRequiredService<BrowserBridgeService>();
-            return new NativeTrackerService(api, cfg, null, null, bridge, logger);
+            return new NativeTrackerService(
+                api,
+                cfg,
+                null,
+                null,
+                bridge,
+                logger,
+                historyStore: sp.GetRequiredService<TrackerHistoryStore>());
         });
         services.AddSingleton<KeyStatsProcessManager>();
         services.AddSingleton<KeyStatsCollectorService>();
