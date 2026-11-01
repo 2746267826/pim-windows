@@ -15,8 +15,8 @@ public partial class NativePlannerWindow : Window
     private readonly ApiClient _api;
     private readonly SemaphoreSlim _eventGate = new(1, 1);
     private readonly SemaphoreSlim _taskGate = new(1, 1);
-    private long _eventGeneration;
-    private long _taskGeneration;
+    private readonly NativePlannerUiState _eventUi = new();
+    private readonly NativePlannerUiState _taskUi = new();
     private bool _loading;
     private bool _closed;
 
@@ -26,6 +26,7 @@ public partial class NativePlannerWindow : Window
         _planner = App.Services.GetRequiredService<CalendarTaskService>();
         _auth = App.Services.GetRequiredService<AuthService>();
         _api = App.Services.GetRequiredService<ApiClient>();
+        _api.ExternalScopeChanged += OnExternalScopeChanged;
 
         EventRangeBox.ItemsSource = new[]
         {
@@ -97,14 +98,14 @@ public partial class NativePlannerWindow : Window
 
     private async Task RefreshEventsAsync()
     {
-        var generation = Interlocked.Increment(ref _eventGeneration);
+        var generation = _eventUi.BeginLoad();
         var account = CurrentAccount();
         var selectedCalendar = (CalendarFilterBox.SelectedItem as CalendarChoice)?.Id;
         var selectedEventId = (EventList.SelectedItem as EventRow)?.Event.Id;
         await _eventGate.WaitAsync();
         try
         {
-            if (_closed || generation != Interlocked.Read(ref _eventGeneration)
+            if (_closed || !_eventUi.IsLoadCurrent(generation, account)
                 || account != CurrentAccount())
             {
                 return;
@@ -127,16 +128,18 @@ public partial class NativePlannerWindow : Window
                 to,
                 string.IsNullOrWhiteSpace(EventSearchBox.Text) ? null : EventSearchBox.Text.Trim(),
                 selectedCalendar);
-            if (_closed || generation != Interlocked.Read(ref _eventGeneration)
-                || account != CurrentAccount())
+            if (_closed || !_eventUi.IsLoadCurrent(generation, account)
+                || account != CurrentAccount()
+                || !_eventUi.CommitLoad(generation, account))
             {
                 return;
             }
 
             _loading = true;
-            ApplyCalendars(agenda.Calendars, selectedCalendar);
+            var fence = new PlannerDataFence(generation, account);
+            ApplyCalendars(agenda.Calendars, selectedCalendar, fence);
             var rows = agenda.Events.Items
-                .Select(item => new EventRow(item))
+                .Select(item => new EventRow(item, fence))
                 .ToArray();
             EventList.ItemsSource = rows;
             EventList.SelectedItem = rows.FirstOrDefault(row => row.Event.Id == selectedEventId);
@@ -152,7 +155,7 @@ public partial class NativePlannerWindow : Window
         }
         catch (Exception ex)
         {
-            if (!_closed && generation == Interlocked.Read(ref _eventGeneration)
+            if (!_closed && _eventUi.IsLoadCurrent(generation, account)
                 && account == CurrentAccount())
             {
                 EventList.ItemsSource = null;
@@ -188,13 +191,13 @@ public partial class NativePlannerWindow : Window
 
     private async Task RefreshTasksAsync()
     {
-        var generation = Interlocked.Increment(ref _taskGeneration);
+        var generation = _taskUi.BeginLoad();
         var account = CurrentAccount();
         var selectedTaskId = (TaskList.SelectedItem as TaskRow)?.Task.Id;
         await _taskGate.WaitAsync();
         try
         {
-            if (_closed || generation != Interlocked.Read(ref _taskGeneration)
+            if (_closed || !_taskUi.IsLoadCurrent(generation, account)
                 || account != CurrentAccount())
             {
                 return;
@@ -211,15 +214,17 @@ public partial class NativePlannerWindow : Window
             var workspace = await _planner.GetTaskWorkspaceAsync(
                 string.IsNullOrWhiteSpace(TaskSearchBox.Text) ? null : TaskSearchBox.Text.Trim(),
                 status);
-            if (_closed || generation != Interlocked.Read(ref _taskGeneration)
-                || account != CurrentAccount())
+            if (_closed || !_taskUi.IsLoadCurrent(generation, account)
+                || account != CurrentAccount()
+                || !_taskUi.CommitLoad(generation, account))
             {
                 return;
             }
 
             _loading = true;
-            ApplyTaskBooks(workspace.TaskBooks);
-            var rows = workspace.Tasks.Items.Select(item => new TaskRow(item)).ToArray();
+            var fence = new PlannerDataFence(generation, account);
+            ApplyTaskBooks(workspace.TaskBooks, fence);
+            var rows = workspace.Tasks.Items.Select(item => new TaskRow(item, fence)).ToArray();
             TaskList.ItemsSource = rows;
             TaskList.SelectedItem = rows.FirstOrDefault(row => row.Task.Id == selectedTaskId);
             _loading = false;
@@ -235,7 +240,7 @@ public partial class NativePlannerWindow : Window
         }
         catch (Exception ex)
         {
-            if (!_closed && generation == Interlocked.Read(ref _taskGeneration)
+            if (!_closed && _taskUi.IsLoadCurrent(generation, account)
                 && account == CurrentAccount())
             {
                 TaskList.ItemsSource = null;
@@ -252,9 +257,10 @@ public partial class NativePlannerWindow : Window
 
     private void OnEventSelected(object sender, SelectionChangedEventArgs e)
     {
-        if (EventList.SelectedItem is not EventRow row)
+        if (EventList.SelectedItem is not EventRow row
+            || _eventUi.CheckWrite(row.Fence, CurrentAccount()) != PlannerFenceFailure.None)
         {
-            EventDetailText.Text = "选择日程查看详情。";
+            EventDetailText.Text = "账号或服务器已变更，请重新读取日程。";
             return;
         }
 
@@ -269,9 +275,10 @@ public partial class NativePlannerWindow : Window
 
     private void OnTaskSelected(object sender, SelectionChangedEventArgs e)
     {
-        if (TaskList.SelectedItem is not TaskRow row)
+        if (TaskList.SelectedItem is not TaskRow row
+            || _taskUi.CheckWrite(row.Fence, CurrentAccount()) != PlannerFenceFailure.None)
         {
-            TaskDetailText.Text = "选择任务查看详情。";
+            TaskDetailText.Text = "账号或服务器已变更，请重新读取任务。";
             CompleteTaskButton.IsEnabled = false;
             return;
         }
@@ -291,7 +298,11 @@ public partial class NativePlannerWindow : Window
 
     private async void OnCreateEvent(object sender, RoutedEventArgs e)
     {
-        if (EventCalendarBox.SelectedItem is not CalendarChoice { Id: { } calendarId })
+        if (EventCalendarBox.SelectedItem is not CalendarChoice
+            {
+                Id: { } calendarId,
+                Fence: var calendarFence,
+            })
         {
             MessageBox.Show(this, "请先在服务器上创建或选择一个可编辑日历。",
                 "新建日程", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -309,6 +320,13 @@ public partial class NativePlannerWindow : Window
         var location = EventLocationBox.Text;
         var description = EventDescriptionBox.Text;
         var account = CurrentAccount();
+        var fenceFailure = _eventUi.CheckWrite(calendarFence, account);
+        if (fenceFailure != PlannerFenceFailure.None)
+        {
+            EventCreateStateText.Text = FenceMessage(fenceFailure, "日程");
+            return;
+        }
+
         CreateEventButton.IsEnabled = false;
         EventCreateStateText.Text = "正在创建日程…";
         try
@@ -342,7 +360,7 @@ public partial class NativePlannerWindow : Window
         }
         finally
         {
-            if (!_closed)
+            if (!_closed && account == CurrentAccount())
             {
                 CreateEventButton.IsEnabled = true;
             }
@@ -363,8 +381,20 @@ public partial class NativePlannerWindow : Window
             due = ToLocalOffset(localDate.Date.AddHours(18));
         }
 
-        var taskBookId = (TaskBookBox.SelectedItem as TaskBookChoice)?.Id;
+        if (TaskBookBox.SelectedItem is not TaskBookChoice taskBook)
+        {
+            TaskCreateStateText.Text = "请先读取当前账号的任务本。";
+            return;
+        }
+
         var account = CurrentAccount();
+        var fenceFailure = _taskUi.CheckWrite(taskBook.Fence, account);
+        if (fenceFailure != PlannerFenceFailure.None)
+        {
+            TaskCreateStateText.Text = FenceMessage(fenceFailure, "任务");
+            return;
+        }
+
         CreateTaskButton.IsEnabled = false;
         TaskCreateStateText.Text = "正在创建任务…";
         try
@@ -374,7 +404,7 @@ public partial class NativePlannerWindow : Window
                 priority,
                 due,
                 calendarId: null,
-                taskBookId);
+                taskBook.Id);
             if (_closed || account != CurrentAccount())
             {
                 return;
@@ -395,7 +425,7 @@ public partial class NativePlannerWindow : Window
         }
         finally
         {
-            if (!_closed)
+            if (!_closed && account == CurrentAccount())
             {
                 CreateTaskButton.IsEnabled = true;
             }
@@ -421,6 +451,14 @@ public partial class NativePlannerWindow : Window
         }
 
         var account = CurrentAccount();
+        var fenceFailure = _taskUi.CheckWrite(row.Fence, account);
+        if (fenceFailure != PlannerFenceFailure.None)
+        {
+            TaskListStateText.Text = FenceMessage(fenceFailure, "任务");
+            CompleteTaskButton.IsEnabled = false;
+            return;
+        }
+
         CompleteTaskButton.IsEnabled = false;
         TaskListStateText.Text = "正在更新任务…";
         try
@@ -444,7 +482,9 @@ public partial class NativePlannerWindow : Window
         }
         finally
         {
-            if (!_closed && TaskList.SelectedItem is TaskRow selected)
+            if (!_closed && account == CurrentAccount()
+                && TaskList.SelectedItem is TaskRow selected
+                && _taskUi.CheckWrite(selected.Fence, account) == PlannerFenceFailure.None)
             {
                 CompleteTaskButton.IsEnabled =
                     !string.Equals(selected.Task.Status, "COMPLETED", StringComparison.Ordinal)
@@ -511,11 +551,17 @@ public partial class NativePlannerWindow : Window
         return true;
     }
 
-    private void ApplyCalendars(IReadOnlyList<CalendarResponse> calendars, Guid? selectedId)
+    private void ApplyCalendars(
+        IReadOnlyList<CalendarResponse> calendars,
+        Guid? selectedId,
+        PlannerDataFence fence)
     {
         var editable = calendars
             .Where(calendar => calendar.CanEdit)
-            .Select(calendar => new CalendarChoice(calendar.Name, Guid.Parse(calendar.Id)))
+            .Select(calendar => new CalendarChoice(
+                calendar.Name,
+                Guid.Parse(calendar.Id),
+                fence))
             .ToArray();
         var choices = new[] { CalendarChoice.All }
             .Concat(editable)
@@ -530,13 +576,16 @@ public partial class NativePlannerWindow : Window
             editable.FirstOrDefault(choice => choice.Id == priorEventCalendar) ?? editable.FirstOrDefault();
     }
 
-    private void ApplyTaskBooks(IReadOnlyList<TaskBookDto> books)
+    private void ApplyTaskBooks(IReadOnlyList<TaskBookDto> books, PlannerDataFence fence)
     {
-        var rows = books.Select(book => new TaskBookRow(book)).ToArray();
+        var rows = books.Select(book => new TaskBookRow(book, fence)).ToArray();
         TaskBooksList.ItemsSource = rows;
         var prior = (TaskBookBox.SelectedItem as TaskBookChoice)?.Id;
-        var choices = new[] { TaskBookChoice.None }
-            .Concat(books.Select(book => new TaskBookChoice(book.Name, Guid.Parse(book.Id))))
+        var choices = new[] { new TaskBookChoice("不指定任务本", null, fence) }
+            .Concat(books.Select(book => new TaskBookChoice(
+                book.Name,
+                Guid.Parse(book.Id),
+                fence)))
             .ToArray();
         TaskBookBox.ItemsSource = choices;
         TaskBookBox.SelectedItem = choices.FirstOrDefault(choice => choice.Id == prior) ?? choices[0];
@@ -560,15 +609,24 @@ public partial class NativePlannerWindow : Window
         CompleteTaskButton.IsEnabled = false;
     }
 
-    private AccountIdentity? CurrentAccount()
+    private PlannerAccountIdentity? CurrentAccount()
     {
         if (!_auth.IsAuthenticated || string.IsNullOrWhiteSpace(_auth.CurrentUserId))
         {
             return null;
         }
 
-        return new AccountIdentity(_auth.CurrentUserId, _api.CurrentBaseUrl);
+        return new PlannerAccountIdentity(_auth.CurrentUserId, _api.CurrentBaseUrl);
     }
+
+    private static string FenceMessage(PlannerFenceFailure failure, string resource)
+        => failure switch
+        {
+            PlannerFenceFailure.NoAccount => $"登录状态已失效；本次{resource}操作未发送，输入内容仍保留。",
+            PlannerFenceFailure.AccountChanged =>
+                $"账号或服务器已切换；本次{resource}操作未发送，输入内容仍保留，请重新读取。",
+            _ => $"{resource}列表已过期；本次操作未发送，输入内容仍保留，请重新读取。",
+        };
 
     private static bool TryParseTime(string value, out TimeSpan time)
         => TimeSpan.TryParseExact(
@@ -624,11 +682,31 @@ public partial class NativePlannerWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _closed = true;
-        Interlocked.Increment(ref _eventGeneration);
-        Interlocked.Increment(ref _taskGeneration);
+        _api.ExternalScopeChanged -= OnExternalScopeChanged;
+        _eventUi.Invalidate();
+        _taskUi.Invalidate();
     }
 
-    private sealed record AccountIdentity(string UserId, string ServerUrl);
+    private void OnExternalScopeChanged()
+    {
+        _eventUi.Invalidate();
+        _taskUi.Invalidate();
+        if (_closed)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_closed)
+            {
+                return;
+            }
+
+            ClearEventUi("账号或服务器已变更，请重新读取日程；未发送的输入内容仍保留。");
+            ClearTaskUi("账号或服务器已变更，请重新读取任务；未发送的输入内容仍保留。");
+        });
+    }
 
     private sealed record RangeChoice(string Label, int Days)
     {
@@ -641,29 +719,40 @@ public partial class NativePlannerWindow : Window
         public override string ToString() => Label;
     }
 
-    private sealed record CalendarChoice(string Label, Guid? Id)
+    private sealed record CalendarChoice(
+        string Label,
+        Guid? Id,
+        PlannerDataFence Fence = default)
     {
         public static CalendarChoice All { get; } = new("全部日历", null);
         public override string ToString() => Label;
     }
 
-    private sealed record TaskBookChoice(string Label, Guid? Id)
+    private sealed record TaskBookChoice(
+        string Label,
+        Guid? Id,
+        PlannerDataFence Fence)
     {
-        public static TaskBookChoice None { get; } = new("不指定任务本", null);
+        public static TaskBookChoice None { get; } = new(
+            "不指定任务本",
+            null,
+            default);
         public override string ToString() => Label;
     }
 
-    private sealed class EventRow(EventResponse item)
+    private sealed class EventRow(EventResponse item, PlannerDataFence fence)
     {
         public EventResponse Event { get; } = item;
+        public PlannerDataFence Fence { get; } = fence;
         public string Label => Event.Title;
         public string Subtitle =>
             $"{FormatEventTime(Event)} · {Fallback(Event.Location)}";
     }
 
-    private sealed class TaskRow(TaskResponse item)
+    private sealed class TaskRow(TaskResponse item, PlannerDataFence fence)
     {
         public TaskResponse Task { get; } = item;
+        public PlannerDataFence Fence { get; } = fence;
         public string Label => Task.Title;
         public string Subtitle =>
             $"优先级 {Task.Priority} · 到期 {FormatOptional(Task.Due)}";
@@ -681,7 +770,7 @@ public partial class NativePlannerWindow : Window
         };
     }
 
-    private sealed record TaskBookRow(TaskBookDto Book)
+    private sealed record TaskBookRow(TaskBookDto Book, PlannerDataFence Fence)
     {
         public string Label => $"{Book.Name} · {Book.Status} · {Book.TaskCount} 个任务";
     }
