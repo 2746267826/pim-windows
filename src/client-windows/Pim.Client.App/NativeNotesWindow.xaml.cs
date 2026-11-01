@@ -22,11 +22,9 @@ public partial class NativeNotesWindow : Window
     private bool _loading;
     private bool _closing;
     private bool _allowClose;
-    private bool _cloudResultDirty;
     private bool _loadingCloudResult;
     private bool _restoringCloudSelection;
     private bool _refreshingCloudResults;
-    private long _cloudDraftGeneration;
     private NoteDerivedArtifactDto? _selectedArtifact;
     private NoteDerivedVersionDto? _selectedDerivedVersion;
     private NoteDerivedVersionSummaryDto? _selectedDerivedVersionSummary;
@@ -119,15 +117,15 @@ public partial class NativeNotesWindow : Window
         }
 
         var selectionGeneration = _cloudUi.BeginNoteSelection();
-        if (_cloudResultDirty && !ConfirmDiscardCloudDraft("切换笔记"))
+        var artifactGeneration = _cloudUi.BeginArtifactSelection();
+        if (_cloudUi.IsDraftDirty && !ConfirmDiscardCloudDraft("切换笔记"))
         {
             _loading = true;
             NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == _current?.NoteId);
             _loading = false;
+            RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
             return;
         }
-
-        _cloudResultDirty = false;
 
         try
         {
@@ -136,6 +134,7 @@ public partial class NativeNotesWindow : Window
                 _loading = true;
                 NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == _current?.NoteId);
                 _loading = false;
+                RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
                 return;
             }
 
@@ -145,6 +144,8 @@ public partial class NativeNotesWindow : Window
                 return;
             }
 
+            _cloudUi.ClearDraft();
+            CloudResultBox.IsEnabled = true;
             _loading = true;
             _current = note;
             TitleBox.IsEnabled = true;
@@ -162,11 +163,20 @@ public partial class NativeNotesWindow : Window
         }
         catch (Exception ex)
         {
-            ShowFailure("打开笔记失败", ex);
+            if (selectionGeneration == _cloudUi.NoteGeneration)
+            {
+                RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
+                ShowFailure("打开笔记失败", ex);
+            }
         }
         finally
         {
-            _loading = false;
+            if (selectionGeneration == _cloudUi.NoteGeneration)
+            {
+                _loading = false;
+            }
+
+            RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
         }
     }
 
@@ -554,9 +564,8 @@ public partial class NativeNotesWindow : Window
         _selectedArtifact = null;
         _selectedDerivedVersion = null;
         _selectedDerivedVersionSummary = null;
-        _cloudResultDirty = false;
+        _cloudUi.ClearDraft();
         _loadingCloudResult = true;
-        Interlocked.Increment(ref _cloudDraftGeneration);
         CloudResultBox.Text = string.Empty;
         _loadingCloudResult = false;
         CloudResultStateText.Text = "未选择笔记";
@@ -571,7 +580,7 @@ public partial class NativeNotesWindow : Window
         }
 
         _saveTimer.Stop();
-        if (_cloudResultDirty
+        if (_cloudUi.IsDraftDirty
             && MessageBox.Show(
                 this,
                 "云端结果编辑框中有尚未保存的人工修订。仍要关闭并放弃这份草稿吗？",
@@ -583,7 +592,7 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        _cloudResultDirty = false;
+        _cloudUi.ClearDraft();
 
         if (_current is not null
             && (!string.Equals(_current.Title, TitleBox.Text, StringComparison.Ordinal)
@@ -888,7 +897,7 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        if (_cloudResultDirty && !ConfirmDiscardCloudDraft("刷新云端结果"))
+        if (_cloudUi.IsDraftDirty && !ConfirmDiscardCloudDraft("刷新云端结果"))
         {
             return;
         }
@@ -896,7 +905,7 @@ public partial class NativeNotesWindow : Window
         var noteId = _current.NoteId;
         var accountScope = _cloud.CurrentAccountScope;
         var accountGeneration = _cloud.AccountGeneration;
-        var draftGeneration = Interlocked.Read(ref _cloudDraftGeneration);
+        var draftGeneration = _cloudUi.DraftGeneration;
         try
         {
             var artifacts = await _cloud.GetDerivedArtifactsAsync(noteId);
@@ -905,7 +914,7 @@ public partial class NativeNotesWindow : Window
                     noteId,
                     accountScope,
                     accountGeneration)
-                || draftGeneration != Interlocked.Read(ref _cloudDraftGeneration))
+                || !_cloudUi.IsDraftCurrent(draftGeneration))
             {
                 return;
             }
@@ -920,6 +929,7 @@ public partial class NativeNotesWindow : Window
                         + version.ContentSha256[..8])))
                 .OrderByDescending(row => row.Version.CreatedAt)
                 .ToArray();
+            _cloudUi.ClearDraft();
             _refreshingCloudResults = true;
             try
             {
@@ -940,7 +950,7 @@ public partial class NativeNotesWindow : Window
                 _loadingCloudResult = true;
                 CloudResultBox.Text = string.Empty;
                 _loadingCloudResult = false;
-                _cloudResultDirty = false;
+                _cloudUi.ClearDraft();
             }
 
             CloudResultStateText.Text = rows.Length == 0
@@ -985,7 +995,7 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        if (_cloudResultDirty
+        if (_cloudUi.IsDraftDirty
             && !_refreshingCloudResults
             && !ConfirmDiscardCloudDraft("切换云端结果版本"))
         {
@@ -1004,7 +1014,7 @@ public partial class NativeNotesWindow : Window
         var noteId = _current?.NoteId;
         var accountScope = _cloud.CurrentAccountScope;
         var accountGeneration = _cloud.AccountGeneration;
-        var draftGeneration = Interlocked.Read(ref _cloudDraftGeneration);
+        var draftGeneration = _cloudUi.DraftGeneration;
         CloudResultBox.IsEnabled = false;
         try
         {
@@ -1018,7 +1028,7 @@ public partial class NativeNotesWindow : Window
                     accountScope,
                     accountGeneration)
                 || !_cloudUi.IsArtifactCurrent(artifactGeneration)
-                || draftGeneration != Interlocked.Read(ref _cloudDraftGeneration)
+                || !_cloudUi.IsDraftCurrent(draftGeneration)
                 || !ReferenceEquals(CloudArtifactsList.SelectedItem, row))
             {
                 return;
@@ -1028,10 +1038,9 @@ public partial class NativeNotesWindow : Window
             _selectedDerivedVersion = version;
             _selectedDerivedVersionSummary = row.Version;
             _loadingCloudResult = true;
-            Interlocked.Increment(ref _cloudDraftGeneration);
+            _cloudUi.ClearDraft();
             CloudResultBox.Text = version.ContentMarkdown;
             _loadingCloudResult = false;
-            _cloudResultDirty = false;
             CloudResultStateText.Text =
                 $"{ArtifactLabel(version.Kind)} · {version.Author} · {version.CreatedAt.ToLocalTime():yyyy-MM-dd HH:mm} · "
                 + (version.IsHead ? "当前 Head" : "历史版本")
@@ -1045,7 +1054,7 @@ public partial class NativeNotesWindow : Window
                     _current?.NoteId,
                     accountScope,
                     accountGeneration)
-                || draftGeneration != Interlocked.Read(ref _cloudDraftGeneration))
+                || !_cloudUi.IsDraftCurrent(draftGeneration))
             {
                 return;
             }
@@ -1056,7 +1065,10 @@ public partial class NativeNotesWindow : Window
         }
         finally
         {
-            CloudResultBox.IsEnabled = true;
+            if (_cloudUi.IsResultEditorCurrent(selectionGeneration, artifactGeneration))
+            {
+                CloudResultBox.IsEnabled = true;
+            }
         }
     }
 
@@ -1085,15 +1097,17 @@ public partial class NativeNotesWindow : Window
         var noteId = _current?.NoteId;
         var accountScope = _cloud.CurrentAccountScope;
         var accountGeneration = _cloud.AccountGeneration;
-        var draftGeneration = Interlocked.Read(ref _cloudDraftGeneration);
+        var draftGeneration = _cloudUi.DraftGeneration;
+        var expectedHeadVersionId = string.IsNullOrWhiteSpace(artifact.HeadVersionId)
+            ? (Guid?)null
+            : Guid.Parse(artifact.HeadVersionId);
+        var expectedHeadRevision = artifact.Revision;
         try
         {
             var saved = await _cloud.SaveManualRevisionAsync(
                 Guid.Parse(artifact.ArtifactId),
-                string.IsNullOrWhiteSpace(artifact.HeadVersionId)
-                    ? null
-                    : Guid.Parse(artifact.HeadVersionId),
-                artifact.Revision,
+                expectedHeadVersionId,
+                expectedHeadRevision,
                 markdown);
             if (!IsCurrentCloudRequest(
                     selectionGeneration,
@@ -1105,11 +1119,11 @@ public partial class NativeNotesWindow : Window
                 return;
             }
 
-            var stillShowsSavedText = draftGeneration == Interlocked.Read(ref _cloudDraftGeneration)
+            var stillShowsSavedText = _cloudUi.IsDraftCurrent(draftGeneration)
                 && string.Equals(CloudResultBox.Text, markdown, StringComparison.Ordinal);
             if (stillShowsSavedText)
             {
-                _cloudResultDirty = false;
+                _cloudUi.ClearDraft();
             }
 
             CloudResultStateText.Text = saved.HasConflict
@@ -1208,15 +1222,14 @@ public partial class NativeNotesWindow : Window
     {
         if (!_loadingCloudResult && _selectedDerivedVersion is not null)
         {
-            Interlocked.Increment(ref _cloudDraftGeneration);
-            _cloudResultDirty = true;
+            _cloudUi.MarkDraftDirty();
             CloudResultStateText.Text = "人工修订草稿尚未保存；切换或刷新前会先询问。";
         }
     }
 
     private bool ConfirmDiscardCloudDraft(string action)
     {
-        if (!_cloudResultDirty)
+        if (!_cloudUi.IsDraftDirty)
         {
             return true;
         }
@@ -1239,6 +1252,14 @@ public partial class NativeNotesWindow : Window
 
         _restoringCloudSelection = true;
         CloudArtifactsList.SelectedItem = selection;
+    }
+
+    private void RestoreCloudResultEditor(long noteTicket, long artifactTicket)
+    {
+        if (_cloudUi.IsResultEditorCurrent(noteTicket, artifactTicket))
+        {
+            CloudResultBox.IsEnabled = true;
+        }
     }
 
     private bool IsCurrentNoteSelection(long generation, Guid noteId)

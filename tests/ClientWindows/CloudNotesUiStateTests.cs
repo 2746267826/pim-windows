@@ -32,4 +32,43 @@ public sealed class CloudNotesUiStateTests
 
         Assert.False(state.IsNoteCurrent(ticket, noteId, noteId, Guid.NewGuid()));
     }
+
+    [Fact]
+    public void StaleResultRequestCannotEnableTheEditorAfterSelectionChanges()
+    {
+        var state = new CloudNotesUiState();
+        var noteTicket = state.BeginNoteSelection();
+        var artifactTicket = state.BeginArtifactSelection();
+
+        state.BeginArtifactSelection();
+
+        Assert.False(state.IsResultEditorCurrent(noteTicket, artifactTicket));
+    }
+
+    [Fact]
+    public void FailedNoteTransitionDoesNotClearAnExistingDraft()
+    {
+        var state = new CloudNotesUiState();
+        var draftTicket = state.MarkDraftDirty();
+
+        _ = state.BeginNoteSelection();
+
+        Assert.True(state.IsDraftDirty);
+        Assert.True(state.IsDraftCurrent(draftTicket));
+    }
+
+    [Fact]
+    public void NewEditInvalidatesAnInFlightSaveTicket()
+    {
+        var state = new CloudNotesUiState();
+        var saveTicket = state.MarkDraftDirty();
+        state.MarkDraftDirty();
+
+        Assert.False(state.IsDraftCurrent(saveTicket));
+        Assert.True(state.IsDraftDirty);
+
+        state.ClearDraft();
+        Assert.False(state.IsDraftDirty);
+        Assert.False(state.IsDraftCurrent(saveTicket));
+    }
 }
