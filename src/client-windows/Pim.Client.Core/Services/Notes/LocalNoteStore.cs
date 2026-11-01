@@ -462,6 +462,40 @@ public sealed class LocalNoteStore
         }
     }
 
+    internal async Task RemoveCloudBindingAsync(
+        LocalNoteCloudBinding expected,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            EnsureDirectoriesLocked();
+            var bindings = await ReadCloudBindingsLockedAsync(cancellationToken);
+            var removed = bindings.RemoveAll(item =>
+                item.NoteId == expected.NoteId
+                && string.Equals(item.ServerUrl, expected.ServerUrl, StringComparison.Ordinal)
+                && string.Equals(item.AccountId, expected.AccountId, StringComparison.Ordinal)
+                && item.LastVersionId == expected.LastVersionId
+                && item.UpdatedAt == expected.UpdatedAt);
+            if (removed == 0)
+            {
+                return;
+            }
+
+            await AtomicWriteJsonAsync(
+                CloudBindingsPathLocked(),
+                bindings.OrderBy(item => item.NoteId)
+                    .ThenBy(item => item.ServerUrl, StringComparer.Ordinal)
+                    .ThenBy(item => item.AccountId, StringComparer.Ordinal)
+                    .ToArray(),
+                cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<LocalNoteBundleExport> ExportAsync(
         Guid noteId,
         Guid? versionId,

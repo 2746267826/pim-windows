@@ -221,6 +221,124 @@ public sealed class CloudNoteMaterialServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task AccountSwitchAfterAPartAbortsBeforeTheNextPartAndWritesNoReceipt()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("账号切换");
+        note = await store.SaveAsync(note.NoteId, "账号切换", "不得串到另一账号");
+        var bundle = await new ServerNoteMaterialBundleBuilder(store)
+            .BuildAsync(note.NoteId, note.CurrentVersionId);
+        var handler = new NoteCloudHandler(bundle);
+        var api = new ApiClient(() => handler);
+        api.SetAccessToken("synthetic-account-a-token");
+        var activeAccount = AccountId;
+        var service = new CloudNoteMaterialService(
+            api,
+            store,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", activeAccount));
+        handler.AfterPartUploaded = () =>
+            activeAccount = "22222222-2222-2222-2222-222222222222";
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.UploadVersionAsync(
+                note.NoteId,
+                note.CurrentVersionId,
+                userConfirmedStorage: true));
+
+        Assert.Contains("操作期间已切换", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, handler.PartUploads);
+        Assert.False(File.Exists(Path.Combine(_root, "cloud-bindings.json")));
+    }
+
+    [Fact]
+    public async Task CredentialSwitchAfterAPartAbortsAndWritesNoReceipt()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("凭据切换");
+        note = await store.SaveAsync(note.NoteId, "凭据切换", "不得用新会话续传旧材料");
+        var bundle = await new ServerNoteMaterialBundleBuilder(store)
+            .BuildAsync(note.NoteId, note.CurrentVersionId);
+        var handler = new NoteCloudHandler(bundle);
+        var api = new ApiClient(() => handler);
+        api.SetAccessToken("synthetic-account-a-token");
+        var service = new CloudNoteMaterialService(
+            api,
+            store,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+        handler.AfterPartUploaded = () => api.SetAccessToken("synthetic-account-b-token");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.UploadVersionAsync(
+                note.NoteId,
+                note.CurrentVersionId,
+                userConfirmedStorage: true));
+
+        Assert.Contains("操作期间已切换", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, handler.PartUploads);
+        Assert.False(File.Exists(Path.Combine(_root, "cloud-bindings.json")));
+    }
+
+    [Fact]
+    public async Task ServerSwitchAfterAPartAbortsAndWritesNoReceipt()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("服务器切换");
+        note = await store.SaveAsync(note.NoteId, "服务器切换", "不得续传到另一服务器");
+        var bundle = await new ServerNoteMaterialBundleBuilder(store)
+            .BuildAsync(note.NoteId, note.CurrentVersionId);
+        var handler = new NoteCloudHandler(bundle);
+        var api = new ApiClient(() => handler);
+        api.SetAccessToken("synthetic-account-a-token");
+        var activeServer = "http://127.0.0.1:5858";
+        var service = new CloudNoteMaterialService(
+            api,
+            store,
+            () => new CloudNoteAccountScope(activeServer, AccountId));
+        handler.AfterPartUploaded = () => activeServer = "https://other.example.test";
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.UploadVersionAsync(
+                note.NoteId,
+                note.CurrentVersionId,
+                userConfirmedStorage: true));
+
+        Assert.Contains("操作期间已切换", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, handler.PartUploads);
+        Assert.False(File.Exists(Path.Combine(_root, "cloud-bindings.json")));
+    }
+
+    [Fact]
+    public async Task NaturalTokenRenewalKeepsThePinnedOperationScope()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("令牌续期");
+        var handler = new NoteCloudHandler(
+            await new ServerNoteMaterialBundleBuilder(store)
+                .BuildAsync(note.NoteId, note.CurrentVersionId));
+        var api = new ApiClient(() => handler);
+        api.SetAccessToken("synthetic-expiring-token");
+        api.IsTokenRenewalDue = () => true;
+        api.RenewTokenAsync = () =>
+        {
+            api.SetAccessToken("synthetic-renewed-token");
+            return Task.FromResult(true);
+        };
+        var service = new CloudNoteMaterialService(
+            api,
+            store,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+        var generationBeforeRenewal = service.AccountGeneration;
+
+        _ = await service.GetVersionsAsync(note.NoteId);
+
+        Assert.Equal("Bearer synthetic-renewed-token", handler.LastAuthorization);
+        Assert.Equal(generationBeforeRenewal, service.AccountGeneration);
+
+        api.SetAccessToken("synthetic-explicit-switch-token");
+        Assert.NotEqual(generationBeforeRenewal, service.AccountGeneration);
+    }
+
+    [Fact]
     public async Task ResultRevisionSourcesAndConflictOperationsUseTheTypedContract()
     {
         var store = new LocalNoteStore(_root);
@@ -437,6 +555,8 @@ public sealed class CloudNoteMaterialServiceTests : IDisposable
         public int PartUploads { get; private set; }
         public IReadOnlyList<string> PartDigests => _digests;
         public int PartResponseCode { get; set; }
+        public Action? AfterPartUploaded { get; set; }
+        public string? LastAuthorization { get; private set; }
 
         public void Reset(ServerNoteMaterialBundle bundle, bool uploadedParts)
         {
@@ -451,6 +571,7 @@ public sealed class CloudNoteMaterialServiceTests : IDisposable
             CancellationToken cancellationToken)
         {
             var uri = request.RequestUri!;
+            LastAuthorization = request.Headers.Authorization?.ToString();
             if (request.Method == HttpMethod.Post
                 && uri.AbsolutePath == "/api/v1/native-notes/versions")
             {
@@ -476,6 +597,7 @@ public sealed class CloudNoteMaterialServiceTests : IDisposable
                 Assert.Equal(digest, Hash(body));
                 _digests.Add(digest);
                 PartUploads++;
+                AfterPartUploaded?.Invoke();
                 return JsonResponse(new StringApiResponse
                 {
                     Code = PartResponseCode,

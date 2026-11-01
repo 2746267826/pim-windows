@@ -18,6 +18,7 @@ public sealed class CloudNoteMaterialService
     private readonly LocalNoteStore _store;
     private readonly ServerNoteMaterialBundleBuilder _builder;
     private readonly Func<CloudNoteAccountScope?> _accountProvider;
+    private long _accountGeneration;
 
     public CloudNoteMaterialService(ApiClient api, AuthService auth, LocalNoteStore store)
         : this(api, store, () =>
@@ -45,6 +46,7 @@ public sealed class CloudNoteMaterialService
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _accountProvider = accountProvider ?? throw new ArgumentNullException(nameof(accountProvider));
         _builder = new ServerNoteMaterialBundleBuilder(store);
+        _api.ExternalScopeChanged += OnExternalScopeChanged;
     }
 
     public bool IsAvailable
@@ -73,13 +75,16 @@ public sealed class CloudNoteMaterialService
             throw new InvalidOperationException("上传前必须由用户明确确认本次固定材料存入当前服务器。");
         }
 
-        var account = RequireAccount();
+        using var operation = BeginOperation();
+        var account = operation.Account;
         var bundle = await _builder.BuildAsync(noteId, versionId, cancellationToken);
+        RequireOperationCurrent(operation);
         var binding = await _store.LoadCloudBindingAsync(
             noteId,
             account.ServerUrl,
             account.AccountId,
             cancellationToken);
+        RequireOperationCurrent(operation);
         Guid? baseVersionId;
         if (binding?.LastVersionId == versionId)
         {
@@ -92,7 +97,8 @@ public sealed class CloudNoteMaterialService
         else
         {
             // Recover the owner/server head after a restart or binding-file loss.
-            var existing = await GetVersionsAsync(noteId, cancellationToken).ConfigureAwait(false);
+            var existing = await LoadVersionsAsync(noteId, operation, cancellationToken)
+                .ConfigureAwait(false);
             var sameVersion = existing.SingleOrDefault(item =>
                 string.Equals(item.VersionId, versionId.ToString("D"), StringComparison.Ordinal));
             baseVersionId = sameVersion is not null
@@ -108,9 +114,11 @@ public sealed class CloudNoteMaterialService
             StorageConsent = true,
             VersionId = bundle.VersionId.ToString("D"),
         };
+        RequireOperationCurrent(operation);
         var response = await _api.BeginNoteMaterialUploadAsync(request, cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回材料上传状态。");
+        RequireOperationCurrent(operation);
         var upload = RequireResponse(response.Code, response.Message, response.Data);
         RequireUploadIdentity(upload, bundle.NoteId, bundle.VersionId);
 
@@ -172,6 +180,7 @@ public sealed class CloudNoteMaterialService
                 source.Position = offset;
                 var bytes = new byte[length];
                 await source.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
+                RequireOperationCurrent(operation);
                 var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
                 await using var part = new MemoryStream(bytes, writable: false);
                 var partResponse = await _api.UploadNoteMaterialPartAsync(
@@ -183,6 +192,7 @@ public sealed class CloudNoteMaterialService
                         cancellationToken)
                     .ConfigureAwait(false)
                     ?? throw new InvalidDataException("服务器没有返回材料分片状态。");
+                RequireOperationCurrent(operation);
                 RequireSuccess(partResponse.Code, partResponse.Message);
             }
         }
@@ -192,6 +202,7 @@ public sealed class CloudNoteMaterialService
                 cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回材料完成状态。");
+        RequireOperationCurrent(operation);
         upload = RequireResponse(completeResponse.Code, completeResponse.Message, completeResponse.Data);
         RequireUploadIdentity(upload, bundle.NoteId, bundle.VersionId);
         if (string.Equals(upload.Phase, "Uploading", StringComparison.Ordinal))
@@ -199,10 +210,8 @@ public sealed class CloudNoteMaterialService
             throw new InvalidDataException("服务器仍将材料版本标记为上传中；本机未生成完成绑定。");
         }
 
-        var versionsResponse = await _api.GetNoteMaterialVersionsAsync(noteId, cancellationToken)
-            .ConfigureAwait(false)
-            ?? throw new InvalidDataException("服务器没有返回固定版本列表。");
-        var versions = RequireResponse(versionsResponse.Code, versionsResponse.Message, versionsResponse.Data);
+        var versions = await LoadVersionsAsync(noteId, operation, cancellationToken)
+            .ConfigureAwait(false);
         var updatedBinding = new LocalNoteCloudBinding
         {
             NoteId = noteId,
@@ -215,7 +224,26 @@ public sealed class CloudNoteMaterialService
             HasConflict = upload.HasConflict,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
+        RequireOperationCurrent(operation);
         await _store.SaveCloudBindingAsync(updatedBinding, cancellationToken);
+        try
+        {
+            RequireOperationCurrent(operation);
+        }
+        catch
+        {
+            try
+            {
+                await _store.RemoveCloudBindingAsync(updatedBinding, CancellationToken.None);
+            }
+            catch
+            {
+                // The binding is still scoped to the original owner/server, never the new session.
+            }
+
+            throw;
+        }
+
         return new CloudNoteMaterialSyncResult(upload, updatedBinding, versions);
     }
 
@@ -223,11 +251,9 @@ public sealed class CloudNoteMaterialService
         Guid noteId,
         CancellationToken cancellationToken = default)
     {
-        _ = RequireAccount();
-        var response = await _api.GetNoteMaterialVersionsAsync(noteId, cancellationToken)
-            .ConfigureAwait(false)
-            ?? throw new InvalidDataException("服务器没有返回固定版本列表。");
-        return RequireResponse(response.Code, response.Message, response.Data);
+        using var operation = BeginOperation();
+        return await LoadVersionsAsync(noteId, operation, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<NoteMaterialUploadDto> PromoteVersionAsync(
@@ -236,7 +262,9 @@ public sealed class CloudNoteMaterialService
         Guid? expectedCurrentVersionId,
         CancellationToken cancellationToken = default)
     {
-        var account = RequireAccount();
+        using var operation = BeginOperation();
+        var account = operation.Account;
+        RequireOperationCurrent(operation);
         var response = await _api.PromoteNoteMaterialVersionAsync(
                 versionId,
                 new PromoteNoteMaterialVersionRequest
@@ -246,22 +274,41 @@ public sealed class CloudNoteMaterialService
                 cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回版本选择结果。");
+        RequireOperationCurrent(operation);
         var upload = RequireResponse(response.Code, response.Message, response.Data);
         RequireUploadIdentity(upload, noteId, versionId);
-        await _store.SaveCloudBindingAsync(
-            new LocalNoteCloudBinding
+        var updatedBinding = new LocalNoteCloudBinding
+        {
+            NoteId = noteId,
+            ServerUrl = account.ServerUrl,
+            AccountId = account.AccountId,
+            BaseVersionId = ParseOptionalGuid(upload.BaseVersionId),
+            CurrentVersionId = ParseOptionalGuid(upload.CurrentVersionId),
+            LastVersionId = versionId,
+            Phase = upload.Phase,
+            HasConflict = upload.HasConflict,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        RequireOperationCurrent(operation);
+        await _store.SaveCloudBindingAsync(updatedBinding, cancellationToken);
+        try
+        {
+            RequireOperationCurrent(operation);
+        }
+        catch
+        {
+            try
             {
-                NoteId = noteId,
-                ServerUrl = account.ServerUrl,
-                AccountId = account.AccountId,
-                BaseVersionId = ParseOptionalGuid(upload.BaseVersionId),
-                CurrentVersionId = ParseOptionalGuid(upload.CurrentVersionId),
-                LastVersionId = versionId,
-                Phase = upload.Phase,
-                HasConflict = upload.HasConflict,
-                UpdatedAt = DateTimeOffset.UtcNow,
-            },
-            cancellationToken);
+                await _store.RemoveCloudBindingAsync(updatedBinding, CancellationToken.None);
+            }
+            catch
+            {
+                // The binding remains owner/server scoped and cannot be consumed by the new session.
+            }
+
+            throw;
+        }
+
         return upload;
     }
 
@@ -269,10 +316,12 @@ public sealed class CloudNoteMaterialService
         Guid noteId,
         CancellationToken cancellationToken = default)
     {
-        _ = RequireAccount();
+        using var operation = BeginOperation();
+        RequireOperationCurrent(operation);
         var response = await _api.GetNoteDerivedArtifactsAsync(noteId, cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回派生结果。");
+        RequireOperationCurrent(operation);
         return RequireResponse(response.Code, response.Message, response.Data);
     }
 
@@ -281,13 +330,15 @@ public sealed class CloudNoteMaterialService
         Guid versionId,
         CancellationToken cancellationToken = default)
     {
-        _ = RequireAccount();
+        using var operation = BeginOperation();
+        RequireOperationCurrent(operation);
         var response = await _api.GetNoteDerivedArtifactVersionAsync(
                 artifactId,
                 versionId,
                 cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回派生版本。");
+        RequireOperationCurrent(operation);
         return RequireResponse(response.Code, response.Message, response.Data);
     }
 
@@ -298,7 +349,7 @@ public sealed class CloudNoteMaterialService
         string contentMarkdown,
         CancellationToken cancellationToken = default)
     {
-        _ = RequireAccount();
+        using var operation = BeginOperation();
         var request = new SaveNoteDerivedManualRevisionRequest
         {
             ContentMarkdown = contentMarkdown ?? string.Empty,
@@ -306,9 +357,11 @@ public sealed class CloudNoteMaterialService
             ExpectedHeadVersionId = expectedHeadVersionId?.ToString("D"),
             RevisionId = Guid.NewGuid().ToString("D"),
         };
+        RequireOperationCurrent(operation);
         var response = await _api.SaveNoteDerivedManualRevisionAsync(artifactId, request, cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回人工修订结果。");
+        RequireOperationCurrent(operation);
         return RequireResponse(response.Code, response.Message, response.Data);
     }
 
@@ -318,7 +371,7 @@ public sealed class CloudNoteMaterialService
         string expectedHeadRevision,
         CancellationToken cancellationToken = default)
     {
-        _ = RequireAccount();
+        using var operation = BeginOperation();
         var response = await _api.SelectNoteDerivedArtifactVersionAsync(
                 artifactId,
                 new SelectNoteDerivedVersionRequest
@@ -329,6 +382,7 @@ public sealed class CloudNoteMaterialService
                 cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回版本选择结果。");
+        RequireOperationCurrent(operation);
         return RequireResponse(response.Code, response.Message, response.Data);
     }
 
@@ -336,7 +390,7 @@ public sealed class CloudNoteMaterialService
         int pageSize = 50,
         CancellationToken cancellationToken = default)
     {
-        _ = RequireAccount();
+        using var operation = BeginOperation();
         if (pageSize is < 1 or > 50)
         {
             throw new ArgumentOutOfRangeException(nameof(pageSize));
@@ -345,9 +399,11 @@ public sealed class CloudNoteMaterialService
         var result = new List<NoteAsrSourceDto>();
         for (var offset = 0; ; offset = checked(offset + pageSize))
         {
+            RequireOperationCurrent(operation);
             var response = await _api.GetNoteAsrSourcesAsync(offset, pageSize, cancellationToken)
                 .ConfigureAwait(false)
                 ?? throw new InvalidDataException("服务器没有返回材料版本目录。");
+            RequireOperationCurrent(operation);
             var page = RequireResponse(response.Code, response.Message, response.Data);
             result.AddRange(page.Items);
             if (result.Count >= page.Total || page.Items.Count == 0)
@@ -361,11 +417,83 @@ public sealed class CloudNoteMaterialService
         Guid? noteId = null,
         CancellationToken cancellationToken = default)
     {
-        _ = RequireAccount();
+        using var operation = BeginOperation();
         var response = await _api.GetNoteDerivedTasksAsync(noteId, cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回派生任务。");
+        RequireOperationCurrent(operation);
         return RequireResponse(response.Code, response.Message, response.Data);
+    }
+
+    public long AccountGeneration => Interlocked.Read(ref _accountGeneration);
+
+    public CloudNoteAccountScope? CurrentAccountScope
+    {
+        get
+        {
+            try
+            {
+                return _accountProvider();
+            }
+            catch (InvalidDataException)
+            {
+                return null;
+            }
+        }
+    }
+
+    private async Task<IReadOnlyList<NoteMaterialUploadDto>> LoadVersionsAsync(
+        Guid noteId,
+        CloudOperation operation,
+        CancellationToken cancellationToken)
+    {
+        RequireOperationCurrent(operation);
+        var response = await _api.GetNoteMaterialVersionsAsync(noteId, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new InvalidDataException("服务器没有返回固定版本列表。");
+        RequireOperationCurrent(operation);
+        return RequireResponse(response.Code, response.Message, response.Data);
+    }
+
+    private CloudOperation BeginOperation()
+    {
+        var account = RequireAccount();
+        return new CloudOperation(account, _api.BeginOperationScope());
+    }
+
+    private void OnExternalScopeChanged()
+        => Interlocked.Increment(ref _accountGeneration);
+
+    private void RequireOperationCurrent(CloudOperation operation)
+    {
+        CloudNoteAccountScope current;
+        try
+        {
+            current = RequireAccount();
+        }
+        catch (InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "云端笔记账号或服务器在操作期间已切换；本次操作已中止，未写入旧账号回执。");
+        }
+
+        if (!string.Equals(current.ServerUrl, operation.Account.ServerUrl, StringComparison.Ordinal)
+            || !string.Equals(current.AccountId, operation.Account.AccountId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "云端笔记账号或服务器在操作期间已切换；本次操作已中止，未写入旧账号回执。");
+        }
+
+        try
+        {
+            _api.EnsureOperationScopeCurrent();
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new InvalidOperationException(
+                "云端笔记账号或服务器在操作期间已切换；本次操作已中止，未写入旧账号回执。",
+                ex);
+        }
     }
 
     private CloudNoteAccountScope RequireAccount()
@@ -406,5 +534,13 @@ public sealed class CloudNoteMaterialService
         RequireSuccess(code, message);
 
         return data ?? throw new InvalidDataException("服务器响应没有数据。");
+    }
+
+    private sealed class CloudOperation(
+        CloudNoteAccountScope account,
+        ApiClient.ApiOperationScope apiScope) : IDisposable
+    {
+        public CloudNoteAccountScope Account { get; } = account;
+        public void Dispose() => apiScope.Dispose();
     }
 }

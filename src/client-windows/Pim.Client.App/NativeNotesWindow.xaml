@@ -141,6 +141,7 @@
                                  TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                                  FontFamily="Consolas" FontSize="13" Padding="10"
                                  BorderBrush="{StaticResource PimBorderBrush}"
+                                 TextChanged="OnCloudResultEdited"
                                  Text="云端结果会显示在这里。只读预览不会启动新的 ASR 或模型任务。" />
                         <TextBlock x:Name="CloudResultStateText" Grid.Row="9" Margin="0,6,0,0"
                                    Text="未选择结果版本" TextWrapping="Wrap" FontSize="12"

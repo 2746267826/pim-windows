@@ -17,10 +17,16 @@ public partial class NativeNotesWindow : Window
     private readonly CloudNoteMaterialService _cloud;
     private readonly ObservableCollection<LocalNoteSummary> _notes = [];
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
+    private readonly CloudNotesUiState _cloudUi = new();
     private LocalNoteDocument? _current;
     private bool _loading;
     private bool _closing;
     private bool _allowClose;
+    private bool _cloudResultDirty;
+    private bool _loadingCloudResult;
+    private bool _restoringCloudSelection;
+    private bool _refreshingCloudResults;
+    private long _cloudDraftGeneration;
     private NoteDerivedArtifactDto? _selectedArtifact;
     private NoteDerivedVersionDto? _selectedDerivedVersion;
     private NoteDerivedVersionSummaryDto? _selectedDerivedVersionSummary;
@@ -107,6 +113,22 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        if (_current?.NoteId == summary.NoteId)
+        {
+            return;
+        }
+
+        var selectionGeneration = _cloudUi.BeginNoteSelection();
+        if (_cloudResultDirty && !ConfirmDiscardCloudDraft("切换笔记"))
+        {
+            _loading = true;
+            NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == _current?.NoteId);
+            _loading = false;
+            return;
+        }
+
+        _cloudResultDirty = false;
+
         try
         {
             if (!await SavePendingAsync())
@@ -118,6 +140,11 @@ public partial class NativeNotesWindow : Window
             }
 
             var note = await _store.LoadAsync(summary.NoteId);
+            if (!IsSelectedNoteRequest(selectionGeneration, summary.NoteId))
+            {
+                return;
+            }
+
             _loading = true;
             _current = note;
             TitleBox.IsEnabled = true;
@@ -126,8 +153,11 @@ public partial class NativeNotesWindow : Window
             MarkdownBox.Text = note.Markdown;
             UpdateMaterials();
             await RefreshVersionsAsync(note.NoteId, note.CurrentVersionId);
-            await RefreshCloudVersionsAsync(showErrors: false);
-            await RefreshCloudResultsAsync(showErrors: false);
+            if (IsCurrentNoteSelection(selectionGeneration, note.NoteId))
+            {
+                await RefreshCloudVersionsAsync(showErrors: false, selectionGeneration);
+                await RefreshCloudResultsAsync(showErrors: false, selectionGeneration);
+            }
             SaveStateText.Text = "已加载固定版本";
         }
         catch (Exception ex)
@@ -507,6 +537,8 @@ public partial class NativeNotesWindow : Window
 
     private void ShowEmptyEditor()
     {
+        _cloudUi.BeginNoteSelection();
+        _cloudUi.BeginArtifactSelection();
         _loading = true;
         _current = null;
         TitleBox.Text = string.Empty;
@@ -519,7 +551,14 @@ public partial class NativeNotesWindow : Window
         VersionsBox.ItemsSource = null;
         CloudVersionsList.ItemsSource = null;
         CloudArtifactsList.ItemsSource = null;
+        _selectedArtifact = null;
+        _selectedDerivedVersion = null;
+        _selectedDerivedVersionSummary = null;
+        _cloudResultDirty = false;
+        _loadingCloudResult = true;
+        Interlocked.Increment(ref _cloudDraftGeneration);
         CloudResultBox.Text = string.Empty;
+        _loadingCloudResult = false;
         CloudResultStateText.Text = "未选择笔记";
         SaveStateText.Text = "";
     }
@@ -532,6 +571,20 @@ public partial class NativeNotesWindow : Window
         }
 
         _saveTimer.Stop();
+        if (_cloudResultDirty
+            && MessageBox.Show(
+                this,
+                "云端结果编辑框中有尚未保存的人工修订。仍要关闭并放弃这份草稿吗？",
+                "未保存的云端修订",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        _cloudResultDirty = false;
+
         if (_current is not null
             && (!string.Equals(_current.Title, TitleBox.Text, StringComparison.Ordinal)
                 || !string.Equals(_current.Markdown, MarkdownBox.Text, StringComparison.Ordinal)))
@@ -715,7 +768,7 @@ public partial class NativeNotesWindow : Window
         NotesList.SelectedItem = _notes.FirstOrDefault(item => item.NoteId == noteId);
     }
 
-    private async Task RefreshCloudVersionsAsync(bool showErrors)
+    private async Task RefreshCloudVersionsAsync(bool showErrors, long? expectedSelectionGeneration = null)
     {
         if (_current is null)
         {
@@ -723,9 +776,21 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        var noteId = _current.NoteId;
+        var accountScope = _cloud.CurrentAccountScope;
+        var accountGeneration = _cloud.AccountGeneration;
         try
         {
-            var versions = await _cloud.GetVersionsAsync(_current.NoteId);
+            var versions = await _cloud.GetVersionsAsync(noteId);
+            if (!IsCurrentCloudRequest(
+                    expectedSelectionGeneration,
+                    noteId,
+                    accountScope,
+                    accountGeneration))
+            {
+                return;
+            }
+
             var rows = versions
                 .Select(version => new CloudVersionRow(
                     version,
@@ -741,6 +806,15 @@ public partial class NativeNotesWindow : Window
         }
         catch (Exception ex)
         {
+            if (!IsCurrentCloudRequest(
+                    expectedSelectionGeneration,
+                    noteId,
+                    accountScope,
+                    accountGeneration))
+            {
+                return;
+            }
+
             CloudVersionsList.ItemsSource = null;
             CloudStatusText.Text = "云端版本暂不可用；本机固定版本不受影响。";
             if (showErrors)
@@ -806,7 +880,7 @@ public partial class NativeNotesWindow : Window
     private async void OnRefreshCloudResults(object sender, RoutedEventArgs e)
         => await RefreshCloudResultsAsync(showErrors: true);
 
-    private async Task RefreshCloudResultsAsync(bool showErrors)
+    private async Task RefreshCloudResultsAsync(bool showErrors, long? expectedSelectionGeneration = null)
     {
         if (_current is null)
         {
@@ -814,9 +888,28 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        if (_cloudResultDirty && !ConfirmDiscardCloudDraft("刷新云端结果"))
+        {
+            return;
+        }
+
+        var noteId = _current.NoteId;
+        var accountScope = _cloud.CurrentAccountScope;
+        var accountGeneration = _cloud.AccountGeneration;
+        var draftGeneration = Interlocked.Read(ref _cloudDraftGeneration);
         try
         {
-            var artifacts = await _cloud.GetDerivedArtifactsAsync(_current.NoteId);
+            var artifacts = await _cloud.GetDerivedArtifactsAsync(noteId);
+            if (!IsCurrentCloudRequest(
+                    expectedSelectionGeneration,
+                    noteId,
+                    accountScope,
+                    accountGeneration)
+                || draftGeneration != Interlocked.Read(ref _cloudDraftGeneration))
+            {
+                return;
+            }
+
             var rows = artifacts
                 .SelectMany(artifact => artifact.Versions.Select(version =>
                     new CloudArtifactRow(
@@ -827,15 +920,44 @@ public partial class NativeNotesWindow : Window
                         + version.ContentSha256[..8])))
                 .OrderByDescending(row => row.Version.CreatedAt)
                 .ToArray();
-            CloudArtifactsList.ItemsSource = rows;
-            CloudArtifactsList.SelectedItem = rows.FirstOrDefault(row => row.Version.IsHead)
-                ?? rows.FirstOrDefault();
+            _refreshingCloudResults = true;
+            try
+            {
+                CloudArtifactsList.ItemsSource = rows;
+                CloudArtifactsList.SelectedItem = rows.FirstOrDefault(row => row.Version.IsHead)
+                    ?? rows.FirstOrDefault();
+            }
+            finally
+            {
+                _refreshingCloudResults = false;
+            }
+
+            if (rows.Length == 0)
+            {
+                _selectedArtifact = null;
+                _selectedDerivedVersion = null;
+                _selectedDerivedVersionSummary = null;
+                _loadingCloudResult = true;
+                CloudResultBox.Text = string.Empty;
+                _loadingCloudResult = false;
+                _cloudResultDirty = false;
+            }
+
             CloudResultStateText.Text = rows.Length == 0
                 ? "服务器暂无记录或分析结果；只读页不会启动 ASR/模型。"
                 : $"共 {rows.Length} 个结果版本；可查看历史、保存人工修订或切回历史版本。";
         }
         catch (Exception ex)
         {
+            if (!IsCurrentCloudRequest(
+                    expectedSelectionGeneration,
+                    noteId,
+                    accountScope,
+                    accountGeneration))
+            {
+                return;
+            }
+
             CloudArtifactsList.ItemsSource = null;
             CloudResultStateText.Text = "云端结果暂不可用。";
             if (showErrors)
@@ -847,6 +969,14 @@ public partial class NativeNotesWindow : Window
 
     private async void OnCloudArtifactSelected(object sender, SelectionChangedEventArgs e)
     {
+        if (_restoringCloudSelection)
+        {
+            _restoringCloudSelection = false;
+            return;
+        }
+
+        var artifactGeneration = _cloudUi.BeginArtifactSelection();
+        var selectionGeneration = _cloudUi.NoteGeneration;
         if (CloudArtifactsList.SelectedItem is not CloudArtifactRow row)
         {
             _selectedArtifact = null;
@@ -855,16 +985,53 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        if (_cloudResultDirty
+            && !_refreshingCloudResults
+            && !ConfirmDiscardCloudDraft("切换云端结果版本"))
+        {
+            var priorSelection = (CloudArtifactsList.ItemsSource as IEnumerable<CloudArtifactRow>)?
+                .FirstOrDefault(candidate =>
+                    candidate.Artifact.ArtifactId == _selectedArtifact?.ArtifactId
+                    && candidate.Version.VersionId == _selectedDerivedVersion?.VersionId);
+            RestoreCloudSelection(priorSelection);
+            return;
+        }
+
+        var previousSelection = (CloudArtifactsList.ItemsSource as IEnumerable<CloudArtifactRow>)?
+            .FirstOrDefault(candidate =>
+                candidate.Artifact.ArtifactId == _selectedArtifact?.ArtifactId
+                && candidate.Version.VersionId == _selectedDerivedVersion?.VersionId);
+        var noteId = _current?.NoteId;
+        var accountScope = _cloud.CurrentAccountScope;
+        var accountGeneration = _cloud.AccountGeneration;
+        var draftGeneration = Interlocked.Read(ref _cloudDraftGeneration);
+        CloudResultBox.IsEnabled = false;
         try
         {
             CloudResultStateText.Text = "正在读取结果版本…";
             var version = await _cloud.GetDerivedVersionAsync(
                 Guid.Parse(row.Artifact.ArtifactId),
                 Guid.Parse(row.Version.VersionId));
+            if (!IsCurrentCloudRequest(
+                    selectionGeneration,
+                    noteId,
+                    accountScope,
+                    accountGeneration)
+                || !_cloudUi.IsArtifactCurrent(artifactGeneration)
+                || draftGeneration != Interlocked.Read(ref _cloudDraftGeneration)
+                || !ReferenceEquals(CloudArtifactsList.SelectedItem, row))
+            {
+                return;
+            }
+
             _selectedArtifact = row.Artifact;
             _selectedDerivedVersion = version;
             _selectedDerivedVersionSummary = row.Version;
+            _loadingCloudResult = true;
+            Interlocked.Increment(ref _cloudDraftGeneration);
             CloudResultBox.Text = version.ContentMarkdown;
+            _loadingCloudResult = false;
+            _cloudResultDirty = false;
             CloudResultStateText.Text =
                 $"{ArtifactLabel(version.Kind)} · {version.Author} · {version.CreatedAt.ToLocalTime():yyyy-MM-dd HH:mm} · "
                 + (version.IsHead ? "当前 Head" : "历史版本")
@@ -872,9 +1039,24 @@ public partial class NativeNotesWindow : Window
         }
         catch (Exception ex)
         {
-            CloudResultBox.Text = string.Empty;
-            CloudResultStateText.Text = "读取所选结果失败。";
+            if (!_cloudUi.IsArtifactCurrent(artifactGeneration)
+                || !IsCurrentCloudRequest(
+                    selectionGeneration,
+                    _current?.NoteId,
+                    accountScope,
+                    accountGeneration)
+                || draftGeneration != Interlocked.Read(ref _cloudDraftGeneration))
+            {
+                return;
+            }
+
+            RestoreCloudSelection(previousSelection);
+            CloudResultStateText.Text = "读取所选结果失败；当前编辑内容未覆盖。";
             ShowFailure("读取云端结果版本失败", ex);
+        }
+        finally
+        {
+            CloudResultBox.IsEnabled = true;
         }
     }
 
@@ -896,23 +1078,63 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        var artifact = _selectedArtifact;
+        var markdown = CloudResultBox.Text;
+        var selectionGeneration = _cloudUi.NoteGeneration;
+        var artifactGeneration = _cloudUi.ArtifactGeneration;
+        var noteId = _current?.NoteId;
+        var accountScope = _cloud.CurrentAccountScope;
+        var accountGeneration = _cloud.AccountGeneration;
+        var draftGeneration = Interlocked.Read(ref _cloudDraftGeneration);
         try
         {
             var saved = await _cloud.SaveManualRevisionAsync(
-                Guid.Parse(_selectedArtifact.ArtifactId),
-                string.IsNullOrWhiteSpace(_selectedArtifact.HeadVersionId)
+                Guid.Parse(artifact.ArtifactId),
+                string.IsNullOrWhiteSpace(artifact.HeadVersionId)
                     ? null
-                    : Guid.Parse(_selectedArtifact.HeadVersionId),
-                _selectedArtifact.Revision,
-                CloudResultBox.Text);
+                    : Guid.Parse(artifact.HeadVersionId),
+                artifact.Revision,
+                markdown);
+            if (!IsCurrentCloudRequest(
+                    selectionGeneration,
+                    noteId,
+                    accountScope,
+                    accountGeneration)
+                || !_cloudUi.IsArtifactCurrent(artifactGeneration))
+            {
+                return;
+            }
+
+            var stillShowsSavedText = draftGeneration == Interlocked.Read(ref _cloudDraftGeneration)
+                && string.Equals(CloudResultBox.Text, markdown, StringComparison.Ordinal);
+            if (stillShowsSavedText)
+            {
+                _cloudResultDirty = false;
+            }
+
             CloudResultStateText.Text = saved.HasConflict
                 ? "人工修订已保存为新版本，但当前 Head 已被另一端更新；双方版本均保留。"
                 : "人工修订已保存为新的不可变结果版本。";
-            await RefreshCloudResultsAsync(showErrors: false);
+            if (stillShowsSavedText)
+            {
+                await RefreshCloudResultsAsync(showErrors: false, selectionGeneration);
+            }
+            else
+            {
+                CloudResultStateText.Text += " 保存期间的新编辑仍是未保存草稿。";
+            }
         }
         catch (Exception ex)
         {
-            ShowFailure("保存人工修订失败；旧结果未覆盖", ex);
+            if (IsCurrentCloudRequest(
+                    selectionGeneration,
+                    noteId,
+                    accountScope,
+                    accountGeneration)
+                && _cloudUi.IsArtifactCurrent(artifactGeneration))
+            {
+                ShowFailure("保存人工修订失败；草稿仍保留在编辑框中，旧结果未覆盖", ex);
+            }
         }
     }
 
@@ -942,20 +1164,108 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        var artifact = _selectedArtifact;
+        var version = _selectedDerivedVersion;
+        var selectionGeneration = _cloudUi.NoteGeneration;
+        var artifactGeneration = _cloudUi.ArtifactGeneration;
+        var noteId = _current?.NoteId;
+        var accountScope = _cloud.CurrentAccountScope;
+        var accountGeneration = _cloud.AccountGeneration;
         try
         {
             _ = await _cloud.SelectDerivedVersionAsync(
-                Guid.Parse(_selectedArtifact.ArtifactId),
-                Guid.Parse(_selectedDerivedVersion.VersionId),
-                _selectedArtifact.Revision);
+                Guid.Parse(artifact.ArtifactId),
+                Guid.Parse(version.VersionId),
+                artifact.Revision);
+            if (!IsCurrentCloudRequest(
+                    selectionGeneration,
+                    noteId,
+                    accountScope,
+                    accountGeneration)
+                || !_cloudUi.IsArtifactCurrent(artifactGeneration))
+            {
+                return;
+            }
+
             CloudResultStateText.Text = "结果当前版本已切换。";
-            await RefreshCloudResultsAsync(showErrors: false);
+            await RefreshCloudResultsAsync(showErrors: false, selectionGeneration);
         }
         catch (Exception ex)
         {
-            ShowFailure("切换结果当前版本失败；旧版本未删除", ex);
+            if (IsCurrentCloudRequest(
+                    selectionGeneration,
+                    noteId,
+                    accountScope,
+                    accountGeneration)
+                && _cloudUi.IsArtifactCurrent(artifactGeneration))
+            {
+                ShowFailure("切换结果当前版本失败；旧版本未删除", ex);
+            }
         }
     }
+
+    private void OnCloudResultEdited(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingCloudResult && _selectedDerivedVersion is not null)
+        {
+            Interlocked.Increment(ref _cloudDraftGeneration);
+            _cloudResultDirty = true;
+            CloudResultStateText.Text = "人工修订草稿尚未保存；切换或刷新前会先询问。";
+        }
+    }
+
+    private bool ConfirmDiscardCloudDraft(string action)
+    {
+        if (!_cloudResultDirty)
+        {
+            return true;
+        }
+
+        var answer = MessageBox.Show(
+            this,
+            $"当前云端结果有未保存的人工修订草稿。继续{action}并放弃草稿吗？",
+            "未保存的云端修订",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        return answer == MessageBoxResult.Yes;
+    }
+
+    private void RestoreCloudSelection(CloudArtifactRow? selection)
+    {
+        if (ReferenceEquals(CloudArtifactsList.SelectedItem, selection))
+        {
+            return;
+        }
+
+        _restoringCloudSelection = true;
+        CloudArtifactsList.SelectedItem = selection;
+    }
+
+    private bool IsCurrentNoteSelection(long generation, Guid noteId)
+        => _cloudUi.IsNoteCurrent(
+            generation,
+            noteId,
+            _current?.NoteId,
+            (NotesList.SelectedItem as LocalNoteSummary)?.NoteId);
+
+    private bool IsSelectedNoteRequest(long generation, Guid noteId)
+        => generation == _cloudUi.NoteGeneration
+           && NotesList.SelectedItem is LocalNoteSummary selected
+           && selected.NoteId == noteId;
+
+    private bool IsCurrentCloudRequest(
+        long? expectedGeneration,
+        Guid? noteId,
+        CloudNoteAccountScope? expectedAccount = null,
+        long? expectedAccountGeneration = null)
+        => (expectedGeneration is null
+            || expectedGeneration.Value == _cloudUi.NoteGeneration)
+           && noteId is not null
+           && _current?.NoteId == noteId
+           && _cloud.CurrentAccountScope is not null
+           && (expectedAccount is null || expectedAccount == _cloud.CurrentAccountScope)
+           && (expectedAccountGeneration is null
+               || expectedAccountGeneration.Value == _cloud.AccountGeneration);
 
     private static string ReasonLabel(LocalNoteCheckpointReason reason) => reason switch
     {

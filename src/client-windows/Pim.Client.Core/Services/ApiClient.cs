@@ -30,6 +30,7 @@ public class ApiClient
     private readonly Func<HttpMessageHandler> _messageHandlerFactory;
     private long _clientGeneration;
     private long _externalCredentialGeneration;
+    private readonly AsyncLocal<ClientLease?> _operationLease = new();
 
     /// <summary>
     /// 令牌续期回调（主动到期前续期与 401 被动续期**共用**）。返回 true 表示续期成功。
@@ -44,6 +45,12 @@ public class ApiClient
     public Func<bool>? IsTokenRenewalDue { get; set; }
 
     public event Action<string, long>? RequestTiming;
+
+    /// <summary>
+    /// Raised when an explicit deployment or external credential change invalidates
+    /// long-running operation scopes. Natural token renewal does not raise it.
+    /// </summary>
+    public event Action? ExternalScopeChanged;
 
     /// <summary>续期串行闸门：同一时刻只允许一次真实续期，其余调用等待并复用结果。</summary>
     private readonly SemaphoreSlim _tokenRenewalGate = new(1, 1);
@@ -77,6 +84,7 @@ public class ApiClient
     {
         var normalized = NormalizeServerUrl(baseUrl);
         var uri = new Uri(normalized.TrimEnd('/') + "/api/v1/");
+        var scopeChanged = false;
         lock (_clientSync)
         {
             var previous = _httpClient;
@@ -96,7 +104,13 @@ public class ApiClient
 
             _httpClient = newClient;
             _clientGeneration++;
+            scopeChanged = true;
             previous.Dispose();
+        }
+
+        if (scopeChanged)
+        {
+            ExternalScopeChanged?.Invoke();
         }
     }
 
@@ -131,6 +145,7 @@ public class ApiClient
 
     public void SetAccessToken(string token)
     {
+        var scopeChanged = false;
         lock (_clientSync)
         {
             _httpClient.DefaultRequestHeaders.Authorization =
@@ -138,19 +153,32 @@ public class ApiClient
             if (!InsideTokenRenewal.Value)
             {
                 _externalCredentialGeneration++;
+                scopeChanged = true;
             }
+        }
+
+        if (scopeChanged)
+        {
+            ExternalScopeChanged?.Invoke();
         }
     }
 
     public void ClearAccessToken()
     {
+        var scopeChanged = false;
         lock (_clientSync)
         {
             _httpClient.DefaultRequestHeaders.Authorization = null;
             if (!InsideTokenRenewal.Value)
             {
                 _externalCredentialGeneration++;
+                scopeChanged = true;
             }
+        }
+
+        if (scopeChanged)
+        {
+            ExternalScopeChanged?.Invoke();
         }
     }
 
@@ -857,12 +885,66 @@ public class ApiClient
 
     private ClientLease CaptureClientLease()
     {
+        if (_operationLease.Value is { } operationLease)
+        {
+            EnsureLeaseCurrent(operationLease);
+            return operationLease;
+        }
+
         lock (_clientSync)
         {
             return new ClientLease(
                 _httpClient,
                 _clientGeneration,
                 _externalCredentialGeneration);
+        }
+    }
+
+    /// <summary>
+    /// Pins all API calls in the current async flow to one deployment and external
+    /// credential snapshot. A natural token refresh may update the bearer token on
+    /// the pinned HttpClient; an account/server switch fails before every request.
+    /// </summary>
+    internal ApiOperationScope BeginOperationScope()
+    {
+        ClientLease lease;
+        lock (_clientSync)
+        {
+            lease = new ClientLease(
+                _httpClient,
+                _clientGeneration,
+                _externalCredentialGeneration);
+        }
+
+        var previous = _operationLease.Value;
+        _operationLease.Value = lease;
+        return new ApiOperationScope(this, previous);
+    }
+
+    internal void EnsureOperationScopeCurrent()
+    {
+        if (_operationLease.Value is { } lease)
+        {
+            EnsureLeaseCurrent(lease);
+        }
+    }
+
+    private void EnsureLeaseCurrent(ClientLease lease)
+    {
+        lock (_clientSync)
+        {
+            if (_clientGeneration != lease.Generation
+                || !ReferenceEquals(_httpClient, lease.Client))
+            {
+                throw new HttpRequestException(
+                    "API deployment changed while the operation was in flight; no further request was sent");
+            }
+
+            if (_externalCredentialGeneration != lease.ExternalCredentialGeneration)
+            {
+                throw new HttpRequestException(
+                    "API credentials changed while the operation was in flight; no further request was sent");
+            }
         }
     }
 
@@ -886,6 +968,30 @@ public class ApiClient
             }
 
             return request();
+        }
+    }
+
+    internal sealed class ApiOperationScope : IDisposable
+    {
+        private readonly ApiClient _owner;
+        private readonly ClientLease? _previous;
+        private bool _disposed;
+
+        internal ApiOperationScope(ApiClient owner, ClientLease? previous)
+        {
+            _owner = owner;
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _owner._operationLease.Value = _previous;
         }
     }
 
@@ -1166,7 +1272,7 @@ public class ApiClient
         return value.ToLowerInvariant();
     }
 
-    private sealed record ClientLease(
+    internal sealed record ClientLease(
         HttpClient Client,
         long Generation,
         long ExternalCredentialGeneration);
