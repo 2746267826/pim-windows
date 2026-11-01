@@ -125,6 +125,18 @@ public partial class MainShellWindow : Window
         new DeviceCenterWindow { Owner = this }.Show();
     }
 
+    private void OnOpenNativePlanner(object sender, RoutedEventArgs e)
+    {
+        var existing = Application.Current.Windows.OfType<NativePlannerWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            existing.Activate();
+            return;
+        }
+
+        new NativePlannerWindow { Owner = this }.Show();
+    }
+
     private void RefreshShellState()
     {
         AccountStateText.Text = _authService.IsAuthenticated

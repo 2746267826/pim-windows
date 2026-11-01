@@ -439,10 +439,10 @@ PYEOF
   fi
 }
 
-reject_case "inline_enum" "属性上的内联 enum" \
+reject_case "inline_enum_with_unmodelled_constraints" "内联 enum 仍带生成器无法表达的属性约束" \
   'schemas["LoginRequest"]["properties"]["username"]["enum"] = ["alice", "bob"]'
-reject_case "non_identifier_enum_value" "枚举取值不是合法 C# 标识符（改名就是改线格式）" \
-  'schemas["DaemonSourceState"]["enum"] = ["Unknown", "in-progress", "Available", "Unavailable", "Paused"]'
+reject_case "enum_wire_value_collision" "两个枚举 wire 值归一化后撞到同一 C# 成员" \
+  'schemas["DaemonSourceState"]["enum"] = ["IN-PROCESS", "IN_PROCESS"]'
 reject_case "integer_enum" "整数枚举（契约没给成员名）" \
   'schemas["DaemonSourceState"] = {"type": "integer", "format": "int32", "enum": [0, 1, 2]}'
 reject_case "properties_plus_additional" "对象同时有 properties 与 additionalProperties" \
@@ -494,6 +494,7 @@ run_generator "$SB"
 record "generator_accepts_actual_asr_boundary" $([ "$GEN_RC" -eq 0 ] && echo 0 || echo 1) \
   "rc=$GEN_RC for the real 9e96 ASR boundary (path uuid/int32, 2 required headers, audio/wav)"
 OPS_REL="src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs"
+MODELS_REL="src/client-windows/Pim.Client.Core/Contract/ContractModels.cs"
 grep -q "X-Pim-Lease-Token" "$SB/$OPS_REL" && grep -q "X-Pim-Fencing-Token" "$SB/$OPS_REL" \
   && grep -q "audio/wav" "$SB/$OPS_REL" && grep -q "X-Content-SHA256" "$SB/$OPS_REL"
 record "asr_operation_metadata_is_typed" $([ $? -eq 0 ] && echo 0 || echo 1) \
@@ -522,10 +523,21 @@ record "generator_accepts_real_query_and_binary_operations" $([ "$GEN_RC" -eq 0 
   "rc=$GEN_RC for required/optional query parameters and note material octet-stream upload"
 grep -q 'new("sha256", "plain-string", true)' "$SB/$OPS_REL" \
   && grep -q 'new("offset", "int32", false), new("limit", "int32", false)' "$SB/$OPS_REL" \
+  && grep -q 'new("start", "date-time", false)' "$SB/$OPS_REL" \
+  && grep -q 'new("inbox", "boolean", false)' "$SB/$OPS_REL" \
   && grep -q '"application/octet-stream"' "$SB/$OPS_REL" \
   && grep -q "public string ResolveQuery" "$SB/$OPS_REL"
 record "query_and_binary_metadata_is_typed" $([ $? -eq 0 ] && echo 0 || echo 1) \
-  "generated metadata carries query names/kinds/required flags and the exact binary media type"
+  "generated metadata carries date-time/boolean query kinds and the exact binary media type"
+
+# 真实契约里的任务状态是属性级内联 enum，wire 值含 '-'。生成器必须提升为具名 enum
+# 并生成精确 wire converter，不能静默改写或 rejection 掉合法契约。
+grep -q 'public enum CreateTaskRequestStatus' "$SB/$MODELS_REL" \
+  && grep -q 'public enum UpdateTaskRequestStatus' "$SB/$MODELS_REL" \
+  && grep -q '"NEEDS-ACTION" => CreateTaskRequestStatus.NEEDS_ACTION' "$SB/$MODELS_REL" \
+  && grep -q 'CreateTaskRequestStatus.NEEDS_ACTION => "NEEDS-ACTION"' "$SB/$MODELS_REL"
+record "inline_wire_enum_is_named_and_exact" $([ $? -eq 0 ] && echo 0 || echo 1) \
+  "real inline task statuses become named enums with exact hyphenated wire mapping"
 
 # operation 级参数覆盖 Path Item 级的同名同位置参数；合并后不能重复声明。
 SB="$WORK/sb-query-override"; mksb "$SB"

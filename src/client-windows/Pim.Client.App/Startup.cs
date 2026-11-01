@@ -25,6 +25,7 @@ public static class Startup
         services.AddSingleton<TrackerLogger>();
         services.AddSingleton<TrackerHistoryStore>();
         services.AddSingleton<DeviceCenterService>();
+        services.AddSingleton<CalendarTaskService>();
         services.AddSingleton<BrowserBridgeService>(sp =>
         {
             var cfg = DaemonConfig.Load().Tracker;

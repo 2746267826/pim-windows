@@ -352,6 +352,60 @@ public class ContractBoundaryBehaviorTests
         Assert.Equal(
             "?sha256=a%20b%2F%3F%26",
             ContractOperation.UploadNoteMaterialPart.ResolveQuery(("sha256", "a b/?&")));
+
+        var events = ContractOperation.GetCalendarEvents;
+        Assert.Equal(
+            "?start=2026-11-01T08%3A30%3A00.0000000%2B00%3A00&end=2026-11-02T08%3A30%3A00.0000000%2B00%3A00&page=1&pageSize=50",
+            events.ResolveQuery(
+                ("start", "2026-11-01T08:30:00.0000000+00:00"),
+                ("end", "2026-11-02T08:30:00.0000000+00:00"),
+                ("page", "1"),
+                ("pageSize", "50")));
+        Assert.Throws<ArgumentException>(() => events.ResolveQuery(("start", "tomorrow")));
+        Assert.Throws<ArgumentException>(() => ContractOperation.GetTasks.ResolveQuery(("inbox", "yes")));
+    }
+
+    [Fact]
+    public async Task CalendarAndTaskOperationsSendContractQueriesAndWireStatuses()
+    {
+        var handler = new RecordingHandler();
+        var api = new ApiClient(() => handler);
+        var from = DateTimeOffset.Parse("2026-11-01T08:30:00Z");
+
+        await api.GetCalendarsAsync(kind: "PERSONAL");
+        await api.GetCalendarEventsAsync(
+            start: from,
+            end: from.AddDays(1),
+            search: "规划 & 会议",
+            calendarId: Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            page: 2,
+            pageSize: 40);
+        await api.GetTaskBooksAsync();
+        await api.GetTasksAsync(
+            inbox: true,
+            search: "Windows",
+            calendarId: Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            status: "NEEDS-ACTION",
+            priority: 3,
+            plannedFrom: from,
+            page: 1,
+            pageSize: 25);
+
+        var operations = handler.Requests;
+        Assert.Equal(4, operations.Count);
+        Assert.Equal("/api/v1/calendar/calendars", operations[0].Path);
+        Assert.Equal("?kind=PERSONAL", operations[0].Query);
+        Assert.Equal(
+            "?start=2026-11-01T08%3A30%3A00.0000000%2B00%3A00&end=2026-11-02T08%3A30%3A00.0000000%2B00%3A00&search=%E8%A7%84%E5%88%92%20%26%20%E4%BC%9A%E8%AE%AE&calendarId=11111111-1111-1111-1111-111111111111&page=2&pageSize=40",
+            operations[1].Query);
+        Assert.Equal("/api/v1/calendar/task-books", operations[2].Path);
+        Assert.Contains("inbox=true", operations[3].Query, StringComparison.Ordinal);
+        Assert.Contains("plannedFrom=2026-11-01T08%3A30%3A00.0000000%2B00%3A00", operations[3].Query, StringComparison.Ordinal);
+        Assert.Contains("status=NEEDS-ACTION", operations[3].Query, StringComparison.Ordinal);
+
+        Assert.Equal(
+            "\"NEEDS-ACTION\"",
+            JsonSerializer.Serialize(CreateTaskRequestStatus.NEEDS_ACTION));
     }
 
     [Fact]
@@ -634,6 +688,59 @@ public class ContractBoundaryBehaviorTests
             (api, _) => api.GetEndpointStatusesAsync()),
         new("GET", "/api/v1/endpoints/{deviceId}/collection-quality", null,
             (api, _) => api.GetEndpointCollectionQualityAsync("PC-01")),
+        new("GET", "/api/v1/calendar/calendars", null,
+            (api, _) => api.GetCalendarsAsync(kind: "PERSONAL"),
+            ExpectedQuery: "?kind=PERSONAL"),
+        new("GET", "/api/v1/calendar/events", null,
+            (api, _) => api.GetCalendarEventsAsync(
+                start: DateTimeOffset.Parse("2026-11-01T08:30:00Z"),
+                end: DateTimeOffset.Parse("2026-11-02T08:30:00Z"),
+                search: "规划 & 会议",
+                calendarId: Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                page: 2,
+                pageSize: 40),
+            ExpectedQuery: "?start=2026-11-01T08%3A30%3A00.0000000%2B00%3A00&end=2026-11-02T08%3A30%3A00.0000000%2B00%3A00&search=%E8%A7%84%E5%88%92%20%26%20%E4%BC%9A%E8%AE%AE&calendarId=11111111-1111-1111-1111-111111111111&page=2&pageSize=40"),
+        new("GET", "/api/v1/calendar/task-books", null,
+            (api, _) => api.GetTaskBooksAsync()),
+        new("GET", "/api/v1/calendar/tasks", null,
+            (api, _) => api.GetTasksAsync(
+                inbox: true,
+                search: "Windows",
+                calendarId: Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                status: "NEEDS-ACTION",
+                priority: 3,
+                plannedFrom: DateTimeOffset.Parse("2026-11-01T08:30:00Z"),
+                page: 1,
+                pageSize: 25),
+            ExpectedQuery: "?inbox=true&search=Windows&calendarId=11111111-1111-1111-1111-111111111111&status=NEEDS-ACTION&priority=3&plannedFrom=2026-11-01T08%3A30%3A00.0000000%2B00%3A00&page=1&pageSize=25"),
+        new("POST", "/api/v1/calendar/events",
+            new CreateEventRequest
+            {
+                CalendarId = "11111111-1111-1111-1111-111111111111",
+                DtStart = DateTimeOffset.Parse("2026-11-01T09:00:00Z"),
+                DtEnd = DateTimeOffset.Parse("2026-11-01T10:00:00Z"),
+                IsAllDay = false,
+                Title = "设计评审",
+            },
+            (api, req) => api.CreateCalendarEventAsync((CreateEventRequest)req!)),
+        new("POST", "/api/v1/calendar/tasks",
+            new CreateTaskRequest
+            {
+                Priority = 3,
+                Status = CreateTaskRequestStatus.NEEDS_ACTION,
+                Title = "回归检查",
+            },
+            (api, req) => api.CreateTaskAsync((CreateTaskRequest)req!)),
+        new("PUT", "/api/v1/calendar/tasks/{id}",
+            new UpdateTaskRequest
+            {
+                Status = UpdateTaskRequestStatus.COMPLETED,
+                PercentComplete = 100,
+            },
+            (api, req) => api.UpdateTaskAsync(
+                Guid.Parse("33333333-3333-3333-3333-333333333333"),
+                (UpdateTaskRequest)req!),
+            ExpectedPath: "/api/v1/calendar/tasks/33333333-3333-3333-3333-333333333333"),
         new("POST", "/api/v1/endpoints/{deviceId}/heartbeat",
             new EndpointHeartbeatRequest
             {

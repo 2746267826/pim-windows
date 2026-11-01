@@ -258,12 +258,17 @@ def validate_parameter_schema(parameter: dict, op_path: str, name: str) -> tuple
     if kind == "string" and fmt is None:
         # 兼容历史 plain-string path 参数；typed 校验属于 transport 层。
         return "string", "plain-string"
+    if kind == "string" and fmt == "date-time":
+        return "System.DateTimeOffset", "date-time"
     if kind == "integer" and fmt in ("int32", "int64"):
         csharp = "int" if fmt == "int32" else "long"
         return csharp, fmt
+    if kind == "boolean":
+        return "bool", "boolean"
     raise GenerationError(
         f"operation {op_path} 的参数 {name} 是 type={kind!r} format={fmt!r}："
-        "生成器只支持 uuid / int32 / int64 参数，拒绝静默丢掉约束。"
+        "生成器只支持 uuid / date-time / plain string / boolean / int32 / int64 参数，"
+        "拒绝静默丢掉约束。"
     )
 
 
@@ -345,6 +350,97 @@ def validate_parameters(op: dict, op_path: str, path_item: dict | None = None,
             f"operation {op_path} 带 {location} 参数（{name}），"
             "生成器只支持 path/query 参数和两个已建模的 segment content header —— 需要先扩展显式方法签名。"
         )
+
+
+def lift_inline_enums(contract: dict, operations: list[dict]) -> None:
+    """Give property-level string enums deterministic component names.
+
+    OpenAPI often places an enum directly on a response/request property. The C#
+    model needs a named enum so its wire values can be checked by the compiler.
+    Lifting is purely mechanical: all other property constraints must already be
+    representable, otherwise generation still fails closed.
+    """
+    schemas = contract.get("components", {}).get("schemas", {})
+    additions: dict[str, dict] = {}
+    roots: set[str] = set()
+    for entry in operations:
+        method = str(entry["method"]).upper()
+        op_path = str(entry["path"])
+        op = operation_schema(contract, method, op_path)
+        request_schema = json_request_schema(op)
+        if request_schema is not None:
+            roots.update(iter_refs(request_schema))
+        for response_schema in success_response_schemas(op, op_path):
+            roots.update(iter_refs(response_schema))
+    selected_schemas = collect_closure(schemas, roots)
+
+    def lift(schema: dict, proposed_name: str, owner: str) -> dict:
+        if not isinstance(schema, dict):
+            return schema
+
+        if "enum" in schema:
+            if schema.get("type") != "string":
+                raise GenerationError(
+                    f"{owner} 的内联枚举不是字符串枚举，契约没有给出成员名：拒绝产出。")
+            unsupported = set(schema) - {
+                "type", "enum", "nullable", "description", "title", "deprecated",
+            }
+            if unsupported:
+                raise GenerationError(
+                    f"{owner} 的内联枚举带生成器无法表达的约束 "
+                    f"{sorted(unsupported)}：拒绝静默丢掉契约约束。")
+            enum_schema = {
+                key: value for key, value in schema.items()
+                if key not in {"nullable"}
+            }
+            existing = schemas.get(proposed_name) or additions.get(proposed_name)
+            if existing is not None and existing != enum_schema:
+                raise GenerationError(
+                    f"内联枚举命名冲突：{proposed_name} 已存在且形状不同。")
+            additions[proposed_name] = enum_schema
+            lifted = {"$ref": f"#/components/schemas/{proposed_name}"}
+            if schema.get("nullable") is True:
+                return {"allOf": [lifted], "nullable": True}
+            return lifted
+
+        if schema.get("type") == "array" and isinstance(schema.get("items"), dict):
+            result = dict(schema)
+            result["items"] = lift(schema["items"], proposed_name + "Item", owner + ".items")
+            return result
+
+        if (schema.get("type") == "object"
+                and isinstance(schema.get("additionalProperties"), dict)):
+            result = dict(schema)
+            result["additionalProperties"] = lift(
+                schema["additionalProperties"],
+                proposed_name + "Value",
+                owner + ".additionalProperties")
+            return result
+
+        return schema
+
+    for schema_name in sorted(selected_schemas):
+        schema = schemas.get(schema_name)
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            continue
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        updated = dict(properties)
+        changed = False
+        for property_name, property_schema in properties.items():
+            proposed = schema_name + pascal_case(property_name, "属性名").lstrip("@")
+            replacement = lift(
+                property_schema, proposed, f"{schema_name}.{property_name}")
+            if replacement is not property_schema:
+                updated[property_name] = replacement
+                changed = True
+        if changed:
+            replacement_schema = dict(schema)
+            replacement_schema["properties"] = updated
+            schemas[schema_name] = replacement_schema
+
+    schemas.update(additions)
 
 
 def json_request_schema(op: dict):
@@ -515,6 +611,19 @@ def enum_member_name(value: str, enum_name: str) -> str:
             "需要后端把取值改成合法标识符，或改用自定义 converter。"
         )
     return "@" + name if name in CSHARP_KEYWORDS else name
+
+
+def wire_enum_member_name(value: str, enum_name: str) -> tuple[str, bool]:
+    """Return a C# member plus whether a wire-value converter is required."""
+    if value and (value[0].isalpha() or value[0] == "_") and all(
+            ch.isalnum() or ch == "_" for ch in value):
+        return enum_member_name(value, enum_name), False
+    name = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
+    if not name:
+        name = "_"
+    if not (name[0].isalpha() or name[0] == "_"):
+        name = "_" + name
+    return enum_member_name(name, enum_name), True
 
 
 def scalar_type(schema: dict) -> str:
@@ -695,22 +804,61 @@ def render_enum(name: str, schema: dict) -> list[str]:
             "臆造名字等于编造接口，生成器拒绝产出（需要后端把它改成字符串枚举或给出成员名）。"
         )
 
-    lines = [
-        "/// <summary>",
-        f"/// 契约枚举 <c>{name}</c>：wire 值即成员名，写错取值编译期就不通过。",
-        "/// </summary>",
-        f"[{JSON_CONVERTER}(typeof({JSON_STRING_ENUM}))]",
-        f"public enum {name}",
-        "{",
-    ]
+    rendered_values: list[tuple[str, str]] = []
+    needs_wire_converter = False
     seen: dict[str, str] = {}
     for value in values:
-        member = enum_member_name(str(value), name)
+        member, custom = wire_enum_member_name(str(value), name)
+        needs_wire_converter = needs_wire_converter or custom
         if member in seen:
             raise GenerationError(f"{name} 的枚举值归一化后重名：{seen[member]!r} / {value!r}")
         seen[member] = str(value)
+        rendered_values.append((str(value), member))
+
+    converter_type = f"{name}WireConverter" if needs_wire_converter else JSON_STRING_ENUM
+    lines = [
+        "/// <summary>",
+        f"/// 契约枚举 <c>{name}</c>：wire 值由生成 converter 精确往返。",
+        "/// </summary>",
+        f"[{JSON_CONVERTER}(typeof({converter_type}))]",
+        f"public enum {name}",
+        "{",
+    ]
+    for _, member in rendered_values:
         lines.append(f"    {member},")
     lines.append("}")
+    if needs_wire_converter:
+        lines.extend([
+            "",
+            f"public sealed class {converter_type} : System.Text.Json.Serialization.JsonConverter<{name}>",
+            "{",
+            f"    public override {name} Read(ref System.Text.Json.Utf8JsonReader reader, System.Type typeToConvert, System.Text.Json.JsonSerializerOptions options)",
+            "    {",
+            "        if (reader.TokenType != System.Text.Json.JsonTokenType.String)",
+            f"            throw new System.Text.Json.JsonException(\"{name} must be a JSON string\");",
+            "        return reader.GetString() switch",
+            "        {",
+        ])
+        for value, member in rendered_values:
+            lines.append(f"            {json.dumps(value, ensure_ascii=False)} => {name}.{member},")
+        lines.extend([
+            f"            _ => throw new System.Text.Json.JsonException(\"Unknown {name} wire value\"),",
+            "        };",
+            "    }",
+            "",
+            f"    public override void Write(System.Text.Json.Utf8JsonWriter writer, {name} value, System.Text.Json.JsonSerializerOptions options)",
+            "    {",
+            "        writer.WriteStringValue(value switch",
+            "        {",
+        ])
+        for value, member in rendered_values:
+            lines.append(f"            {name}.{member} => {json.dumps(value, ensure_ascii=False)},")
+        lines.extend([
+            f"            _ => throw new System.Text.Json.JsonException(\"Unknown {name} value\"),",
+            "        });",
+            "    }",
+            "}",
+        ])
     return lines
 
 
@@ -1063,6 +1211,20 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "                    }",
         "",
         "                    break;",
+        "                case \"date-time\":",
+        "                    if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"路由值 {parameter} 不是 ISO date-time\", nameof(routeValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"boolean\":",
+        "                    if (!bool.TryParse(value, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"路由值 {parameter} 不是 boolean\", nameof(routeValues));",
+        "                    }",
+        "",
+        "                    break;",
         "            }",
         "",
         "            resolved = resolved.Replace(\"{\" + parameter + \"}\", System.Uri.EscapeDataString(value), System.StringComparison.Ordinal);",
@@ -1139,6 +1301,20 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "                    if (!long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))",
         "                    {",
         "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 int64\", nameof(queryValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"date-time\":",
+        "                    if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 ISO date-time\", nameof(queryValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"boolean\":",
+        "                    if (!bool.TryParse(value, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 boolean\", nameof(queryValues));",
         "                    }",
         "",
         "                    break;",
@@ -1233,6 +1409,7 @@ def main(argv: list[str]) -> int:
     try:
         contract = load_contract(args.contract)
         operations = load_operations(args.operations)
+        lift_inline_enums(contract, operations)
         if args.mapping:
             print_mapping(contract, operations)
             return 0

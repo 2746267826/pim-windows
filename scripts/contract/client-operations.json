@@ -45,6 +45,41 @@
       "path": "/api/v1/endpoints/{deviceId}/collection-quality"
     },
     {
+      "apiClient": "GetCalendarsAsync",
+      "method": "GET",
+      "path": "/api/v1/calendar/calendars"
+    },
+    {
+      "apiClient": "GetCalendarEventsAsync",
+      "method": "GET",
+      "path": "/api/v1/calendar/events"
+    },
+    {
+      "apiClient": "CreateCalendarEventAsync",
+      "method": "POST",
+      "path": "/api/v1/calendar/events"
+    },
+    {
+      "apiClient": "GetTaskBooksAsync",
+      "method": "GET",
+      "path": "/api/v1/calendar/task-books"
+    },
+    {
+      "apiClient": "GetTasksAsync",
+      "method": "GET",
+      "path": "/api/v1/calendar/tasks"
+    },
+    {
+      "apiClient": "CreateTaskAsync",
+      "method": "POST",
+      "path": "/api/v1/calendar/tasks"
+    },
+    {
+      "apiClient": "UpdateTaskAsync",
+      "method": "PUT",
+      "path": "/api/v1/calendar/tasks/{id}"
+    },
+    {
       "apiClient": "ReportEndpointHeartbeatAsync",
       "method": "POST",
       "path": "/api/v1/endpoints/{deviceId}/heartbeat"

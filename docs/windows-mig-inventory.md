@@ -60,14 +60,14 @@
 - `POST /api/v1/native-notes/derived-artifacts/{artifactId}/select`
 - ASR task/segment/retry/stop 现有任务接口
 
-这些结果接口不是笔记创建。`generate-csharp.py` 已扩展 path/query 参数合并、类型校验、URI 编码、required/unknown/duplicate 拒绝和笔记材料二进制请求体；上述 operations 已登记并从 contract 重生成。没有手改 generated。后端增加目录/元数据 API 后仍须刷新 snapshot → 登记 operation → 重新生成，不能使用裸 URL。
+这些结果接口不是笔记创建入口；笔记首版本由上面的 versions begin/complete 建立，不依赖结果接口。`generate-csharp.py` 已扩展 path/query 参数合并、类型校验、URI 编码、required/unknown/duplicate 拒绝和笔记材料二进制请求体；上述 operations 已登记并从 contract 重生成。没有手改 generated。后端增加目录/元数据 API 后仍须刷新 snapshot → 登记 operation → 重新生成，不能使用裸 URL。
 
 ## MIG-01 至 MIG-13 轻量盘点
 
 | 编号 | Windows 当前可复用事实 | 本批判断 |
 | --- | --- | --- |
 | MIG-01 今日、工作台 | `MainShellWindow` 复用登录态和 WebView `/today`；无原生聚合/业务动作 | Web 承载，非迁移完成 |
-| MIG-02 日历、任务、日历本/任务本 | Shell 可打开 `/calendar`、`/tasks`；客户端 operation 清单没有日历/任务 CRUD | WebView-only |
+| MIG-02 日历、任务、日历本/任务本 | 新增原生规划工作台，按契约 operation 读取日历/分页日程/任务本/分页任务，可按时间范围、日历、状态和标题筛选；支持创建日程、创建任务、选择任务本、将任务标记完成 | 读取与常见创建/完成动作已原生；系列/重复、提醒、附件、任务规划/分段、批量操作及完整日历本管理仍未迁移 |
 | MIG-03 确认中心、提醒、习惯、报告、数据中心 | Shell 路由 `/confirmations`、`/reports`、`/data-center`；`NotificationActionRouter` 可发端点通知动作，但业务页面仍 Web | 混合，业务未原生化 |
 | MIG-04 快速记录、文件 | 旧快速记录有显式 Web 兼容入口 `/quick-notes`；旧附件仍由服务端/Web；本机新笔记独立保存，二者未合并 | 旧入口保留；迁移未完成 |
 | MIG-05 电脑记录、浏览器使用、电脑明细 | `NativeTrackerService`、`TrackerLogger`、`TrackerSessionManager`、`BrowserBridgeService`、KeyStats 采集与上传均原生保留；新增原生“电脑记录”窗口，将已结束会话写入 30 天/10,000 条/64 MB 有界本机历史，支持今天/7/30 天、类别、搜索和明细查询 | 采集强复用；本机会话查询/分类/明细已原生。服务器全量电脑记录、页面 URL 级明细与跨端历史检索仍 Web，不能标全量迁移完成 |
@@ -80,4 +80,4 @@
 | MIG-12 端点/壳入口、嵌入页、旧路由别名 | `MainShellWindow`、`EmbeddedWebViewHost`、认证与通知动作路由可复用；本批只补 `/quick-notes` 兼容入口 | 宿主复用，全量路由/占位盘点未完成 |
 | MIG-13 安装更新、托盘/通知、采集启停、队列同步、设置 | 托盘、通知路由、自动启动、更新检查、Tracker/BrowserBridge/KeyStats、守护进程退出路径均保留；`WindowsRecordingService` 为 DI 单例，关闭笔记窗口只解绑 UI 事件，不停止录音 | 生命周期复用强；仍需真实安装/升级与设备/长时验收 |
 
-结论：本批新增的是 Windows 本机主动笔记纵向能力，以及 MIG-04/MIG-13 的兼容入口和生命周期证据；MIG-05 的本机会话查询与 MIG-08 的设备只读中心也只是按上表列出的动作部分原生化，没有任何 MIG-01 至 MIG-13 因本批自动销项。
+结论：本批新增的是 Windows 本机主动笔记纵向能力，以及 MIG-04/MIG-13 的兼容入口和生命周期证据；MIG-02、MIG-05、MIG-08 也只在上表列出的动作上部分原生化，没有任何 MIG-01 至 MIG-13 因本批自动销项。

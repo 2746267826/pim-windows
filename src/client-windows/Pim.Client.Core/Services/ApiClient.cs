@@ -255,6 +255,127 @@ public class ApiClient
             request,
             ct);
 
+    /// <summary><c>GET /api/v1/calendar/calendars</c>。</summary>
+    public Task<CalendarResponseListApiResponse?> GetCalendarsAsync(
+        string? kind = null,
+        CancellationToken ct = default)
+        => SendAsync<CalendarResponseListApiResponse>(
+            ContractOperation.GetCalendars,
+            null,
+            null,
+            ct,
+            queryValues: [("kind", kind)]);
+
+    /// <summary><c>GET /api/v1/calendar/events</c>。</summary>
+    public Task<EventResponsePagedResultApiResponse?> GetCalendarEventsAsync(
+        DateTimeOffset? start = null,
+        DateTimeOffset? end = null,
+        string? search = null,
+        Guid? calendarId = null,
+        int page = 1,
+        int pageSize = 50,
+        CancellationToken ct = default)
+    {
+        if (page < 1)
+            throw new ArgumentOutOfRangeException(nameof(page));
+        if (pageSize is < 1 or > 200)
+            throw new ArgumentOutOfRangeException(nameof(pageSize));
+
+        return SendAsync<EventResponsePagedResultApiResponse>(
+            ContractOperation.GetCalendarEvents,
+            null,
+            null,
+            ct,
+            queryValues:
+            [
+                ("start", FormatQueryDateTime(start)),
+                ("end", FormatQueryDateTime(end)),
+                ("search", search),
+                ("calendarId", calendarId?.ToString("D")),
+                ("page", page.ToString(CultureInfo.InvariantCulture)),
+                ("pageSize", pageSize.ToString(CultureInfo.InvariantCulture)),
+            ]);
+    }
+
+    /// <summary><c>POST /api/v1/calendar/events</c>。</summary>
+    public Task<EventResponseApiResponse?> CreateCalendarEventAsync(
+        CreateEventRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<EventResponseApiResponse>(
+            ContractOperation.CreateCalendarEvent,
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
+    /// <summary><c>GET /api/v1/calendar/task-books</c>。</summary>
+    public Task<TaskBookDtoIReadOnlyListApiResponse?> GetTaskBooksAsync(
+        CancellationToken ct = default)
+        => SendAsync<TaskBookDtoIReadOnlyListApiResponse>(
+            ContractOperation.GetTaskBooks,
+            null,
+            null,
+            ct);
+
+    /// <summary><c>GET /api/v1/calendar/tasks</c>。</summary>
+    public Task<TaskResponsePagedResultApiResponse?> GetTasksAsync(
+        bool? inbox = null,
+        string? search = null,
+        Guid? calendarId = null,
+        string? status = null,
+        int? priority = null,
+        DateTimeOffset? plannedFrom = null,
+        DateTimeOffset? plannedTo = null,
+        DateTimeOffset? dueFrom = null,
+        DateTimeOffset? dueTo = null,
+        int page = 1,
+        int pageSize = 100,
+        CancellationToken ct = default)
+    {
+        if (page < 1)
+            throw new ArgumentOutOfRangeException(nameof(page));
+        if (pageSize is < 1 or > 200)
+            throw new ArgumentOutOfRangeException(nameof(pageSize));
+
+        return SendAsync<TaskResponsePagedResultApiResponse>(
+            ContractOperation.GetTasks,
+            null,
+            null,
+            ct,
+            queryValues:
+            [
+                ("inbox", inbox?.ToString().ToLowerInvariant()),
+                ("search", search),
+                ("calendarId", calendarId?.ToString("D")),
+                ("status", status),
+                ("priority", priority?.ToString(CultureInfo.InvariantCulture)),
+                ("plannedFrom", FormatQueryDateTime(plannedFrom)),
+                ("plannedTo", FormatQueryDateTime(plannedTo)),
+                ("dueFrom", FormatQueryDateTime(dueFrom)),
+                ("dueTo", FormatQueryDateTime(dueTo)),
+                ("page", page.ToString(CultureInfo.InvariantCulture)),
+                ("pageSize", pageSize.ToString(CultureInfo.InvariantCulture)),
+            ]);
+    }
+
+    /// <summary><c>POST /api/v1/calendar/tasks</c>。</summary>
+    public Task<TaskResponseApiResponse?> CreateTaskAsync(
+        CreateTaskRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<TaskResponseApiResponse>(
+            ContractOperation.CreateTask,
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
+    /// <summary><c>PUT /api/v1/calendar/tasks/{id}</c>。</summary>
+    public Task<TaskResponseApiResponse?> UpdateTaskAsync(
+        Guid id,
+        UpdateTaskRequest request,
+        CancellationToken ct = default)
+        => SendAsync<TaskResponseApiResponse>(
+            ContractOperation.UpdateTask,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
     /// <summary><c>POST /api/v1/pc/tracker/upload</c>。</summary>
     public Task<Int32ApiResponse?> UploadTrackerEventsAsync(TrackerEventsUploadRequest request, CancellationToken ct = default)
         => SendJsonAsync<Int32ApiResponse>(ContractOperation.UploadTrackerEvents, request, ct);
@@ -1271,6 +1392,9 @@ public class ApiClient
 
         return value.ToLowerInvariant();
     }
+
+    private static string? FormatQueryDateTime(DateTimeOffset? value)
+        => value?.ToString("O", CultureInfo.InvariantCulture);
 
     internal sealed record ClientLease(
         HttpClient Client,

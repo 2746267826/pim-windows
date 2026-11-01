@@ -39,6 +39,7 @@
     <Compile Include="../ClientWindows/KeyStatsProcessManagerTests.cs" />
     <Compile Include="../ClientWindows/ControlledProcessRunnerCoreTests.cs" />
     <Compile Include="../ClientWindows/CpuLoadSamplerTests.cs" />
+    <Compile Include="../ClientWindows/CalendarTaskServiceTests.cs" />
     <Compile Include="../ClientWindows/DeviceCenterServiceTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeCatalogTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeAccountGuardTests.cs" />

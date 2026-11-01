@@ -141,6 +141,20 @@ public sealed class ContractOperation
                     }
 
                     break;
+                case "date-time":
+                    if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out _))
+                    {
+                        throw new System.ArgumentException($"路由值 {parameter} 不是 ISO date-time", nameof(routeValues));
+                    }
+
+                    break;
+                case "boolean":
+                    if (!bool.TryParse(value, out _))
+                    {
+                        throw new System.ArgumentException($"路由值 {parameter} 不是 boolean", nameof(routeValues));
+                    }
+
+                    break;
             }
 
             resolved = resolved.Replace("{" + parameter + "}", System.Uri.EscapeDataString(value), System.StringComparison.Ordinal);
@@ -217,6 +231,20 @@ public sealed class ContractOperation
                     if (!long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
                     {
                         throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是 int64", nameof(queryValues));
+                    }
+
+                    break;
+                case "date-time":
+                    if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out _))
+                    {
+                        throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是 ISO date-time", nameof(queryValues));
+                    }
+
+                    break;
+                case "boolean":
+                    if (!bool.TryParse(value, out _))
+                    {
+                        throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是 boolean", nameof(queryValues));
                     }
 
                     break;
@@ -310,6 +338,62 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetCalendars =
+        new("GET", "/api/v1/calendar/calendars", "calendar/calendars",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] { new("kind", "plain-string", false) },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetCalendarEvents =
+        new("GET", "/api/v1/calendar/events", "calendar/events",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] { new("start", "date-time", false), new("end", "date-time", false), new("search", "plain-string", false), new("calendarId", "uuid", false), new("page", "int32", false), new("pageSize", "int32", false) },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation CreateCalendarEvent =
+        new("POST", "/api/v1/calendar/events", "calendar/events",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetTaskBooks =
+        new("GET", "/api/v1/calendar/task-books", "calendar/task-books",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetTasks =
+        new("GET", "/api/v1/calendar/tasks", "calendar/tasks",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] { new("inbox", "boolean", false), new("search", "plain-string", false), new("calendarId", "uuid", false), new("status", "plain-string", false), new("priority", "int32", false), new("plannedFrom", "date-time", false), new("plannedTo", "date-time", false), new("dueFrom", "date-time", false), new("dueTo", "date-time", false), new("page", "int32", false), new("pageSize", "int32", false) },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation CreateTask =
+        new("POST", "/api/v1/calendar/tasks", "calendar/tasks",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation UpdateTask =
+        new("PUT", "/api/v1/calendar/tasks/{id}", "calendar/tasks/{id}",
+            new ContractHeader[] { new("id", "uuid") },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            "application/json",
             "application/json",
             new ContractHeader[] {  });
     public static readonly ContractOperation ReportEndpointHeartbeat =
