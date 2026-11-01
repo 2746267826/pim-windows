@@ -118,6 +118,126 @@
       "apiClient": "AckNativeAsrAttemptAsync",
       "method": "POST",
       "path": "/api/v1/native-notes/asr-routing/leases/{attemptId}/ack"
+    },
+    {
+      "apiClient": "BeginNoteMaterialUploadAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/versions"
+    },
+    {
+      "apiClient": "GetNoteMaterialVersionsAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/{noteId}/versions"
+    },
+    {
+      "apiClient": "GetNoteMaterialVersionAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/versions/{versionId}"
+    },
+    {
+      "apiClient": "CompleteNoteMaterialUploadAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/versions/{versionId}/complete"
+    },
+    {
+      "apiClient": "UploadNoteMaterialPartAsync",
+      "method": "PUT",
+      "path": "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}"
+    },
+    {
+      "apiClient": "DeleteNoteMaterialPartAsync",
+      "method": "DELETE",
+      "path": "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}"
+    },
+    {
+      "apiClient": "PromoteNoteMaterialVersionAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/versions/{versionId}/promote"
+    },
+    {
+      "apiClient": "GetNoteAsrSourcesAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/asr-tasks/sources"
+    },
+    {
+      "apiClient": "StartNoteAsrTaskAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/asr-tasks"
+    },
+    {
+      "apiClient": "GetNoteAsrTasksAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/asr-tasks"
+    },
+    {
+      "apiClient": "GetNoteAsrTaskAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/asr-tasks/{taskId}"
+    },
+    {
+      "apiClient": "GetNoteAsrTaskSegmentsAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/asr-tasks/{taskId}/segments"
+    },
+    {
+      "apiClient": "GetNoteDerivedSourcesAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/derived-tasks/sources"
+    },
+    {
+      "apiClient": "GetNoteDerivedTasksAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/derived-tasks"
+    },
+    {
+      "apiClient": "StartNoteDerivedTaskAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/derived-tasks"
+    },
+    {
+      "apiClient": "GetNoteDerivedTaskAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/derived-tasks/{taskId}"
+    },
+    {
+      "apiClient": "GetNoteDerivedTaskStepsAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/derived-tasks/{taskId}/steps"
+    },
+    {
+      "apiClient": "RetryNoteDerivedTaskAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/derived-tasks/{taskId}/retry"
+    },
+    {
+      "apiClient": "StopNoteDerivedTaskAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/derived-tasks/{taskId}/stop"
+    },
+    {
+      "apiClient": "GetNoteDerivedArtifactsAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/derived-artifacts"
+    },
+    {
+      "apiClient": "GetNoteDerivedArtifactAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/derived-artifacts/{artifactId}"
+    },
+    {
+      "apiClient": "GetNoteDerivedArtifactVersionAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/derived-artifacts/{artifactId}/versions/{versionId}"
+    },
+    {
+      "apiClient": "SaveNoteDerivedManualRevisionAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/derived-artifacts/{artifactId}/manual-revisions"
+    },
+    {
+      "apiClient": "SelectNoteDerivedArtifactVersionAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/derived-artifacts/{artifactId}/select"
     }
   ]
 }

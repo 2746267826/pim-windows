@@ -404,6 +404,320 @@ public class ApiClient
             request,
             ct);
 
+    /// <summary><c>POST /api/v1/native-notes/versions</c>：首次上传可用空 baseVersionId。</summary>
+    public Task<NoteMaterialUploadDtoApiResponse?> BeginNoteMaterialUploadAsync(
+        BeginNoteMaterialUploadRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<NoteMaterialUploadDtoApiResponse>(
+            ContractOperation.BeginNoteMaterialUpload,
+            request,
+            ct);
+
+    /// <summary><c>GET /api/v1/native-notes/{noteId}/versions</c>。</summary>
+    public Task<NoteMaterialUploadDtoIReadOnlyListApiResponse?> GetNoteMaterialVersionsAsync(
+        Guid noteId,
+        CancellationToken ct = default)
+        => SendAsync<NoteMaterialUploadDtoIReadOnlyListApiResponse>(
+            ContractOperation.GetNoteMaterialVersions,
+            [("noteId", RequireGuid(noteId, nameof(noteId)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary><c>GET /api/v1/native-notes/versions/{versionId}</c>。</summary>
+    public Task<NoteMaterialVersionDtoApiResponse?> GetNoteMaterialVersionAsync(
+        Guid versionId,
+        CancellationToken ct = default)
+        => SendAsync<NoteMaterialVersionDtoApiResponse>(
+            ContractOperation.GetNoteMaterialVersion,
+            [("versionId", RequireGuid(versionId, nameof(versionId)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary><c>POST /api/v1/native-notes/versions/{versionId}/complete</c>。</summary>
+    public Task<NoteMaterialUploadDtoApiResponse?> CompleteNoteMaterialUploadAsync(
+        Guid versionId,
+        CancellationToken ct = default)
+        => SendAsync<NoteMaterialUploadDtoApiResponse>(
+            ContractOperation.CompleteNoteMaterialUpload,
+            [("versionId", RequireGuid(versionId, nameof(versionId)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary>
+    /// <c>PUT /api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}</c>。
+    /// 请求体是原始 application/octet-stream；调用方负责给出该分片字节的 SHA-256。
+    /// </summary>
+    public async Task<StringApiResponse?> UploadNoteMaterialPartAsync(
+        Guid versionId,
+        int fileIndex,
+        int partIndex,
+        string sha256,
+        Stream content,
+        CancellationToken ct = default)
+    {
+        RequireGuid(versionId, nameof(versionId));
+        if (fileIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(fileIndex));
+        if (partIndex < 0)
+            throw new ArgumentOutOfRangeException(nameof(partIndex));
+        var digest = RequireSha256Digest(sha256, nameof(sha256));
+        ArgumentNullException.ThrowIfNull(content);
+        if (!content.CanRead || !content.CanSeek)
+            throw new ArgumentException("材料分片流必须可读且可定位。", nameof(content));
+
+        var initialPosition = content.Position;
+        var relativePath = ContractOperation.UploadNoteMaterialPart.Resolve(
+                ("versionId", versionId.ToString("D")),
+                ("fileIndex", fileIndex.ToString(CultureInfo.InvariantCulture)),
+                ("partIndex", partIndex.ToString(CultureInfo.InvariantCulture)))
+            + ContractOperation.UploadNoteMaterialPart.ResolveQuery(("sha256", digest));
+        var clientLease = CaptureClientLease();
+        return await SendWithAuthRetryAsync<StringApiResponse>(
+            () => SendNoteMaterialPartHttpAsync(
+                clientLease.Client,
+                relativePath,
+                content,
+                initialPosition,
+                ct),
+            ct,
+            allowTokenRenewal: true,
+            clientLease).ConfigureAwait(false);
+    }
+
+    /// <summary><c>DELETE /api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}</c>。</summary>
+    public Task<StringApiResponse?> DeleteNoteMaterialPartAsync(
+        Guid versionId,
+        int fileIndex,
+        int partIndex,
+        CancellationToken ct = default)
+        => SendAsync<StringApiResponse>(
+            ContractOperation.DeleteNoteMaterialPart,
+            [
+                ("versionId", RequireGuid(versionId, nameof(versionId)).ToString("D")),
+                ("fileIndex", fileIndex.ToString(CultureInfo.InvariantCulture)),
+                ("partIndex", partIndex.ToString(CultureInfo.InvariantCulture)),
+            ],
+            null,
+            ct);
+
+    /// <summary><c>POST /api/v1/native-notes/versions/{versionId}/promote</c>。</summary>
+    public Task<NoteMaterialUploadDtoApiResponse?> PromoteNoteMaterialVersionAsync(
+        Guid versionId,
+        PromoteNoteMaterialVersionRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteMaterialUploadDtoApiResponse>(
+            ContractOperation.PromoteNoteMaterialVersion,
+            [("versionId", RequireGuid(versionId, nameof(versionId)).ToString("D"))],
+            request,
+            ct);
+
+    /// <summary><c>GET /api/v1/native-notes/asr-tasks/sources</c>。</summary>
+    public Task<NoteAsrSourcesDtoApiResponse?> GetNoteAsrSourcesAsync(
+        int offset = 0,
+        int limit = 20,
+        CancellationToken ct = default)
+        => SendAsync<NoteAsrSourcesDtoApiResponse>(
+            ContractOperation.GetNoteAsrSources,
+            null,
+            null,
+            ct,
+            queryValues:
+            [
+                ("offset", offset.ToString(CultureInfo.InvariantCulture)),
+                ("limit", limit.ToString(CultureInfo.InvariantCulture)),
+            ]);
+
+    /// <summary><c>POST /api/v1/native-notes/asr-tasks</c>。</summary>
+    public Task<NoteAsrTaskDtoApiResponse?> StartNoteAsrTaskAsync(
+        StartNoteAsrRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<NoteAsrTaskDtoApiResponse>(
+            ContractOperation.StartNoteAsrTask,
+            request,
+            ct);
+
+    /// <summary><c>GET /api/v1/native-notes/asr-tasks</c>。</summary>
+    public Task<NoteAsrTaskDtoIReadOnlyListApiResponse?> GetNoteAsrTasksAsync(
+        CancellationToken ct = default)
+        => SendAsync<NoteAsrTaskDtoIReadOnlyListApiResponse>(
+            ContractOperation.GetNoteAsrTasks,
+            null,
+            null,
+            ct);
+
+    /// <summary><c>GET /api/v1/native-notes/asr-tasks/{taskId}</c>。</summary>
+    public Task<NoteAsrTaskDtoApiResponse?> GetNoteAsrTaskAsync(
+        Guid taskId,
+        CancellationToken ct = default)
+        => SendAsync<NoteAsrTaskDtoApiResponse>(
+            ContractOperation.GetNoteAsrTask,
+            [("taskId", RequireGuid(taskId, nameof(taskId)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary><c>GET /api/v1/native-notes/asr-tasks/{taskId}/segments</c>。</summary>
+    public Task<NoteAsrSegmentsDtoApiResponse?> GetNoteAsrTaskSegmentsAsync(
+        Guid taskId,
+        int offset = 0,
+        int limit = 10,
+        CancellationToken ct = default)
+        => SendAsync<NoteAsrSegmentsDtoApiResponse>(
+            ContractOperation.GetNoteAsrTaskSegments,
+            [("taskId", RequireGuid(taskId, nameof(taskId)).ToString("D"))],
+            null,
+            ct,
+            queryValues:
+            [
+                ("offset", offset.ToString(CultureInfo.InvariantCulture)),
+                ("limit", limit.ToString(CultureInfo.InvariantCulture)),
+            ]);
+
+    /// <summary><c>GET /api/v1/native-notes/derived-tasks/sources</c>。</summary>
+    public Task<NoteAsrSourcesDtoApiResponse?> GetNoteDerivedSourcesAsync(
+        int offset = 0,
+        int limit = 20,
+        CancellationToken ct = default)
+        => SendAsync<NoteAsrSourcesDtoApiResponse>(
+            ContractOperation.GetNoteDerivedSources,
+            null,
+            null,
+            ct,
+            queryValues:
+            [
+                ("offset", offset.ToString(CultureInfo.InvariantCulture)),
+                ("limit", limit.ToString(CultureInfo.InvariantCulture)),
+            ]);
+
+    /// <summary><c>GET /api/v1/native-notes/derived-tasks?noteId=</c>。</summary>
+    public Task<NoteDerivedTaskDtoIReadOnlyListApiResponse?> GetNoteDerivedTasksAsync(
+        Guid? noteId = null,
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedTaskDtoIReadOnlyListApiResponse>(
+            ContractOperation.GetNoteDerivedTasks,
+            null,
+            null,
+            ct,
+            queryValues: noteId is { } value
+                ? [("noteId", RequireGuid(value, nameof(noteId)).ToString("D"))]
+                : []);
+
+    /// <summary><c>POST /api/v1/native-notes/derived-tasks</c>。</summary>
+    public Task<NoteDerivedTaskDtoApiResponse?> StartNoteDerivedTaskAsync(
+        StartNoteDerivedTaskRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<NoteDerivedTaskDtoApiResponse>(
+            ContractOperation.StartNoteDerivedTask,
+            request,
+            ct);
+
+    /// <summary><c>GET /api/v1/native-notes/derived-tasks/{taskId}</c>。</summary>
+    public Task<NoteDerivedTaskDtoApiResponse?> GetNoteDerivedTaskAsync(
+        Guid taskId,
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedTaskDtoApiResponse>(
+            ContractOperation.GetNoteDerivedTask,
+            [("taskId", RequireGuid(taskId, nameof(taskId)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary><c>GET /api/v1/native-notes/derived-tasks/{taskId}/steps</c>。</summary>
+    public Task<NoteDerivedStepsDtoApiResponse?> GetNoteDerivedTaskStepsAsync(
+        Guid taskId,
+        int offset = 0,
+        int limit = 10,
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedStepsDtoApiResponse>(
+            ContractOperation.GetNoteDerivedTaskSteps,
+            [("taskId", RequireGuid(taskId, nameof(taskId)).ToString("D"))],
+            null,
+            ct,
+            queryValues:
+            [
+                ("offset", offset.ToString(CultureInfo.InvariantCulture)),
+                ("limit", limit.ToString(CultureInfo.InvariantCulture)),
+            ]);
+
+    /// <summary><c>POST /api/v1/native-notes/derived-tasks/{taskId}/retry</c>。</summary>
+    public Task<NoteDerivedTaskDtoApiResponse?> RetryNoteDerivedTaskAsync(
+        Guid taskId,
+        RetryNoteDerivedTaskRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedTaskDtoApiResponse>(
+            ContractOperation.RetryNoteDerivedTask,
+            [("taskId", RequireGuid(taskId, nameof(taskId)).ToString("D"))],
+            request,
+            ct);
+
+    /// <summary><c>POST /api/v1/native-notes/derived-tasks/{taskId}/stop</c>。</summary>
+    public Task<NoteDerivedTaskDtoApiResponse?> StopNoteDerivedTaskAsync(
+        Guid taskId,
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedTaskDtoApiResponse>(
+            ContractOperation.StopNoteDerivedTask,
+            [("taskId", RequireGuid(taskId, nameof(taskId)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary><c>GET /api/v1/native-notes/derived-artifacts?noteId=</c>。</summary>
+    public Task<NoteDerivedArtifactDtoIReadOnlyListApiResponse?> GetNoteDerivedArtifactsAsync(
+        Guid noteId,
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedArtifactDtoIReadOnlyListApiResponse>(
+            ContractOperation.GetNoteDerivedArtifacts,
+            null,
+            null,
+            ct,
+            queryValues:
+            [
+                ("noteId", RequireGuid(noteId, nameof(noteId)).ToString("D")),
+            ]);
+
+    /// <summary><c>GET /api/v1/native-notes/derived-artifacts/{artifactId}</c>。</summary>
+    public Task<NoteDerivedArtifactDtoApiResponse?> GetNoteDerivedArtifactAsync(
+        Guid artifactId,
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedArtifactDtoApiResponse>(
+            ContractOperation.GetNoteDerivedArtifact,
+            [("artifactId", RequireGuid(artifactId, nameof(artifactId)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary><c>GET /api/v1/native-notes/derived-artifacts/{artifactId}/versions/{versionId}</c>。</summary>
+    public Task<NoteDerivedVersionDtoApiResponse?> GetNoteDerivedArtifactVersionAsync(
+        Guid artifactId,
+        Guid versionId,
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedVersionDtoApiResponse>(
+            ContractOperation.GetNoteDerivedArtifactVersion,
+            [
+                ("artifactId", RequireGuid(artifactId, nameof(artifactId)).ToString("D")),
+                ("versionId", RequireGuid(versionId, nameof(versionId)).ToString("D")),
+            ],
+            null,
+            ct);
+
+    /// <summary><c>POST /api/v1/native-notes/derived-artifacts/{artifactId}/manual-revisions</c>。</summary>
+    public Task<NoteDerivedMutationDtoApiResponse?> SaveNoteDerivedManualRevisionAsync(
+        Guid artifactId,
+        SaveNoteDerivedManualRevisionRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedMutationDtoApiResponse>(
+            ContractOperation.SaveNoteDerivedManualRevision,
+            [("artifactId", RequireGuid(artifactId, nameof(artifactId)).ToString("D"))],
+            request,
+            ct);
+
+    /// <summary><c>POST /api/v1/native-notes/derived-artifacts/{artifactId}/select</c>。</summary>
+    public Task<NoteDerivedArtifactDtoApiResponse?> SelectNoteDerivedArtifactVersionAsync(
+        Guid artifactId,
+        SelectNoteDerivedVersionRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedArtifactDtoApiResponse>(
+            ContractOperation.SelectNoteDerivedArtifactVersion,
+            [("artifactId", RequireGuid(artifactId, nameof(artifactId)).ToString("D"))],
+            request,
+            ct);
+
     // -----------------------------------------------------------------------
     // 内部实现：只接受生成物里的 operation，平静态类型化的请求体
     // -----------------------------------------------------------------------
@@ -420,9 +734,11 @@ public class ApiClient
         (string Name, string Value)[]? routeValues,
         object? body,
         CancellationToken ct,
-        bool allowTokenRenewal = true)
+        bool allowTokenRenewal = true,
+        (string Name, string? Value)[]? queryValues = null)
     {
-        var relativePath = operation.Resolve(routeValues ?? []);
+        var relativePath = operation.Resolve(routeValues ?? [])
+            + operation.ResolveQuery(queryValues ?? []);
 
         var clientLease = CaptureClientLease();
         return await SendWithAuthRetryAsync<TResponse>(
@@ -449,6 +765,21 @@ public class ApiClient
             _ => throw new NotSupportedException(
                 $"{operation.HttpMethod} {operation.PathTemplate}：本仓的 HTTP 边界尚未支持该方法"),
         };
+
+    private static async Task<HttpResponseMessage> SendNoteMaterialPartHttpAsync(
+        HttpClient client,
+        string relativePath,
+        Stream content,
+        long initialPosition,
+        CancellationToken ct)
+    {
+        content.Position = initialPosition;
+        using var request = new HttpRequestMessage(HttpMethod.Put, relativePath);
+        var body = new StreamContent(new LeaveOpenReadStream(content));
+        body.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        request.Content = body;
+        return await client.SendAsync(request, ct).ConfigureAwait(false);
+    }
 
     private async Task<T?> SendWithAuthRetryAsync<T>(
         Func<Task<HttpResponseMessage>> request,
@@ -814,10 +1145,78 @@ public class ApiClient
         return value.ToLowerInvariant();
     }
 
+    private static Guid RequireGuid(Guid value, string parameterName)
+    {
+        if (value == Guid.Empty)
+        {
+            throw new ArgumentException("UUID 不能为空。", parameterName);
+        }
+
+        return value;
+    }
+
+    private static string RequireSha256Digest(string value, string parameterName)
+    {
+        if (value is not { Length: 64 }
+            || value.Any(character => !Uri.IsHexDigit(character)))
+        {
+            throw new ArgumentException("SHA-256 必须是 64 位十六进制字符串。", parameterName);
+        }
+
+        return value.ToLowerInvariant();
+    }
+
     private sealed record ClientLease(
         HttpClient Client,
         long Generation,
         long ExternalCredentialGeneration);
+}
+
+internal sealed class LeaveOpenReadStream : Stream
+{
+    private readonly Stream _inner;
+
+    public LeaveOpenReadStream(Stream inner)
+    {
+        _inner = inner;
+    }
+
+    public override bool CanRead => _inner.CanRead;
+    public override bool CanSeek => _inner.CanSeek;
+    public override bool CanWrite => false;
+    public override long Length => _inner.Length;
+    public override long Position
+    {
+        get => _inner.Position;
+        set => _inner.Position = value;
+    }
+
+    public override void Flush() => _inner.Flush();
+    public override Task FlushAsync(CancellationToken cancellationToken) =>
+        _inner.FlushAsync(cancellationToken);
+    public override int Read(byte[] buffer, int offset, int count) =>
+        _inner.Read(buffer, offset, count);
+    public override int Read(Span<byte> buffer) => _inner.Read(buffer);
+    public override Task<int> ReadAsync(
+        byte[] buffer,
+        int offset,
+        int count,
+        CancellationToken cancellationToken) =>
+        _inner.ReadAsync(buffer, offset, count, cancellationToken);
+    public override ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default) =>
+        _inner.ReadAsync(buffer, cancellationToken);
+    public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) =>
+        throw new NotSupportedException();
+    protected override void Dispose(bool disposing)
+    {
+        // The API client borrows the caller's material stream for each auth retry.
+    }
+
+    public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
 public sealed record NativeAsrSegmentHeaders(

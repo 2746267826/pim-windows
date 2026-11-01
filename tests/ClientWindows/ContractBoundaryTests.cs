@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Pim.Client.Core.Contract;
@@ -189,11 +190,9 @@ public class ContractBoundaryTests
     }
 
     /// <summary>
-    /// The generator hashes the contract bytes on the canonical LF checkout
-    /// (`args.contract.read_bytes()` in scripts/contract/generate-csharp.py).
-    /// Windows working trees may materialize CRLF; normalize only line endings so
-    /// this test verifies the same canonical bytes as the generator without
-    /// touching generated files.
+    /// The generator hashes the contract after normalizing CRLF to LF.
+    /// Normalize only line endings here so Windows working trees verify the same
+    /// canonical bytes without touching generated files.
     /// </summary>
     private static string CanonicalSha256(string path)
     {
@@ -272,6 +271,13 @@ public class ContractBoundaryBehaviorTests
                 testCase.ExpectedPath
                     ?? testCase.Path.Replace("{deviceId}", "PC-01"),
                 sent.Path);
+            Assert.Equal(testCase.ExpectedQuery ?? string.Empty, sent.Query);
+
+            if (testCase.BinaryBody)
+            {
+                Assert.Equal("0123456789abcdef", sent.Body);
+                continue;
+            }
 
             if (testCase.Request is null)
             {
@@ -318,6 +324,34 @@ public class ContractBoundaryBehaviorTests
         Assert.Throws<ArgumentException>(() => operation.Resolve(("deviceId", "d1"), ("other", "x")));
         Assert.Throws<ArgumentException>(() => operation.Resolve(("deviceId", "d1"), ("deviceId", "d2")));
         Assert.Equal("endpoints/d1/collection-quality", operation.Resolve(("deviceId", "d1")));
+    }
+
+    [Fact]
+    public void QueryParameters_AreRequiredTypedAndEscaped()
+    {
+        var artifacts = ContractOperation.GetNoteDerivedArtifacts;
+        Assert.Equal(
+            new[] { new ContractQueryParameter("noteId", "uuid", true) },
+            artifacts.QueryParameters);
+        Assert.Throws<ArgumentException>(() => artifacts.ResolveQuery());
+        Assert.Throws<ArgumentException>(() => artifacts.ResolveQuery(("noteId", "not-a-uuid")));
+        Assert.Throws<ArgumentException>(() => artifacts.ResolveQuery(("other", "x")));
+        Assert.Throws<ArgumentException>(() => artifacts.ResolveQuery(
+            ("noteId", "11111111-1111-1111-1111-111111111111"),
+            ("noteId", "22222222-2222-2222-2222-222222222222")));
+        Assert.Equal(
+            "?noteId=11111111-1111-1111-1111-111111111111",
+            artifacts.ResolveQuery(("noteId", "11111111-1111-1111-1111-111111111111")));
+
+        var sources = ContractOperation.GetNoteDerivedSources;
+        Assert.Equal(
+            "?offset=0&limit=20",
+            sources.ResolveQuery(("limit", "20"), ("offset", "0")));
+        Assert.Equal(string.Empty, sources.ResolveQuery());
+        Assert.Throws<ArgumentException>(() => sources.ResolveQuery(("offset", "-1")));
+        Assert.Equal(
+            "?sha256=a%20b%2F%3F%26",
+            ContractOperation.UploadNoteMaterialPart.ResolveQuery(("sha256", "a b/?&")));
     }
 
     [Fact]
@@ -565,7 +599,9 @@ public class ContractBoundaryBehaviorTests
         Func<ApiClient, object?, Task> Invoke,
         string ResponseBody = EnvelopeBody,
         Func<HttpResponseMessage>? ResponseFactory = null,
-        string? ExpectedPath = null);
+        string? ExpectedPath = null,
+        string? ExpectedQuery = null,
+        bool BinaryBody = false);
 
     private static List<OperationCase> OperationCases() => new()
     {
@@ -753,6 +789,170 @@ public class ContractBoundaryBehaviorTests
                 "55555555-5555-5555-5555-555555555555",
                 (NoteAsrAckRequest)req!),
             ExpectedPath: "/api/v1/native-notes/asr-routing/leases/55555555-5555-5555-5555-555555555555/ack"),
+        new("POST", "/api/v1/native-notes/versions",
+            new BeginNoteMaterialUploadRequest
+            {
+                BaseVersionId = null,
+                InputJson = "{}",
+                ManifestJson = "{}",
+                NoteId = "11111111-1111-1111-1111-111111111111",
+                StorageConsent = true,
+                VersionId = "22222222-2222-2222-2222-222222222222",
+            },
+            (api, req) => api.BeginNoteMaterialUploadAsync((BeginNoteMaterialUploadRequest)req!)),
+        new("GET", "/api/v1/native-notes/{noteId}/versions", null,
+            (api, _) => api.GetNoteMaterialVersionsAsync(
+                Guid.Parse("11111111-1111-1111-1111-111111111111")),
+            ExpectedPath: "/api/v1/native-notes/11111111-1111-1111-1111-111111111111/versions"),
+        new("GET", "/api/v1/native-notes/versions/{versionId}", null,
+            (api, _) => api.GetNoteMaterialVersionAsync(
+                Guid.Parse("22222222-2222-2222-2222-222222222222")),
+            ExpectedPath: "/api/v1/native-notes/versions/22222222-2222-2222-2222-222222222222"),
+        new("POST", "/api/v1/native-notes/versions/{versionId}/complete", null,
+            (api, _) => api.CompleteNoteMaterialUploadAsync(
+                Guid.Parse("22222222-2222-2222-2222-222222222222")),
+            ExpectedPath: "/api/v1/native-notes/versions/22222222-2222-2222-2222-222222222222/complete"),
+        new("PUT", "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}", null,
+            async (api, _) =>
+            {
+                await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("0123456789abcdef"));
+                await api.UploadNoteMaterialPartAsync(
+                    Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                    1,
+                    2,
+                    new string('a', 64),
+                    stream);
+            },
+            ExpectedPath: "/api/v1/native-notes/versions/22222222-2222-2222-2222-222222222222/files/1/parts/2",
+            ExpectedQuery: "?sha256=" + new string('a', 64),
+            BinaryBody: true),
+        new("DELETE", "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}", null,
+            (api, _) => api.DeleteNoteMaterialPartAsync(
+                Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                1,
+                2),
+            ExpectedPath: "/api/v1/native-notes/versions/22222222-2222-2222-2222-222222222222/files/1/parts/2"),
+        new("POST", "/api/v1/native-notes/versions/{versionId}/promote",
+            new PromoteNoteMaterialVersionRequest
+            {
+                ExpectedCurrentVersionId = "33333333-3333-3333-3333-333333333333",
+            },
+            (api, req) => api.PromoteNoteMaterialVersionAsync(
+                Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                (PromoteNoteMaterialVersionRequest)req!),
+            ExpectedPath: "/api/v1/native-notes/versions/22222222-2222-2222-2222-222222222222/promote"),
+        new("GET", "/api/v1/native-notes/asr-tasks/sources", null,
+            (api, _) => api.GetNoteAsrSourcesAsync(),
+            ExpectedQuery: "?offset=0&limit=20"),
+        new("POST", "/api/v1/native-notes/asr-tasks",
+            new StartNoteAsrRequest
+            {
+                ExpectedUserId = "11111111-1111-1111-1111-111111111111",
+                TaskId = "44444444-4444-4444-4444-444444444444",
+                VersionId = "22222222-2222-2222-2222-222222222222",
+            },
+            (api, req) => api.StartNoteAsrTaskAsync((StartNoteAsrRequest)req!)),
+        new("GET", "/api/v1/native-notes/asr-tasks", null,
+            (api, _) => api.GetNoteAsrTasksAsync()),
+        new("GET", "/api/v1/native-notes/asr-tasks/{taskId}", null,
+            (api, _) => api.GetNoteAsrTaskAsync(
+                Guid.Parse("44444444-4444-4444-4444-444444444444")),
+            ExpectedPath: "/api/v1/native-notes/asr-tasks/44444444-4444-4444-4444-444444444444"),
+        new("GET", "/api/v1/native-notes/asr-tasks/{taskId}/segments", null,
+            (api, _) => api.GetNoteAsrTaskSegmentsAsync(
+                Guid.Parse("44444444-4444-4444-4444-444444444444")),
+            ExpectedPath: "/api/v1/native-notes/asr-tasks/44444444-4444-4444-4444-444444444444/segments",
+            ExpectedQuery: "?offset=0&limit=10"),
+        new("GET", "/api/v1/native-notes/derived-tasks/sources", null,
+            (api, _) => api.GetNoteDerivedSourcesAsync(),
+            ExpectedQuery: "?offset=0&limit=20"),
+        new("GET", "/api/v1/native-notes/derived-tasks", null,
+            (api, _) => api.GetNoteDerivedTasksAsync(
+                Guid.Parse("11111111-1111-1111-1111-111111111111")),
+            ExpectedQuery: "?noteId=11111111-1111-1111-1111-111111111111"),
+        new("POST", "/api/v1/native-notes/derived-tasks",
+            new StartNoteDerivedTaskRequest
+            {
+                Consent = new NoteDerivedGenerationConsent
+                {
+                    Confirmed = true,
+                    Endpoint = "local",
+                    ModelId = "model",
+                    ModelRevision = "revision",
+                },
+                ExpectedUserId = "11111111-1111-1111-1111-111111111111",
+                TaskId = "66666666-6666-6666-6666-666666666666",
+                VersionId = "22222222-2222-2222-2222-222222222222",
+            },
+            (api, req) => api.StartNoteDerivedTaskAsync((StartNoteDerivedTaskRequest)req!)),
+        new("GET", "/api/v1/native-notes/derived-tasks/{taskId}", null,
+            (api, _) => api.GetNoteDerivedTaskAsync(
+                Guid.Parse("66666666-6666-6666-6666-666666666666")),
+            ExpectedPath: "/api/v1/native-notes/derived-tasks/66666666-6666-6666-6666-666666666666"),
+        new("GET", "/api/v1/native-notes/derived-tasks/{taskId}/steps", null,
+            (api, _) => api.GetNoteDerivedTaskStepsAsync(
+                Guid.Parse("66666666-6666-6666-6666-666666666666")),
+            ExpectedPath: "/api/v1/native-notes/derived-tasks/66666666-6666-6666-6666-666666666666/steps",
+            ExpectedQuery: "?offset=0&limit=10"),
+        new("POST", "/api/v1/native-notes/derived-tasks/{taskId}/retry",
+            new RetryNoteDerivedTaskRequest
+            {
+                AcknowledgePossibleDuplicateCharge = true,
+                Consent = new NoteDerivedGenerationConsent
+                {
+                    Confirmed = true,
+                    Endpoint = "local",
+                    ModelId = "model",
+                    ModelRevision = "revision",
+                },
+                ExpectedRevision = "revision",
+                ExpectedUserId = "11111111-1111-1111-1111-111111111111",
+                RetryId = "77777777-7777-7777-7777-777777777777",
+                StepKeys = new List<string> { "RecordSynthesis" },
+            },
+            (api, req) => api.RetryNoteDerivedTaskAsync(
+                Guid.Parse("66666666-6666-6666-6666-666666666666"),
+                (RetryNoteDerivedTaskRequest)req!),
+            ExpectedPath: "/api/v1/native-notes/derived-tasks/66666666-6666-6666-6666-666666666666/retry"),
+        new("POST", "/api/v1/native-notes/derived-tasks/{taskId}/stop", null,
+            (api, _) => api.StopNoteDerivedTaskAsync(
+                Guid.Parse("66666666-6666-6666-6666-666666666666")),
+            ExpectedPath: "/api/v1/native-notes/derived-tasks/66666666-6666-6666-6666-666666666666/stop"),
+        new("GET", "/api/v1/native-notes/derived-artifacts", null,
+            (api, _) => api.GetNoteDerivedArtifactsAsync(
+                Guid.Parse("11111111-1111-1111-1111-111111111111")),
+            ExpectedQuery: "?noteId=11111111-1111-1111-1111-111111111111"),
+        new("GET", "/api/v1/native-notes/derived-artifacts/{artifactId}", null,
+            (api, _) => api.GetNoteDerivedArtifactAsync(
+                Guid.Parse("88888888-8888-8888-8888-888888888888")),
+            ExpectedPath: "/api/v1/native-notes/derived-artifacts/88888888-8888-8888-8888-888888888888"),
+        new("GET", "/api/v1/native-notes/derived-artifacts/{artifactId}/versions/{versionId}", null,
+            (api, _) => api.GetNoteDerivedArtifactVersionAsync(
+                Guid.Parse("88888888-8888-8888-8888-888888888888"),
+                Guid.Parse("99999999-9999-9999-9999-999999999999")),
+            ExpectedPath: "/api/v1/native-notes/derived-artifacts/88888888-8888-8888-8888-888888888888/versions/99999999-9999-9999-9999-999999999999"),
+        new("POST", "/api/v1/native-notes/derived-artifacts/{artifactId}/manual-revisions",
+            new SaveNoteDerivedManualRevisionRequest
+            {
+                ContentMarkdown = "# 修订",
+                ExpectedHeadRevision = "revision",
+                ExpectedHeadVersionId = "99999999-9999-9999-9999-999999999999",
+                RevisionId = "77777777-7777-7777-7777-777777777777",
+            },
+            (api, req) => api.SaveNoteDerivedManualRevisionAsync(
+                Guid.Parse("88888888-8888-8888-8888-888888888888"),
+                (SaveNoteDerivedManualRevisionRequest)req!),
+            ExpectedPath: "/api/v1/native-notes/derived-artifacts/88888888-8888-8888-8888-888888888888/manual-revisions"),
+        new("POST", "/api/v1/native-notes/derived-artifacts/{artifactId}/select",
+            new SelectNoteDerivedVersionRequest
+            {
+                ExpectedHeadRevision = "revision",
+                VersionId = "99999999-9999-9999-9999-999999999999",
+            },
+            (api, req) => api.SelectNoteDerivedArtifactVersionAsync(
+                Guid.Parse("88888888-8888-8888-8888-888888888888"),
+                (SelectNoteDerivedVersionRequest)req!),
+            ExpectedPath: "/api/v1/native-notes/derived-artifacts/88888888-8888-8888-8888-888888888888/select"),
     };
 
     private static HttpResponseMessage SuccessfulSegmentResponse()
@@ -863,7 +1063,7 @@ public class ContractBoundaryBehaviorTests
             _responseFactory = responseFactory;
         }
 
-        public List<(string Method, string Path, string? Body)> Requests { get; } = new();
+        public List<(string Method, string Path, string Query, string? Body)> Requests { get; } = new();
 
         protected override async Task<System.Net.Http.HttpResponseMessage> SendAsync(
             System.Net.Http.HttpRequestMessage request, CancellationToken cancellationToken)
@@ -872,7 +1072,11 @@ public class ContractBoundaryBehaviorTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
 
-            Requests.Add((request.Method.Method, request.RequestUri!.AbsolutePath, body));
+            Requests.Add((
+                request.Method.Method,
+                request.RequestUri!.AbsolutePath,
+                request.RequestUri.Query,
+                body));
 
             if (_responseFactory is not null)
             {
