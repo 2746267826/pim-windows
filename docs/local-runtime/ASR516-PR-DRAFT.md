@@ -1,13 +1,13 @@
 # #516 Windows 本地 ASR 生命周期与后台处理 / Windows local ASR lifecycle and background processing
 
-> 发布准备草稿，当前源码冻结在 `98f6295316a0989bc7cb318b00ba288b5637a9e9`。
-> 尚未 push、尚未创建 PR；最终合并前仍须在 actual merged `pim-api` master 上运行官方
-> `scripts/ci/refresh-contract.sh`，再跑最终 focused/full tests 和 `CI Gate`。
+> 发布验收记录，产品源码冻结在 `98f6295316a0989bc7cb318b00ba288b5637a9e9`。
+> 契约已通过官方 `scripts/ci/refresh-contract.sh` 从已合并的 actual `pim-api` master
+> `84ef802e7c85a1b6c3017c0c274a108fea57f9d2` 刷新，并已通过生成的 focused/full tests。
 >
-> Release-preparation draft. Source is frozen at
-> `98f6295316a0989bc7cb318b00ba288b5637a9e9`. Nothing is pushed or opened. Before merge,
-> refresh from the actual merged `pim-api` master through
-> `scripts/ci/refresh-contract.sh`, then rerun focused/full tests and `CI Gate`.
+> Release evidence. Product source is frozen at
+> `98f6295316a0989bc7cb318b00ba288b5637a9e9`. The contract was refreshed through
+> `scripts/ci/refresh-contract.sh` from merged actual `pim-api` master
+> `84ef802e7c85a1b6c3017c0c274a108fea57f9d2`, then the generated focused/full tests passed.
 
 ## 概述 / Overview
 
@@ -98,8 +98,10 @@ this PR does not claim out-of-box offline availability.
 
 ## 测试 / Tests
 
-下列结果均来自冻结提交 `98f6295316a0989bc7cb318b00ba288b5637a9e9` 的实际 Windows 执行：
-All results below were executed on Windows at frozen commit
+下列结果均来自产品源码冻结提交 `98f6295316a0989bc7cb318b00ba288b5637a9e9`、并在官方刷新
+actual `pim-api` master `84ef802e7c85a1b6c3017c0c274a108fea57f9d2` 后的 Windows 执行：
+All results below were executed on Windows after the official refresh from actual `pim-api`
+master `84ef802e7c85a1b6c3017c0c274a108fea57f9d2`; the product source commit is
 `98f6295316a0989bc7cb318b00ba288b5637a9e9`:
 
 - App tests：`91 passed / 0 failed`。 / App tests: `91 passed / 0 failed`.
@@ -116,6 +118,18 @@ All results below were executed on Windows at frozen commit
   `ContractOperations.cs` 均与 `contract/openapi.json` + operation 清单逐字节一致。 /
   Official `scripts/ci/check-contract-csharp.sh` passed; both generated artifacts match the
   contract snapshot and operation manifest byte-for-byte.
+- 官方 `scripts/ci/check-contract-freshness.sh` 成功；快照逐字节匹配 actual API master，
+  `407` operations、`705` component schemas，`1202774` 字节，SHA-256
+  `e5c555e2864e182f98242b0bbe50b156f755e9ea18dd5c57724518edd6bd8d76`。 /
+  Official `scripts/ci/check-contract-freshness.sh` passed; the snapshot matches actual API
+  master byte-for-byte with 407 operations, 705 component schemas, 1,202,774 bytes, and
+  SHA-256 `e5c555e2864e182f98242b0bbe50b156f755e9ea18dd5c57724518edd6bd8d76`.
+- Actual API merge provenance：PR `#549` head `14efd083ea42dd2042f833ffc5e59b33f4d02968`，
+  merge `84ef802e7c85a1b6c3017c0c274a108fea57f9d2`，CI `41223048668` 的
+  Web/API/Docker/Gate 均成功。 / Actual API merge provenance: PR `#549` at head
+  `14efd083ea42dd2042f833ffc5e59b33f4d02968` merged as
+  `84ef802e7c85a1b6c3017c0c274a108fea57f9d2`; CI `41223048668` passed
+  Web/API/Docker/Gate.
 - `git diff --name-only origin/master...HEAD` 未见 `bin/`、`obj/`、`TestResults/`、
   `.codex-tmp/`、credentials、`.env` 或 workflow 变更。 / The tracked diff from master
   contains no `bin/`, `obj/`, `TestResults/`, `.codex-tmp/`, credentials, `.env`, or workflow
@@ -130,6 +144,6 @@ All results below were executed on Windows at frozen commit
 | #516 CPU/内存/VRAM 资源门禁与有界退避 | `CpuLoadSampler`、`ResourceRequirementEvaluator`、`RuntimeBackoff` | CPU 采样、GPU-only gate、required unknown、退避上限 | PASS | `CpuLoadSamplerTests`、`LocalRuntimeResourceBackoffTests`、`WindowsResourceSnapshotProviderTests` |
 | #516 内部 ASR worker 状态机与 typed transport | `LocalAsrWorkerEngine`、`LocalAsrApiTransport`、`LocalAsrApiTransportTests` | sparse/fence/token/lease/content hash/scope switch/restart/redirect/header/audio-wav | PASS | Core 295/295；boundary 14/14 |
 | #516 Windows coordinator、DI 与 WPF 后台处理 | `LocalAsrWorkerCoordinator`、`Startup`、`LocalAsrBacklogViewModel`、状态中心 | non-null composition、未安装 `InvalidConfiguration`、installation 隔离、偏好恢复、关闭 guard、dispose/scope race | PASS | App 91/91；focused 22/22 |
-| #516 官方契约生成一致性与 Windows 发布构建 | generator/check、`Pim.Client.App.csproj` | official `check-contract-csharp.sh`、Release publish | PASS | 校验逐字节一致；`.codex-tmp/release-build/publish/Pim.Client.App.exe` |
+| #516 官方契约生成一致性与 Windows 发布构建 | generator/check、`Pim.Client.App.csproj` | official `check-contract-csharp.sh`、Release publish | PASS | 校验逐字节一致；`.codex-tmp/release-build/publish-final-84ef802e/Pim.Client.App.exe` |
 | #516 真实首发模型、真实音频与设备端推理 | 保持 gated，无真实模型执行 | 未运行真实模型/音频/设备 | NOT-VERIFIED | 等待用户选定模型、已核验来源/hash、硬件与实机验收 |
-| #516 actual merged API master 最终刷新 | `scripts/ci/refresh-contract.sh` | 等待父级 actual API master 通知后执行 | BLOCKED | 当前开发契约快照不等于最终 merged API master |
+| #516 actual merged API master 最终刷新 | `scripts/ci/refresh-contract.sh` | actual PR `#549` merge `84ef802e`；official generated + freshness checks | PASS | `contract/provenance.json`；快照 `1202774` bytes / `e5c555e...`；407 operations / 705 schemas |
