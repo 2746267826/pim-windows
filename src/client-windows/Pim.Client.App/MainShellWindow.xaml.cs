@@ -96,6 +96,11 @@ public partial class MainShellWindow : Window
         new StatusWindow().Show();
     }
 
+    private void OnOpenNativeNotes(object sender, RoutedEventArgs e)
+    {
+        App.ShowNotesWindow();
+    }
+
     private void RefreshShellState()
     {
         AccountStateText.Text = _authService.IsAuthenticated

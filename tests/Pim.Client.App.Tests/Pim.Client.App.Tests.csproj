@@ -39,6 +39,7 @@
     <Compile Include="../ClientWindows/LocalRuntimeCatalogProviderTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeExecutionAdapterTests.cs" />
     <Compile Include="../ClientWindows/WindowsControlledProcessRunnerTests.cs" />
+    <Compile Include="../ClientWindows/WindowsRecordingServiceTests.cs" />
     <Compile Include="../ClientWindows/WindowsResourceSnapshotProviderTests.cs" />
   </ItemGroup>
 

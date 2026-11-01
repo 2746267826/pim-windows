@@ -38,6 +38,9 @@ public partial class TrayIcon : IDisposable
             ContextMenuStrip = new System.Windows.Forms.ContextMenuStrip()
         };
 
+        _notifyIcon.ContextMenuStrip.Items.Add("打开笔记", null, (_, _) => App.ShowNotesWindow());
+        _notifyIcon.ContextMenuStrip.Items.Add("开始笔记录音", null, async (_, _) => await StartQuickNoteRecordingAsync());
+        _notifyIcon.ContextMenuStrip.Items.Add("停止并保存笔记录音", null, async (_, _) => await StopNoteRecordingAsync());
         _notifyIcon.ContextMenuStrip.Items.Add("打开状态中心", null, (_, _) => ShowStatusWindow());
         _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         _notifyIcon.ContextMenuStrip.Items.Add("立即同步", null, async (_, _) => await TriggerSyncAsync());
@@ -146,6 +149,56 @@ public partial class TrayIcon : IDisposable
         catch (Exception ex)
         {
             System.Windows.Forms.MessageBox.Show($"同步失败：{ex.Message}", "PIM",
+                System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
+        }
+    }
+
+    private static async Task StartQuickNoteRecordingAsync()
+    {
+        try
+        {
+            var recording = App.Services.GetRequiredService<WindowsRecordingService>();
+            if (recording.IsRecording)
+            {
+                System.Windows.Forms.MessageBox.Show("已有录音正在进行。", "PIM 笔记",
+                    System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Information);
+                return;
+            }
+
+            var store = App.Services.GetRequiredService<Pim.Client.Core.Services.Notes.LocalNoteStore>();
+            var note = await store.CreateAsync($"录音笔记 {DateTime.Now:yyyy-MM-dd HH:mm}");
+            await recording.StartAsync(note.NoteId);
+            App.ShowNotesWindow();
+        }
+        catch (Exception ex)
+        {
+            System.Windows.Forms.MessageBox.Show($"无法开始主动录音：\n{ex.Message}", "PIM 笔记",
+                System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Warning);
+        }
+    }
+
+    private static async Task StopNoteRecordingAsync()
+    {
+        try
+        {
+            var recording = App.Services.GetRequiredService<WindowsRecordingService>();
+            var result = await recording.StopAsync();
+            if (result is null)
+            {
+                System.Windows.Forms.MessageBox.Show("当前没有正在进行的录音。", "PIM 笔记",
+                    System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Information);
+                return;
+            }
+
+            System.Windows.Forms.MessageBox.Show(
+                $"录音已保存到本机笔记固定版本。\n时长：{result.Wave.Duration:mm\\:ss}\n云端尚未提交。",
+                "PIM 笔记",
+                System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.Forms.MessageBox.Show($"录音已保留，但未能写入笔记库：\n{ex.Message}", "PIM 笔记",
                 System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
         }
     }
