@@ -1,7 +1,7 @@
 # Windows 笔记切片与 MIG-01 至 MIG-13 复用盘点
 
-日期：2026-11-01  
-基线：`origin/master` = `1270bf6a093b1777646b2710d01a4432795adc32`  
+日期：2026-11-01
+基线：`origin/master` = `1270bf6a093b1777646b2710d01a4432795adc32`
 分支：`codex-win/windows-notes-milestones-20261101`
 
 本文只记录 Windows 仓当前可复用的原生能力与本批笔记切片边界。WebView 能打开某个路由，不等于该业务已完成原生化迁移。
