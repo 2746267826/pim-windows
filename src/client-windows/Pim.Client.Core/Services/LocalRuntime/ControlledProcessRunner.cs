@@ -100,30 +100,45 @@ public sealed class ControlledProcessRunner : IControlledProcessRunner
         {
             if (OperatingSystem.IsWindows())
             {
-                if (!WindowsJobObject.TryCreate(out job, out _))
+                if (!WindowsJobObject.TryCreate(out job, out var jobCreateError))
                 {
-                    return Failure(LocalRuntimeReasonCodes.JobCreateFailed, started);
+                    return Failure(
+                        LocalRuntimeReasonCodes.JobCreateFailed,
+                        started,
+                        jobCreateError);
                 }
 
-                if (!WindowsSuspendedProcessLauncher.TryStart(spec, out launch, out _))
+                if (!WindowsSuspendedProcessLauncher.TryStart(
+                        spec,
+                        out launch,
+                        out var startError))
                 {
-                    return Failure(LocalRuntimeReasonCodes.ProcessStartFailed, started);
+                    return Failure(
+                        LocalRuntimeReasonCodes.ProcessStartFailed,
+                        started,
+                        startError);
                 }
 
                 process = launch!.Process;
-                if (!job!.Assign(launch.ProcessHandle, out _))
+                if (!job!.Assign(launch.ProcessHandle, out var assignError))
                 {
                     launch.Terminate(1);
                     await WaitForExitBestEffortAsync(process).ConfigureAwait(false);
-                    return Failure(LocalRuntimeReasonCodes.JobAssignFailed, started);
+                    return Failure(
+                        LocalRuntimeReasonCodes.JobAssignFailed,
+                        started,
+                        assignError);
                 }
 
                 identity = _registry?.Register(process, spec.ExecutablePath);
-                if (!launch.Resume(out _))
+                if (!launch.Resume(out var resumeError))
                 {
                     KillBestEffort(process, job);
                     await WaitForExitBestEffortAsync(process).ConfigureAwait(false);
-                    return Failure(LocalRuntimeReasonCodes.ProcessStartFailed, started);
+                    return Failure(
+                        LocalRuntimeReasonCodes.ProcessStartFailed,
+                        started,
+                        resumeError);
                 }
 
                 (stdoutReader, stderrReader) = launch.DetachStreams();
@@ -372,7 +387,10 @@ public sealed class ControlledProcessRunner : IControlledProcessRunner
         }
     }
 
-    private static RuntimeLaunchResult Failure(string errorCode, long started) =>
+    private static RuntimeLaunchResult Failure(
+        string errorCode,
+        long started,
+        string? detail = null) =>
         Result(
             false,
             null,
@@ -380,7 +398,9 @@ public sealed class ControlledProcessRunner : IControlledProcessRunner
             timedOut: false,
             outputTruncated: false,
             BoundedOutput.Empty,
-            BoundedOutput.Empty,
+            string.IsNullOrWhiteSpace(detail)
+                ? BoundedOutput.Empty
+                : new BoundedOutput(detail, false),
             errorCode,
             started);
 

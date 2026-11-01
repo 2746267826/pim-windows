@@ -33,6 +33,43 @@ public class WindowsControlledProcessRunnerTests
     }
 
     [Fact]
+    public async Task DeepVerifiedExecutablePath_LaunchesWithoutLegacyCwdLimit()
+    {
+        var cleanupRoot = Path.Combine(
+            Path.GetTempPath(),
+            "pim-deep-runner-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(
+            cleanupRoot,
+            new string('a', 120),
+            new string('b', 100));
+        try
+        {
+            Directory.CreateDirectory(root);
+            foreach (var source in Directory.EnumerateFiles(Path.GetDirectoryName(HelperPath)!))
+            {
+                File.Copy(source, Path.Combine(root, Path.GetFileName(source)));
+            }
+
+            var executable = Path.Combine(root, Path.GetFileName(HelperPath));
+            Assert.True(executable.Length > 248);
+            var result = await new ControlledProcessRunner().StartAsync(
+                new RuntimeLaunchSpec(
+                    executable,
+                    new[] { "--mode", "ok" },
+                    root,
+                    Sha256(executable),
+                    TimeSpan.FromSeconds(30)));
+
+            Assert.True(result.Succeeded, result.ErrorCode + " " + result.StandardError);
+            Assert.Contains("HELPER_OK", result.StandardOutput);
+        }
+        finally
+        {
+            TryDeleteDirectory(cleanupRoot);
+        }
+    }
+
+    [Fact]
     public async Task NonZeroExit_IsReportedAsFailure()
     {
         var result = await RunAsync(new[] { "--mode", "fail", "--code", "7" }, TimeSpan.FromSeconds(30));
@@ -258,6 +295,23 @@ public class WindowsControlledProcessRunnerTests
             }
         }
         catch (IOException)
+        {
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
         {
         }
     }

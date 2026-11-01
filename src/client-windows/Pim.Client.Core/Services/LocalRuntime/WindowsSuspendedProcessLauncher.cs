@@ -23,6 +23,7 @@ internal static class WindowsSuspendedProcessLauncher
     private const uint FileShareWrite = 0x00000002;
     private const uint OpenExisting = 3;
     private const int InsufficientBuffer = 122;
+    private const int ErrorDirectory = 267;
     private const int ProcThreadAttributeHandleList = 0x00020002;
 
     public static bool TryStart(
@@ -118,8 +119,9 @@ internal static class WindowsSuspendedProcessLauncher
             };
 
             var commandLine = BuildCommandLine(spec.ExecutablePath, spec.Arguments);
+            var nativeExecutablePath = ToNativeApplicationPath(spec.ExecutablePath);
             var created = CreateProcessW(
-                spec.ExecutablePath,
+                nativeExecutablePath,
                 commandLine,
                 IntPtr.Zero,
                 IntPtr.Zero,
@@ -131,8 +133,36 @@ internal static class WindowsSuspendedProcessLauncher
                 out processInformation);
             if (!created)
             {
-                error = $"create-process-{Marshal.GetLastWin32Error()}";
-                return false;
+                var firstError = Marshal.GetLastWin32Error();
+                if (firstError != ErrorDirectory)
+                {
+                    error = $"create-process-{firstError};cwd={spec.WorkingDirectory}";
+                    return false;
+                }
+
+                // CreateProcessW still enforces the legacy current-directory path limit
+                // even when long-path process/image paths are otherwise available.
+                // The executable is already an absolute, verified path and all asset
+                // arguments are absolute, so retry without an invalid CWD rather than
+                // failing a runtime solely because its install path is deep.
+                commandLine = BuildCommandLine(spec.ExecutablePath, spec.Arguments);
+                created = CreateProcessW(
+                    nativeExecutablePath,
+                    commandLine,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    inheritHandles: true,
+                    CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent,
+                    IntPtr.Zero,
+                    null,
+                    ref startup,
+                    out processInformation);
+                if (!created)
+                {
+                    error = $"create-process-{Marshal.GetLastWin32Error()};"
+                            + $"cwd={spec.WorkingDirectory};cwd-fallback";
+                    return false;
+                }
             }
 
             process = Process.GetProcessById(processInformation.ProcessId);
@@ -242,6 +272,20 @@ internal static class WindowsSuspendedProcessLauncher
         }
 
         return builder.ToString();
+    }
+
+    private static string ToNativeApplicationPath(string path)
+    {
+        if (path.Length < 248
+            || path.StartsWith(@"\\?\", StringComparison.Ordinal)
+            || !Path.IsPathFullyQualified(path))
+        {
+            return path;
+        }
+
+        return path.StartsWith(@"\\", StringComparison.Ordinal)
+            ? @"\\?\UNC\" + path[2..]
+            : @"\\?\" + path;
     }
 
     private static string Quote(string value)
@@ -473,7 +517,7 @@ internal static class WindowsSuspendedProcessLauncher
         bool inheritHandles,
         uint creationFlags,
         IntPtr environment,
-        string currentDirectory,
+        string? currentDirectory,
         ref StartupInfoEx startupInfo,
         out ProcessInformation processInformation);
 

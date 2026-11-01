@@ -104,7 +104,7 @@ All results below were executed on Windows after the official refresh from actua
 master `84ef802e7c85a1b6c3017c0c274a108fea57f9d2`; the product source commit is
 `98f6295316a0989bc7cb318b00ba288b5637a9e9`:
 
-- App tests：`91 passed / 0 failed`。 / App tests: `91 passed / 0 failed`.
+- App tests：`92 passed / 0 failed`。 / App tests: `92 passed / 0 failed`.
 - Core tests：`295 passed / 0 failed`。 / Core tests: `295 passed / 0 failed`.
 - Runner/coordinator/backlog/catalog focused tests：`22 passed / 0 failed`。 / Focused
   runner/coordinator/backlog/catalog tests: `22 passed / 0 failed`.
@@ -139,11 +139,11 @@ master `84ef802e7c85a1b6c3017c0c274a108fea57f9d2`; the product source commit is
 
 | 编号 | 实现（文件/函数） | 验证方式 | 结果 | 证据 |
 |---|---|---|---|---|
-| #516 runtime/model manifest 与安全安装 | `RuntimeInstallStore`、`ModelInstallStore`、`LocalRuntimeCatalogParser` | 合成 manifest/ZIP/摘要/恢复/取消 negative tests | PASS | App 91/91、Core 295/295；`RuntimeInstallStoreTests`、`ModelInstallStoreTests` |
-| #516 受控进程与 owned cleanup | `ControlledProcessRunner`、`WindowsSuspendedProcessLauncher`、`WindowsJobObject` | helper 进程成功/失败/超时/取消/立即 spawn/root exit/身份不匹配 | PASS | `WindowsControlledProcessRunnerTests`、`ControlledProcessRunnerCoreTests` |
+| #516 runtime/model manifest 与安全安装 | `RuntimeInstallStore`、`ModelInstallStore`、`LocalRuntimeCatalogParser` | 合成 manifest/ZIP/摘要/恢复/取消 negative tests | PASS | App 92/92、Core 295/295；`RuntimeInstallStoreTests`、`ModelInstallStoreTests` |
+| #516 受控进程与 owned cleanup | `ControlledProcessRunner`、`WindowsSuspendedProcessLauncher`、`WindowsJobObject` | helper 进程成功/失败/超时/取消/立即 spawn/root exit/身份不匹配/深安装路径 | PASS | `WindowsControlledProcessRunnerTests`、`ControlledProcessRunnerCoreTests` |
 | #516 CPU/内存/VRAM 资源门禁与有界退避 | `CpuLoadSampler`、`ResourceRequirementEvaluator`、`RuntimeBackoff` | CPU 采样、GPU-only gate、required unknown、退避上限 | PASS | `CpuLoadSamplerTests`、`LocalRuntimeResourceBackoffTests`、`WindowsResourceSnapshotProviderTests` |
 | #516 内部 ASR worker 状态机与 typed transport | `LocalAsrWorkerEngine`、`LocalAsrApiTransport`、`LocalAsrApiTransportTests` | sparse/fence/token/lease/content hash/scope switch/restart/redirect/header/audio-wav | PASS | Core 295/295；boundary 14/14 |
-| #516 Windows coordinator、DI 与 WPF 后台处理 | `LocalAsrWorkerCoordinator`、`Startup`、`LocalAsrBacklogViewModel`、状态中心 | non-null composition、未安装 `InvalidConfiguration`、installation 隔离、偏好恢复、关闭 guard、dispose/scope race | PASS | App 91/91；focused 22/22 |
+| #516 Windows coordinator、DI 与 WPF 后台处理 | `LocalAsrWorkerCoordinator`、`Startup`、`LocalAsrBacklogViewModel`、状态中心 | non-null composition、未安装 `InvalidConfiguration`、installation 隔离、偏好恢复、关闭 guard、dispose/scope race | PASS | App 92/92；focused 22/22 |
 | #516 官方契约生成一致性与 Windows 发布构建 | generator/check、`Pim.Client.App.csproj` | official `check-contract-csharp.sh`、Release publish | PASS | 校验逐字节一致；`.codex-tmp/release-build/publish-final-84ef802e/Pim.Client.App.exe` |
 | #516 真实首发模型、真实音频与设备端推理 | 保持 gated，无真实模型执行 | 未运行真实模型/音频/设备 | NOT-VERIFIED | 等待用户选定模型、已核验来源/hash、硬件与实机验收 |
 | #516 actual merged API master 最终刷新 | `scripts/ci/refresh-contract.sh` | actual PR `#549` merge `84ef802e`；official generated + freshness checks | PASS | `contract/provenance.json`；快照 `1202774` bytes / `e5c555e...`；407 operations / 705 schemas |
