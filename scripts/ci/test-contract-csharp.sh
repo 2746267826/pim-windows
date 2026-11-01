@@ -18,7 +18,7 @@
 #      并真实执行抽取出来的 step 体与 gate 体，证明失败会传播
 #   ⑫ 生成物与 operation 清单的对应关系：仓内每个生成文件都被 check 覆盖（无「没被校验的产物」）
 #   ⑬ 生成器 fail-closed 负对照：内联 enum / 非标识符枚举值 / 整数枚举 / properties+additionalProperties /
-#      readOnly 落在请求方向 / 内联根 schema / query 参数 → 一律拒绝产出且零写入
+#      readOnly 落在请求方向 / 内联根 schema / 未建模 query 形状 → 一律拒绝产出且零写入
 #   ⑭ 生成物固定 UTF-8 + LF（Windows 与 Linux 逐字节相同的必要条件）
 #
 # 用法：bash scripts/ci/test-contract-csharp.sh
@@ -439,10 +439,10 @@ PYEOF
   fi
 }
 
-reject_case "inline_enum" "属性上的内联 enum" \
+reject_case "inline_enum_with_unmodelled_constraints" "内联 enum 仍带生成器无法表达的属性约束" \
   'schemas["LoginRequest"]["properties"]["username"]["enum"] = ["alice", "bob"]'
-reject_case "non_identifier_enum_value" "枚举取值不是合法 C# 标识符（改名就是改线格式）" \
-  'schemas["DaemonSourceState"]["enum"] = ["Unknown", "in-progress", "Available", "Unavailable", "Paused"]'
+reject_case "enum_wire_value_collision" "两个枚举 wire 值归一化后撞到同一 C# 成员" \
+  'schemas["DaemonSourceState"]["enum"] = ["IN-PROCESS", "IN_PROCESS"]'
 reject_case "integer_enum" "整数枚举（契约没给成员名）" \
   'schemas["DaemonSourceState"] = {"type": "integer", "format": "int32", "enum": [0, 1, 2]}'
 reject_case "properties_plus_additional" "对象同时有 properties 与 additionalProperties" \
@@ -451,10 +451,6 @@ reject_case "readonly_in_request_schema" "readOnly 字段出现在请求方向�
   'schemas["LoginRequest"]["properties"]["username"]["readOnly"] = True'
 reject_case "inline_root_request" "请求体根不是 \$ref（内联形状）" \
   'doc["paths"]["/api/v1/auth/login"]["post"]["requestBody"]["content"]["application/json"]["schema"] = {"type": "object", "properties": {"username": {"type": "string"}}}'
-reject_case "query_parameter" "operation 带 query 参数（生成器只表达 path 参数）" \
-  'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "integer"}}]'
-reject_case "path_item_query_parameter" "query 参数写在 Path Item 级（不是 operation 级）" \
-  'doc["paths"]["/api/v1/endpoints"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "integer"}}]'
 reject_case "root_additional_properties" "具名对象根上带 typed additionalProperties（允许任意额外键）" \
   'schemas["LoginRequest"]["additionalProperties"] = {"type": "string"}'
 reject_case "path_parameter_enum" "path 参数自带 enum 约束（生成的边界表达不了）" \
@@ -498,6 +494,7 @@ run_generator "$SB"
 record "generator_accepts_actual_asr_boundary" $([ "$GEN_RC" -eq 0 ] && echo 0 || echo 1) \
   "rc=$GEN_RC for the real 9e96 ASR boundary (path uuid/int32, 2 required headers, audio/wav)"
 OPS_REL="src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs"
+MODELS_REL="src/client-windows/Pim.Client.Core/Contract/ContractModels.cs"
 grep -q "X-Pim-Lease-Token" "$SB/$OPS_REL" && grep -q "X-Pim-Fencing-Token" "$SB/$OPS_REL" \
   && grep -q "audio/wav" "$SB/$OPS_REL" && grep -q "X-Content-SHA256" "$SB/$OPS_REL"
 record "asr_operation_metadata_is_typed" $([ $? -eq 0 ] && echo 0 || echo 1) \
@@ -518,6 +515,63 @@ assert segment.get("get"), "segment content GET missing"
 headers = segment["get"]["responses"]["200"].get("headers") or sys.exit(8)
 assert "X-Pim-Fencing-Token" in headers, "fencing header missing before mutation"
 headers.pop("X-Pim-Fencing-Token")'
+
+section "⑯ 真实 query / 二进制分片：正向生成与 fail-closed 边界"
+SB="$WORK/sb-query-binary-boundary"; mksb "$SB"
+run_generator "$SB"
+record "generator_accepts_real_query_and_binary_operations" $([ "$GEN_RC" -eq 0 ] && echo 0 || echo 1) \
+  "rc=$GEN_RC for required/optional query parameters and note material octet-stream upload"
+grep -q 'new("sha256", "plain-string", true)' "$SB/$OPS_REL" \
+  && grep -q 'new("offset", "int32", false), new("limit", "int32", false)' "$SB/$OPS_REL" \
+  && grep -q 'new("start", "date-time", false)' "$SB/$OPS_REL" \
+  && grep -q 'new("inbox", "boolean", false)' "$SB/$OPS_REL" \
+  && grep -q '"application/octet-stream"' "$SB/$OPS_REL" \
+  && grep -q "public string ResolveQuery" "$SB/$OPS_REL"
+record "query_and_binary_metadata_is_typed" $([ $? -eq 0 ] && echo 0 || echo 1) \
+  "generated metadata carries date-time/boolean query kinds and the exact binary media type"
+
+# 真实契约里的任务状态是属性级内联 enum，wire 值含 '-'。生成器必须提升为具名 enum
+# 并生成精确 wire converter，不能静默改写或 rejection 掉合法契约。
+grep -q 'public enum CreateTaskRequestStatus' "$SB/$MODELS_REL" \
+  && grep -q 'public enum UpdateTaskRequestStatus' "$SB/$MODELS_REL" \
+  && grep -q '"NEEDS-ACTION" => CreateTaskRequestStatus.NEEDS_ACTION' "$SB/$MODELS_REL" \
+  && grep -q 'CreateTaskRequestStatus.NEEDS_ACTION => "NEEDS-ACTION"' "$SB/$MODELS_REL"
+record "inline_wire_enum_is_named_and_exact" $([ $? -eq 0 ] && echo 0 || echo 1) \
+  "real inline task statuses become named enums with exact hyphenated wire mapping"
+
+# operation 级参数覆盖 Path Item 级的同名同位置参数；合并后不能重复声明。
+SB="$WORK/sb-query-override"; mksb "$SB"
+"$PY" - "$SB/contract/openapi.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+doc = json.load(open(path, encoding="utf-8"))
+doc["paths"]["/api/v1/endpoints"]["parameters"] = [
+    {"name": "page", "in": "query", "required": False, "schema": {"type": "integer", "format": "int32"}},
+]
+doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [
+    {"name": "page", "in": "query", "required": True, "schema": {"type": "integer", "format": "int64"}},
+]
+json.dump(doc, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=2, sort_keys=True)
+PY
+run_generator "$SB"
+record "generator_merges_query_parameter_override" $([ "$GEN_RC" -eq 0 ] && echo 0 || echo 1) \
+  "rc=$GEN_RC when operation-level query replaces the Path Item declaration"
+grep -q 'new("page", "int64", true)' "$SB/$OPS_REL"
+record "query_parameter_override_keeps_operation_shape" $([ $? -eq 0 ] && echo 0 || echo 1) \
+  "operation-level required/type wins without emitting a duplicate"
+
+reject_case "query_parameter_unknown_format" "query 参数带未知 format" \
+  'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "string", "format": "custom-page"}}]'
+reject_case "query_parameter_ref" "query 参数用 \$ref 引用（生成器尚未解析 components.parameters）" \
+  'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"$" "ref": "#/components/parameters/Page"}]'
+reject_case "query_parameter_required_not_boolean" "query 参数的 required 不是布尔值" \
+  'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "required": "yes", "schema": {"type": "integer"}}]'
+reject_case "query_parameter_duplicate" "同一层重复声明同名 query 参数" \
+  'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "integer"}}, {"name": "page", "in": "query", "schema": {"type": "integer"}}]'
+reject_case "cookie_parameter" "带 cookie 参数（生成器未建模 cookie）" \
+  'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "session", "in": "cookie", "schema": {"type": "string"}}]'
+reject_case "unsupported_binary_request_body" "非笔记材料分片 operation 使用二进制请求体" \
+  'doc["paths"]["/api/v1/auth/login"]["post"]["requestBody"]["content"] = {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}'
 
 section "⑭ 生成物固定 UTF-8 + LF（Windows 刷新与 Linux CI 复跑必须逐字节相同）"
 CR_CHECK="$("$PY" - "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractModels.cs" "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs" <<'PYEOF'

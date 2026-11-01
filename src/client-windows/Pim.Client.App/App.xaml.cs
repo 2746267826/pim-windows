@@ -291,6 +291,18 @@ public partial class App : Application
         }
     }
 
+    internal static void ShowNotesWindow()
+    {
+        var existing = Current.Windows.OfType<NativeNotesWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            existing.Activate();
+            return;
+        }
+
+        new NativeNotesWindow().Show();
+    }
+
     private async Task RunHeartbeatLoopAsync(CancellationToken ct)
     {
         try
@@ -579,6 +591,14 @@ public partial class App : Application
             TryReportPlannedOffline("exit", wait: true);
             try { Services.GetService<NativeTrackerService>()?.Stop(); } catch { }
             try { Services.GetService<BrowserBridgeService>()?.Stop(); } catch { }
+            try
+            {
+                Task.Run(async () => await Services.GetRequiredService<WindowsRecordingService>().DisposeAsync())
+                    .Wait(TimeSpan.FromSeconds(10));
+            }
+            catch
+            {
+            }
             _heartbeatTimer.Dispose();
             _heartbeatTask?.ContinueWith(
                 task => Logger.Warn($"Daemon heartbeat loop faulted: {task.Exception?.GetBaseException().Message ?? "unknown error"}"),

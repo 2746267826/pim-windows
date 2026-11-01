@@ -1,8 +1,10 @@
+using System.IO;
 using System.Net.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Pim.Client.App.Services;
 using Pim.Client.Core.Services;
 using Pim.Client.Core.Services.LocalRuntime;
+using Pim.Client.Core.Services.Notes;
 
 namespace Pim.Client.App;
 
@@ -15,7 +17,15 @@ public static class Startup
         // Core services
         services.AddSingleton<ApiClient>();
         services.AddSingleton<AuthService>();
+        services.AddSingleton(_ => new LocalNoteStore(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PIM", "Notes")));
+        services.AddSingleton<ServerNoteMaterialBundleBuilder>();
+        services.AddSingleton<CloudNoteMaterialService>();
+        services.AddSingleton<WindowsRecordingService>();
         services.AddSingleton<TrackerLogger>();
+        services.AddSingleton<TrackerHistoryStore>();
+        services.AddSingleton<DeviceCenterService>();
+        services.AddSingleton<CalendarTaskService>();
         services.AddSingleton<BrowserBridgeService>(sp =>
         {
             var cfg = DaemonConfig.Load().Tracker;
@@ -28,7 +38,14 @@ public static class Startup
             var cfg = DaemonConfig.Load().Tracker;
             var logger = sp.GetRequiredService<TrackerLogger>();
             var bridge = sp.GetRequiredService<BrowserBridgeService>();
-            return new NativeTrackerService(api, cfg, null, null, bridge, logger);
+            return new NativeTrackerService(
+                api,
+                cfg,
+                null,
+                null,
+                bridge,
+                logger,
+                historyStore: sp.GetRequiredService<TrackerHistoryStore>());
         });
         services.AddSingleton<KeyStatsProcessManager>();
         services.AddSingleton<KeyStatsCollectorService>();

@@ -96,6 +96,47 @@ public partial class MainShellWindow : Window
         new StatusWindow().Show();
     }
 
+    private void OnOpenNativeNotes(object sender, RoutedEventArgs e)
+    {
+        App.ShowNotesWindow();
+    }
+
+    private void OnOpenComputerHistory(object sender, RoutedEventArgs e)
+    {
+        var existing = Application.Current.Windows.OfType<ComputerHistoryWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            existing.Activate();
+            return;
+        }
+
+        new ComputerHistoryWindow { Owner = this }.Show();
+    }
+
+    private void OnOpenDeviceCenter(object sender, RoutedEventArgs e)
+    {
+        var existing = Application.Current.Windows.OfType<DeviceCenterWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            existing.Activate();
+            return;
+        }
+
+        new DeviceCenterWindow { Owner = this }.Show();
+    }
+
+    private void OnOpenNativePlanner(object sender, RoutedEventArgs e)
+    {
+        var existing = Application.Current.Windows.OfType<NativePlannerWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            existing.Activate();
+            return;
+        }
+
+        new NativePlannerWindow { Owner = this }.Show();
+    }
+
     private void RefreshShellState()
     {
         AccountStateText.Text = _authService.IsAuthenticated

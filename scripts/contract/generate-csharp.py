@@ -35,15 +35,17 @@
   * OpenAPI 3.0：`readOnly` 属性的 `required` 只对响应生效，`writeOnly` 只对请求生效。
     生成器按 schema 在客户端实际出现的方向判定；同一 schema 在两个方向需要不同的
     required 集合时**直接报错**（不能悄悄二选一）。
+  * 只接受 OpenAPI 常见的「单个 `$ref` + `nullable: true`」allOf 包装，映射为可空具名类型；
+    任何多分支/带兄弟字段的组合仍拒绝。
   * 方向化的读/写约束（`readOnly` 字段出现在请求方向、`writeOnly` 出现在响应方向）需要
     「一个 schema 两个方向类型」或 `JsonIgnore` 支持，生成器**拒绝产出**而不是假装没看见。
 
 不做静默降级的形状（一律 fail-closed，宁可刷新时停下来问）：内联对象属性、`allOf`/`oneOf`/
-`anyOf`/`not`、`properties` 与 `additionalProperties` 同时出现、具名对象根上的 typed
+`anyOf`/`not`（单个 nullable `$ref` 包装除外）、`properties` 与 `additionalProperties` 同时出现、具名对象根上的 typed
 `additionalProperties`（允许任意额外键）、内联 `enum`、整数枚举
 （契约没给成员名，臆造名字等于编造接口）、字符串枚举取值无法与 C# 成员名逐字相同
 （`JsonStringEnumConverter` 按成员名上线，改名就是改线格式）、operation 请求体/响应体根
-不是 `$ref`、以及 `in: query|header|cookie` 等本生成器尚未表达的 operation 参数。
+不是 `$ref`、以及 `in: header|cookie` 等本生成器尚未表达的 operation 参数。
 
 输出固定 UTF-8 + LF（`newline="\n"`）：Windows 上刷新与 Linux 上 CI 复跑必须逐字节相同。
 
@@ -201,6 +203,7 @@ ALLOWED_REQUEST_HEADERS = {
 }
 
 SEGMENT_CONTENT_PATH = "/api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content"
+NOTE_MATERIAL_PART_PATH = "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}"
 
 RESPONSE_HEADER_KINDS = {
     # actual 9e96: these six response headers are plain `{type: string}` —
@@ -255,40 +258,63 @@ def validate_parameter_schema(parameter: dict, op_path: str, name: str) -> tuple
     if kind == "string" and fmt is None:
         # 兼容历史 plain-string path 参数；typed 校验属于 transport 层。
         return "string", "plain-string"
+    if kind == "string" and fmt == "date-time":
+        return "System.DateTimeOffset", "date-time"
     if kind == "integer" and fmt in ("int32", "int64"):
         csharp = "int" if fmt == "int32" else "long"
         return csharp, fmt
+    if kind == "boolean":
+        return "bool", "boolean"
     raise GenerationError(
         f"operation {op_path} 的参数 {name} 是 type={kind!r} format={fmt!r}："
-        "生成器只支持 uuid / int32 / int64 参数，拒绝静默丢掉约束。"
+        "生成器只支持 uuid / date-time / plain string / boolean / int32 / int64 参数，"
+        "拒绝静默丢掉约束。"
     )
 
 
-def reject_non_path_parameters(op: dict, op_path: str, path_item: dict | None = None,
-                               method: str = "") -> None:
-    """只支持 path 参数和两个实际契约里的请求 header：
-    query/cookie 参数会被生成器丢掉，丢掉的后果是「请求少带了契约要求的参数」，因此 fail-closed。
+def effective_parameters(op: dict, op_path: str, path_item: dict | None = None) -> list[dict]:
+    """合并 Path Item / operation 参数，按 OpenAPI 规则让 operation 级覆盖同名同位置参数。"""
+    merged: dict[tuple[str, str], dict] = {}
+    for source_name, source in (
+        ("path item", list((path_item or {}).get("parameters") or [])),
+        ("operation", list(op.get("parameters") or [])),
+    ):
+        seen_in_source: set[tuple[str, str]] = set()
+        for parameter in source:
+            name = str(parameter.get("name") or "")
+            location = str(parameter.get("in") or "")
+            key = (location, name)
+            if key in seen_in_source:
+                raise GenerationError(
+                    f"operation {op_path} 的 {source_name} 重复声明参数 {location}:{name}，拒绝产出。")
+            seen_in_source.add(key)
+            merged[key] = parameter
+    return list(merged.values())
 
-    注意 OpenAPI 允许参数写在 **Path Item** 级（对同一路径的所有方法生效），
-    只检查 operation 级会漏掉它们。
-    """
-    parameters = list((path_item or {}).get("parameters") or []) + list(op.get("parameters") or [])
+
+def validate_parameters(op: dict, op_path: str, path_item: dict | None = None,
+                        method: str = "") -> None:
+    """支持标量 path/query 与已建模 header；cookie 和未建模形状一律 fail-closed。"""
+    parameters = effective_parameters(op, op_path, path_item)
     for parameter in parameters:
         name = parameter.get("name")
         location = parameter.get("in")
 
+        if not isinstance(name, str) or not name:
+            raise GenerationError(f"operation {op_path} 的参数缺少有效 name：{parameter}")
+        if "$ref" in parameter:
+            raise GenerationError(
+                f"operation {op_path} 的 {location} 参数 {name} 用了 $ref："
+                "生成器尚未解析 components.parameters，拒绝产出。")
+        if "content" in parameter:
+            raise GenerationError(
+                f"operation {op_path} 的 {location} 参数 {name} 用 content 描述（而非 schema），拒绝产出。")
+        if "required" in parameter and not isinstance(parameter["required"], bool):
+            raise GenerationError(
+                f"operation {op_path} 的参数 {name} 的 required 不是布尔值：拒绝产出。")
+
         if location == "path":
-            if "$ref" in parameter:
-                raise GenerationError(
-                    f"operation {op_path} 的 path 参数用了 $ref（{parameter['$ref']}），"
-                    "生成器尚未解析 components.parameters，拒绝产出。"
-                )
-            if "content" in parameter:
-                raise GenerationError(
-                    f"operation {op_path} 的 path 参数 {name} 用 content 描述（而非 schema），"
-                    "生成器尚未支持，拒绝产出。"
-                )
-            if name and f"{{{name}}}" not in op_path:
+            if f"{{{name}}}" not in op_path:
                 raise GenerationError(
                     f"operation {op_path} 声明了 path 参数 {name}，但它不在路径模板里 —— 会被静默丢掉。"
                 )
@@ -296,6 +322,10 @@ def reject_non_path_parameters(op: dict, op_path: str, path_item: dict | None = 
                 raise GenerationError(
                     f"operation {op_path} 的 path 参数 {name} 不是 required=true：拒绝产出。"
                 )
+            validate_parameter_schema(parameter, op_path, name)
+            continue
+
+        if location == "query":
             validate_parameter_schema(parameter, op_path, name)
             continue
 
@@ -318,14 +348,126 @@ def reject_non_path_parameters(op: dict, op_path: str, path_item: dict | None = 
 
         raise GenerationError(
             f"operation {op_path} 带 {location} 参数（{name}），"
-            "生成器只支持 path 参数和两个已建模的 segment content header —— 需要先扩展显式方法签名。"
+            "生成器只支持 path/query 参数和两个已建模的 segment content header —— 需要先扩展显式方法签名。"
         )
+
+
+def lift_inline_enums(contract: dict, operations: list[dict]) -> None:
+    """Give property-level string enums deterministic component names.
+
+    OpenAPI often places an enum directly on a response/request property. The C#
+    model needs a named enum so its wire values can be checked by the compiler.
+    Lifting is purely mechanical: all other property constraints must already be
+    representable, otherwise generation still fails closed.
+    """
+    schemas = contract.get("components", {}).get("schemas", {})
+    additions: dict[str, dict] = {}
+    roots: set[str] = set()
+    for entry in operations:
+        method = str(entry["method"]).upper()
+        op_path = str(entry["path"])
+        op = operation_schema(contract, method, op_path)
+        request_schema = json_request_schema(op)
+        if request_schema is not None:
+            roots.update(iter_refs(request_schema))
+        for response_schema in success_response_schemas(op, op_path):
+            roots.update(iter_refs(response_schema))
+    selected_schemas = collect_closure(schemas, roots)
+
+    def lift(schema: dict, proposed_name: str, owner: str) -> dict:
+        if not isinstance(schema, dict):
+            return schema
+
+        if "enum" in schema:
+            if schema.get("type") != "string":
+                raise GenerationError(
+                    f"{owner} 的内联枚举不是字符串枚举，契约没有给出成员名：拒绝产出。")
+            unsupported = set(schema) - {
+                "type", "enum", "nullable", "description", "title", "deprecated",
+            }
+            if unsupported:
+                raise GenerationError(
+                    f"{owner} 的内联枚举带生成器无法表达的约束 "
+                    f"{sorted(unsupported)}：拒绝静默丢掉契约约束。")
+            enum_schema = {
+                key: value for key, value in schema.items()
+                if key not in {"nullable"}
+            }
+            existing = schemas.get(proposed_name) or additions.get(proposed_name)
+            if existing is not None and existing != enum_schema:
+                raise GenerationError(
+                    f"内联枚举命名冲突：{proposed_name} 已存在且形状不同。")
+            additions[proposed_name] = enum_schema
+            lifted = {"$ref": f"#/components/schemas/{proposed_name}"}
+            if schema.get("nullable") is True:
+                return {"allOf": [lifted], "nullable": True}
+            return lifted
+
+        if schema.get("type") == "array" and isinstance(schema.get("items"), dict):
+            result = dict(schema)
+            result["items"] = lift(schema["items"], proposed_name + "Item", owner + ".items")
+            return result
+
+        if (schema.get("type") == "object"
+                and isinstance(schema.get("additionalProperties"), dict)):
+            result = dict(schema)
+            result["additionalProperties"] = lift(
+                schema["additionalProperties"],
+                proposed_name + "Value",
+                owner + ".additionalProperties")
+            return result
+
+        return schema
+
+    for schema_name in sorted(selected_schemas):
+        schema = schemas.get(schema_name)
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            continue
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        updated = dict(properties)
+        changed = False
+        for property_name, property_schema in properties.items():
+            proposed = schema_name + pascal_case(property_name, "属性名").lstrip("@")
+            replacement = lift(
+                property_schema, proposed, f"{schema_name}.{property_name}")
+            if replacement is not property_schema:
+                updated[property_name] = replacement
+                changed = True
+        if changed:
+            replacement_schema = dict(schema)
+            replacement_schema["properties"] = updated
+            schemas[schema_name] = replacement_schema
+
+    schemas.update(additions)
 
 
 def json_request_schema(op: dict):
     body = op.get("requestBody") or {}
     media = (body.get("content") or {}).get("application/json")
     return media.get("schema") if media else None
+
+
+def request_body_media_type(op: dict, op_path: str) -> str | None:
+    """返回已建模的请求媒体类型；JSON 与唯一笔记材料二进制分片之外一律拒绝。"""
+    body = op.get("requestBody")
+    if body is None:
+        return None
+    if body.get("required") is not True:
+        raise GenerationError(f"operation {op_path} 的请求体不是 required=true：拒绝产出。")
+    content = body.get("content") or {}
+    media_types = sorted(content)
+    if media_types == ["application/json"]:
+        return "application/json"
+    if (media_types == ["application/octet-stream"]
+            and op_path == NOTE_MATERIAL_PART_PATH
+            and content["application/octet-stream"].get("schema")
+                == {"type": "string", "format": "binary"}):
+        return "application/octet-stream"
+    raise GenerationError(
+        f"operation {op_path} 的请求体媒体类型未建模：{media_types}；"
+        "只支持 application/json 与已声明的笔记材料二进制分片。")
 
 
 def success_response_schemas(op: dict, op_path: str = "") -> list[dict]:
@@ -400,9 +542,10 @@ def schema_directions(contract: dict, operations: list[dict]) -> tuple[dict[str,
         method = str(entry["method"]).upper()
         op_path = str(entry["path"])
         op = operation_schema(contract, method, op_path)
-        reject_non_path_parameters(
+        validate_parameters(
             op, op_path, contract.get("paths", {}).get(op_path), method)
 
+        request_media_type = request_body_media_type(op, op_path)
         request_schema = json_request_schema(op)
         if request_schema is not None:
             single_ref(request_schema, f"{method} {op_path} 请求体")
@@ -414,6 +557,7 @@ def schema_directions(contract: dict, operations: list[dict]) -> tuple[dict[str,
 
         meta[f"{method} {op_path}"] = {
             "operation": op,
+            "requestMediaType": request_media_type,
             "requestSchema": request_schema,
             "responseSchemas": response_schemas,
         }
@@ -469,6 +613,19 @@ def enum_member_name(value: str, enum_name: str) -> str:
     return "@" + name if name in CSHARP_KEYWORDS else name
 
 
+def wire_enum_member_name(value: str, enum_name: str) -> tuple[str, bool]:
+    """Return a C# member plus whether a wire-value converter is required."""
+    if value and (value[0].isalpha() or value[0] == "_") and all(
+            ch.isalnum() or ch == "_" for ch in value):
+        return enum_member_name(value, enum_name), False
+    name = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
+    if not name:
+        name = "_"
+    if not (name[0].isalpha() or name[0] == "_"):
+        name = "_" + name
+    return enum_member_name(name, enum_name), True
+
+
 def scalar_type(schema: dict) -> str:
     kind = schema.get("type")
     fmt = schema.get("format")
@@ -497,6 +654,19 @@ def csharp_type(schema: dict) -> str:
     ref = schema.get("$ref")
     if isinstance(ref, str):
         return ref.rsplit("/", 1)[-1]
+
+    all_of = schema.get("allOf")
+    wrapper_keys = set(schema) - {"allOf", "nullable", "type", "description", "title", "deprecated"}
+    if (isinstance(all_of, list)
+            and len(all_of) == 1
+            and isinstance(all_of[0], dict)
+            and set(all_of[0]) == {"$ref"}
+            and isinstance(all_of[0]["$ref"], str)
+            and schema.get("nullable") is True
+            and schema.get("type") in (None, "object")
+            and not wrapper_keys):
+        # OpenAPI 3.0 里常见的 nullable 具名引用包装；除这个精确形状外不猜测组合语义。
+        return all_of[0]["$ref"].rsplit("/", 1)[-1]
 
     for combinator in ("allOf", "oneOf", "anyOf", "not"):
         if combinator in schema:
@@ -634,22 +804,61 @@ def render_enum(name: str, schema: dict) -> list[str]:
             "臆造名字等于编造接口，生成器拒绝产出（需要后端把它改成字符串枚举或给出成员名）。"
         )
 
-    lines = [
-        "/// <summary>",
-        f"/// 契约枚举 <c>{name}</c>：wire 值即成员名，写错取值编译期就不通过。",
-        "/// </summary>",
-        f"[{JSON_CONVERTER}(typeof({JSON_STRING_ENUM}))]",
-        f"public enum {name}",
-        "{",
-    ]
+    rendered_values: list[tuple[str, str]] = []
+    needs_wire_converter = False
     seen: dict[str, str] = {}
     for value in values:
-        member = enum_member_name(str(value), name)
+        member, custom = wire_enum_member_name(str(value), name)
+        needs_wire_converter = needs_wire_converter or custom
         if member in seen:
             raise GenerationError(f"{name} 的枚举值归一化后重名：{seen[member]!r} / {value!r}")
         seen[member] = str(value)
+        rendered_values.append((str(value), member))
+
+    converter_type = f"{name}WireConverter" if needs_wire_converter else JSON_STRING_ENUM
+    lines = [
+        "/// <summary>",
+        f"/// 契约枚举 <c>{name}</c>：wire 值由生成 converter 精确往返。",
+        "/// </summary>",
+        f"[{JSON_CONVERTER}(typeof({converter_type}))]",
+        f"public enum {name}",
+        "{",
+    ]
+    for _, member in rendered_values:
         lines.append(f"    {member},")
     lines.append("}")
+    if needs_wire_converter:
+        lines.extend([
+            "",
+            f"public sealed class {converter_type} : System.Text.Json.Serialization.JsonConverter<{name}>",
+            "{",
+            f"    public override {name} Read(ref System.Text.Json.Utf8JsonReader reader, System.Type typeToConvert, System.Text.Json.JsonSerializerOptions options)",
+            "    {",
+            "        if (reader.TokenType != System.Text.Json.JsonTokenType.String)",
+            f"            throw new System.Text.Json.JsonException(\"{name} must be a JSON string\");",
+            "        return reader.GetString() switch",
+            "        {",
+        ])
+        for value, member in rendered_values:
+            lines.append(f"            {json.dumps(value, ensure_ascii=False)} => {name}.{member},")
+        lines.extend([
+            f"            _ => throw new System.Text.Json.JsonException(\"Unknown {name} wire value\"),",
+            "        };",
+            "    }",
+            "",
+            f"    public override void Write(System.Text.Json.Utf8JsonWriter writer, {name} value, System.Text.Json.JsonSerializerOptions options)",
+            "    {",
+            "        writer.WriteStringValue(value switch",
+            "        {",
+        ])
+        for value, member in rendered_values:
+            lines.append(f"            {name}.{member} => {json.dumps(value, ensure_ascii=False)},")
+        lines.extend([
+            f"            _ => throw new System.Text.Json.JsonException(\"Unknown {name} value\"),",
+            "        });",
+            "    }",
+            "}",
+        ])
     return lines
 
 
@@ -789,15 +998,19 @@ def operation_metadata(entry: dict, contract: dict) -> dict:
     method = str(entry["method"]).upper()
     full_path = str(entry["path"])
     op = operation_schema(contract, method, full_path)
+    request_media_type = request_body_media_type(op, full_path)
     path_item = contract.get("paths", {}).get(full_path) or {}
-    parameters = list(path_item.get("parameters") or []) + list(op.get("parameters") or [])
+    parameters = effective_parameters(op, full_path, path_item)
     route_kinds = []
+    query_parameters = []
     request_headers = []
     for parameter in parameters:
         name = str(parameter.get("name") or "")
         _, shape = validate_parameter_schema(parameter, full_path, name)
         if parameter.get("in") == "path":
             route_kinds.append((name, shape))
+        elif parameter.get("in") == "query":
+            query_parameters.append((name, shape, parameter.get("required") is True))
         elif parameter.get("in") == "header":
             request_headers.append((name, shape))
     response_media = "application/json"
@@ -820,6 +1033,8 @@ def operation_metadata(entry: dict, contract: dict) -> dict:
             response_headers.append((header_name, shape))
     return {
         "routeKinds": route_kinds,
+        "queryParameters": query_parameters,
+        "requestMediaType": request_media_type,
         "requestHeaders": request_headers,
         "responseMediaType": response_media,
         "responseHeaders": response_headers,
@@ -839,15 +1054,24 @@ def render_operation_entry(entry: dict, contract: dict) -> list[str]:
     metadata = operation_metadata(entry, contract)
     route_kinds = ", ".join(
         f'new("{name}", "{kind}")' for name, kind in metadata["routeKinds"])
+    query_parameters = ", ".join(
+        f'new("{name}", "{kind}", {str(required).lower()})'
+        for name, kind, required in metadata["queryParameters"])
     request_headers = ", ".join(
         f'new("{name}", "{kind}")' for name, kind in metadata["requestHeaders"])
     response_headers = ", ".join(
         f'new("{name}", "{kind}")' for name, kind in metadata["responseHeaders"])
+    request_media_type = (
+        "null"
+        if metadata["requestMediaType"] is None
+        else f'"{metadata["requestMediaType"]}"')
     return [
         f'    public static readonly ContractOperation {field_name} =',
         f'        new("{method}", "{full_path}", "{relative}",',
         f'            new ContractHeader[] {{ {route_kinds} }},',
+        f'            new ContractQueryParameter[] {{ {query_parameters} }},',
         f'            new ContractHeader[] {{ {request_headers} }},',
+        f'            {request_media_type},',
         f'            "{metadata["responseMediaType"]}",',
         f'            new ContractHeader[] {{ {response_headers} }});',
     ]
@@ -868,6 +1092,7 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "/// 需要契约里没有的接口时：不要在这里加，按 AGENTS.md「接口契约与门禁」把需求交给后端。",
         "/// </summary>",
         "public sealed record ContractHeader(string Name, string Kind);",
+        "public sealed record ContractQueryParameter(string Name, string Kind, bool Required);",
         "",
         "public sealed class ContractOperation",
         "{",
@@ -876,7 +1101,9 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "        string pathTemplate,",
         "        string relativePath,",
         "        System.Collections.Generic.IReadOnlyList<ContractHeader> routeParameterKinds,",
+        "        System.Collections.Generic.IReadOnlyList<ContractQueryParameter> queryParameters,",
         "        System.Collections.Generic.IReadOnlyList<ContractHeader> requestHeaders,",
+        "        string? requestMediaType,",
         "        string responseMediaType,",
         "        System.Collections.Generic.IReadOnlyList<ContractHeader> responseHeaders)",
         "    {",
@@ -885,7 +1112,9 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "        RelativePath = relativePath;",
         "        RouteParameters = ParseRouteParameters(pathTemplate);",
         "        RouteParameterKinds = routeParameterKinds;",
+        "        QueryParameters = queryParameters;",
         "        RequestHeaders = requestHeaders;",
+        "        RequestMediaType = requestMediaType;",
         "        ResponseMediaType = responseMediaType;",
         "        ResponseHeaders = responseHeaders;",
         "    }",
@@ -905,8 +1134,14 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "    /// <summary>路由参数的类型校验规则（uuid / int32 / int64 / plain-string）。</summary>",
         "    public System.Collections.Generic.IReadOnlyList<ContractHeader> RouteParameterKinds { get; }",
         "",
+        "    /// <summary>契约声明的标量 query 参数，按契约顺序序列化。</summary>",
+        "    public System.Collections.Generic.IReadOnlyList<ContractQueryParameter> QueryParameters { get; }",
+        "",
         "    /// <summary>契约要求的必需请求 header。</summary>",
         "    public System.Collections.Generic.IReadOnlyList<ContractHeader> RequestHeaders { get; }",
+        "",
+        "    /// <summary>契约声明的请求体媒体类型；无请求体时为 null。</summary>",
+        "    public string? RequestMediaType { get; }",
         "",
         "    /// <summary>2xx 响应的媒体类型；非 JSON（如 audio/wav）由客户端按流处理。</summary>",
         "    public string ResponseMediaType { get; }",
@@ -976,12 +1211,120 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "                    }",
         "",
         "                    break;",
+        "                case \"date-time\":",
+        "                    if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"路由值 {parameter} 不是 ISO date-time\", nameof(routeValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"boolean\":",
+        "                    if (!bool.TryParse(value, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"路由值 {parameter} 不是 boolean\", nameof(routeValues));",
+        "                    }",
+        "",
+        "                    break;",
         "            }",
         "",
         "            resolved = resolved.Replace(\"{\" + parameter + \"}\", System.Uri.EscapeDataString(value), System.StringComparison.Ordinal);",
         "        }",
         "",
         "        return resolved;",
+        "    }",
+        "",
+        "    /// <summary>",
+        "    /// 按契约声明的顺序构造 query string（含前导 <c>?</c>，无参数时返回空串）。",
+        "    /// 名字必须与契约完全一致；required 缺席、重复、未知名字或类型不符都会抛异常。",
+        "    /// </summary>",
+        "    public string ResolveQuery(params (string Name, string? Value)[] queryValues)",
+        "    {",
+        "        var supplied = new System.Collections.Generic.Dictionary<string, string?>(System.StringComparer.Ordinal);",
+        "        foreach (var (name, value) in queryValues ?? System.Array.Empty<(string, string?)>())",
+        "        {",
+        "            if (!supplied.TryAdd(name, value))",
+        "            {",
+        "                throw new System.ArgumentException($\"Query 值重复：{name}\", nameof(queryValues));",
+        "            }",
+        "        }",
+        "",
+        "        foreach (var name in supplied.Keys)",
+        "        {",
+        "            if (!QueryParameters.Any(parameter => parameter.Name == name))",
+        "            {",
+        "                throw new System.ArgumentException($\"契约未声明 Query 参数 {name}（{PathTemplate}）\", nameof(queryValues));",
+        "            }",
+        "        }",
+        "",
+        "        var parts = new System.Collections.Generic.List<string>();",
+        "        foreach (var parameter in QueryParameters)",
+        "        {",
+        "            if (!supplied.TryGetValue(parameter.Name, out var value))",
+        "            {",
+        "                if (parameter.Required)",
+        "                {",
+        "                    throw new System.ArgumentException(",
+        "                        $\"缺少必需 Query 参数 {parameter.Name}（契约路径 {PathTemplate}）\", nameof(queryValues));",
+        "                }",
+        "",
+        "                continue;",
+        "            }",
+        "",
+        "            if (value is null)",
+        "            {",
+        "                if (parameter.Required)",
+        "                {",
+        "                    throw new System.ArgumentException(",
+        "                        $\"必需 Query 参数 {parameter.Name} 不能为空（契约路径 {PathTemplate}）\", nameof(queryValues));",
+        "                }",
+        "",
+        "                continue;",
+        "            }",
+        "",
+        "            switch (parameter.Kind)",
+        "            {",
+        "                case \"uuid\":",
+        "                    if (!System.Guid.TryParse(value, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 UUID\", nameof(queryValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"int32\":",
+        "                    if (!int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 int32\", nameof(queryValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"int64\":",
+        "                    if (!long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 int64\", nameof(queryValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"date-time\":",
+        "                    if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 ISO date-time\", nameof(queryValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"boolean\":",
+        "                    if (!bool.TryParse(value, out _))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 boolean\", nameof(queryValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "            }",
+        "",
+        "            parts.Add(",
+        "                System.Uri.EscapeDataString(parameter.Name) + \"=\" + System.Uri.EscapeDataString(value));",
+        "        }",
+        "",
+        "        return parts.Count == 0 ? string.Empty : \"?\" + string.Join(\"&\", parts);",
         "    }",
         "",
         "    private static System.Collections.Generic.IReadOnlyList<string> ParseRouteParameters(string pathTemplate)",
@@ -1066,10 +1409,15 @@ def main(argv: list[str]) -> int:
     try:
         contract = load_contract(args.contract)
         operations = load_operations(args.operations)
+        lift_inline_enums(contract, operations)
         if args.mapping:
             print_mapping(contract, operations)
             return 0
-        contract_sha = hashlib.sha256(args.contract.read_bytes()).hexdigest()
+        # Git may materialize the JSON snapshot with CRLF on Windows while Linux
+        # checks it out with LF. Hash the canonical LF form so refreshing on
+        # either platform produces the same generated header.
+        contract_sha = hashlib.sha256(
+            args.contract.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
         models = generate_models(contract, operations, contract_sha)
         ops = generate_operations(contract, operations, contract_sha)
     except GenerationError as exc:

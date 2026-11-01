@@ -23,6 +23,7 @@
     <!-- 显式列出用例文件：清单即范围，新增文件时必须显式加入 -->
     <Compile Include="../ClientWindows/Pim.Client.App.Tests.AssemblyInfo.cs" />
     <Compile Include="../ClientWindows/BootstrapLogTests.cs" />
+    <Compile Include="../ClientWindows/CloudNotesUiStateTests.cs" />
     <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/DaemonLoggerShutdownTests.cs" />
     <Compile Include="../ClientWindows/ScheduledTaskServiceTests.cs" />
@@ -38,7 +39,9 @@
     <Compile Include="../ClientWindows/LocalAsrWorkerCoordinatorTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeCatalogProviderTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeExecutionAdapterTests.cs" />
+    <Compile Include="../ClientWindows/NativePlannerUiStateTests.cs" />
     <Compile Include="../ClientWindows/WindowsControlledProcessRunnerTests.cs" />
+    <Compile Include="../ClientWindows/WindowsRecordingServiceTests.cs" />
     <Compile Include="../ClientWindows/WindowsResourceSnapshotProviderTests.cs" />
   </ItemGroup>
 
