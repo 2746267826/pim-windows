@@ -371,6 +371,97 @@ public sealed class LocalNoteStore
         }
     }
 
+    public async Task<IReadOnlyList<LocalNoteMaterialFile>> ResolveVersionMaterialsAsync(
+        Guid noteId,
+        Guid versionId,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var note = await LoadNoteLockedAsync(noteId, cancellationToken);
+            var version = await LoadVersionLockedAsync(noteId, versionId, cancellationToken);
+            var result = new List<LocalNoteMaterialFile>();
+            foreach (var material in ResolveVersionMaterials(note, version))
+            {
+                var path = Path.GetFullPath(Path.Combine(_root, material.RelativePath));
+                EnsureUnderRootLocked(path);
+                if (!File.Exists(path))
+                {
+                    throw new LocalNoteStoreException($"固定版本材料文件缺失：{material.DisplayName}");
+                }
+
+                result.Add(new LocalNoteMaterialFile(material, path));
+            }
+
+            return result;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<LocalNoteCloudBinding?> LoadCloudBindingAsync(
+        Guid noteId,
+        string serverUrl,
+        string accountId,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            EnsureSafeIdentifier(noteId);
+            var bindings = await ReadCloudBindingsLockedAsync(cancellationToken);
+            return bindings.SingleOrDefault(binding =>
+                binding.NoteId == noteId
+                && string.Equals(binding.ServerUrl, serverUrl, StringComparison.Ordinal)
+                && string.Equals(binding.AccountId, accountId, StringComparison.Ordinal));
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task SaveCloudBindingAsync(
+        LocalNoteCloudBinding binding,
+        CancellationToken cancellationToken = default)
+    {
+        if (binding.SchemaVersion != 1
+            || binding.NoteId == Guid.Empty
+            || binding.LastVersionId == Guid.Empty
+            || string.IsNullOrWhiteSpace(binding.ServerUrl)
+            || string.IsNullOrWhiteSpace(binding.AccountId)
+            || string.IsNullOrWhiteSpace(binding.Phase))
+        {
+            throw new LocalNoteStoreException("云端笔记绑定数据无效。");
+        }
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            EnsureDirectoriesLocked();
+            var bindings = await ReadCloudBindingsLockedAsync(cancellationToken);
+            bindings.RemoveAll(item =>
+                item.NoteId == binding.NoteId
+                && string.Equals(item.ServerUrl, binding.ServerUrl, StringComparison.Ordinal)
+                && string.Equals(item.AccountId, binding.AccountId, StringComparison.Ordinal));
+            bindings.Add(binding);
+            await AtomicWriteJsonAsync(
+                CloudBindingsPathLocked(),
+                bindings.OrderBy(item => item.NoteId)
+                    .ThenBy(item => item.ServerUrl, StringComparer.Ordinal)
+                    .ThenBy(item => item.AccountId, StringComparer.Ordinal)
+                    .ToArray(),
+                cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<LocalNoteBundleExport> ExportAsync(
         Guid noteId,
         Guid? versionId,
@@ -906,6 +997,32 @@ public sealed class LocalNoteStore
             Markdown = note.Markdown ?? string.Empty,
             Materials = note.Materials ?? [],
         };
+    }
+
+    private async Task<List<LocalNoteCloudBinding>> ReadCloudBindingsLockedAsync(
+        CancellationToken cancellationToken)
+    {
+        var path = CloudBindingsPathLocked();
+        if (!File.Exists(path))
+        {
+            return [];
+        }
+
+        try
+        {
+            return await ReadJsonAsync<List<LocalNoteCloudBinding>>(path, cancellationToken) ?? [];
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or LocalNoteStoreException)
+        {
+            throw new LocalNoteStoreException("本机云端笔记绑定数据损坏；没有静默覆盖。", ex);
+        }
+    }
+
+    private string CloudBindingsPathLocked()
+    {
+        var path = Path.Combine(_root, "cloud-bindings.json");
+        EnsureUnderRootLocked(path);
+        return path;
     }
 
     private async Task WriteNoteLockedAsync(

@@ -27,6 +27,7 @@
     <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/AwBucketSelectionTests.cs" />
     <Compile Include="../ClientWindows/BrowserBridgeServiceTests.cs" />
+    <Compile Include="../ClientWindows/CloudNoteMaterialServiceTests.cs" />
     <Compile Include="../ClientWindows/ContractBoundaryTests.cs" />
     <Compile Include="../ClientWindows/EndpointHeartbeatReporterTests.cs" />
     <Compile Include="../ClientWindows/HeartbeatTickRunnerTests.cs" />

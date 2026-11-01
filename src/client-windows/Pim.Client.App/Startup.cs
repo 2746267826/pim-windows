@@ -19,6 +19,8 @@ public static class Startup
         services.AddSingleton<AuthService>();
         services.AddSingleton(_ => new LocalNoteStore(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PIM", "Notes")));
+        services.AddSingleton<ServerNoteMaterialBundleBuilder>();
+        services.AddSingleton<CloudNoteMaterialService>();
         services.AddSingleton<WindowsRecordingService>();
         services.AddSingleton<TrackerLogger>();
         services.AddSingleton<BrowserBridgeService>(sp =>

@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Services.Notes;
 
 namespace Pim.Client.App;
@@ -13,18 +14,23 @@ public partial class NativeNotesWindow : Window
 {
     private readonly LocalNoteStore _store;
     private readonly WindowsRecordingService _recording;
+    private readonly CloudNoteMaterialService _cloud;
     private readonly ObservableCollection<LocalNoteSummary> _notes = [];
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
     private LocalNoteDocument? _current;
     private bool _loading;
     private bool _closing;
     private bool _allowClose;
+    private NoteDerivedArtifactDto? _selectedArtifact;
+    private NoteDerivedVersionDto? _selectedDerivedVersion;
+    private NoteDerivedVersionSummaryDto? _selectedDerivedVersionSummary;
 
     public NativeNotesWindow()
     {
         InitializeComponent();
         _store = App.Services.GetRequiredService<LocalNoteStore>();
         _recording = App.Services.GetRequiredService<WindowsRecordingService>();
+        _cloud = App.Services.GetRequiredService<CloudNoteMaterialService>();
         NotesList.ItemsSource = _notes;
         _saveTimer.Tick += OnSaveTimer;
         _recording.StateChanged += OnRecordingStateChanged;
@@ -36,6 +42,7 @@ public partial class NativeNotesWindow : Window
         {
             await _store.EnsureInitializedAsync();
             await RefreshNotesAsync();
+            await RefreshCloudVersionsAsync(showErrors: false);
             if (_notes.Count > 0)
             {
                 NotesList.SelectedIndex = 0;
@@ -119,6 +126,8 @@ public partial class NativeNotesWindow : Window
             MarkdownBox.Text = note.Markdown;
             UpdateMaterials();
             await RefreshVersionsAsync(note.NoteId, note.CurrentVersionId);
+            await RefreshCloudVersionsAsync(showErrors: false);
+            await RefreshCloudResultsAsync(showErrors: false);
             SaveStateText.Text = "已加载固定版本";
         }
         catch (Exception ex)
@@ -508,6 +517,10 @@ public partial class NativeNotesWindow : Window
         MaterialsText.Text = "选择或新建笔记以开始";
         MaterialsList.ItemsSource = null;
         VersionsBox.ItemsSource = null;
+        CloudVersionsList.ItemsSource = null;
+        CloudArtifactsList.ItemsSource = null;
+        CloudResultBox.Text = string.Empty;
+        CloudResultStateText.Text = "未选择笔记";
         SaveStateText.Text = "";
     }
 
@@ -630,6 +643,320 @@ public partial class NativeNotesWindow : Window
         VersionsBox.SelectedItem = rows.FirstOrDefault(row => row.VersionId == currentVersionId);
     }
 
+    private async void OnUploadCloudVersion(object sender, RoutedEventArgs e)
+    {
+        if (_current is null)
+        {
+            MessageBox.Show(this, "请先选择或新建笔记。", "PIM 笔记", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (!await SavePendingAsync())
+        {
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                $"仅将当前固定版本 {_current.CurrentVersionId.ToString("N")[..8]} 上传到已登录服务器？\n\n"
+                + "包含当前正文、照片、手写预览与可编辑笔迹、WAV 录音；不会启动付费模型。",
+                "确认云端材料存储",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        CloudStatusText.Text = "正在校验并上传当前固定版本…";
+        try
+        {
+            var result = await _cloud.UploadVersionAsync(
+                _current.NoteId,
+                _current.CurrentVersionId,
+                userConfirmedStorage: true);
+            CloudStatusText.Text = result.Upload.HasConflict
+                ? $"已上传 {result.Upload.VersionId[..8]}，但服务器当前版本已被另一端更新；双方版本均保留。"
+                : $"已上传并完成固定版本 {result.Upload.VersionId[..8]}。";
+            await RefreshCloudVersionsAsync(showErrors: false);
+            await RefreshCloudResultsAsync(showErrors: false);
+        }
+        catch (Exception ex)
+        {
+            CloudStatusText.Text = "云端上传未完成；本机固定版本未修改。";
+            ShowFailure("上传当前固定版本失败", ex);
+        }
+    }
+
+    private async void OnRefreshCloud(object sender, RoutedEventArgs e)
+        => await RefreshCloudVersionsAsync(showErrors: true);
+
+    private async void OnOpenCloudSources(object sender, RoutedEventArgs e)
+    {
+        var dialog = new CloudNoteSourcesWindow { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.SelectedNoteId is not { } noteId)
+        {
+            return;
+        }
+
+        var note = (await _store.ListAsync()).FirstOrDefault(item => item.NoteId == noteId);
+        if (note is null)
+        {
+            MessageBox.Show(
+                this,
+                "服务器目录包含该笔记，但本机没有同 noteId 的笔记内容。当前契约缺少可生成的二进制文件下载响应，不能把仅元数据回读称为跨端往返。",
+                "本机没有对应笔记",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        SearchBox.Text = string.Empty;
+        await RefreshNotesAsync();
+        NotesList.SelectedItem = _notes.FirstOrDefault(item => item.NoteId == noteId);
+    }
+
+    private async Task RefreshCloudVersionsAsync(bool showErrors)
+    {
+        if (_current is null)
+        {
+            CloudVersionsList.ItemsSource = null;
+            return;
+        }
+
+        try
+        {
+            var versions = await _cloud.GetVersionsAsync(_current.NoteId);
+            var rows = versions
+                .Select(version => new CloudVersionRow(
+                    version,
+                    $"{VersionFlags(version)} {version.Phase} · {version.VersionId[..8]} · "
+                    + $"{version.CreatedAt.ToLocalTime():MM-dd HH:mm}"))
+                .ToArray();
+            CloudVersionsList.ItemsSource = rows;
+            CloudVersionsList.SelectedItem = rows.FirstOrDefault(row => row.Version.IsCurrent)
+                ?? rows.FirstOrDefault();
+            CloudStatusText.Text = _cloud.IsAvailable
+                ? $"服务器共有 {rows.Length} 个固定材料版本。上传不会自动启动模型。"
+                : "当前未登录；本机笔记仍可离线编辑和录音。";
+        }
+        catch (Exception ex)
+        {
+            CloudVersionsList.ItemsSource = null;
+            CloudStatusText.Text = "云端版本暂不可用；本机固定版本不受影响。";
+            if (showErrors)
+            {
+                ShowFailure("读取云端固定版本失败", ex);
+            }
+        }
+    }
+
+    private void OnCloudVersionSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (CloudVersionsList.SelectedItem is not CloudVersionRow row)
+        {
+            PromoteCloudVersionButton.IsEnabled = false;
+            return;
+        }
+
+        PromoteCloudVersionButton.IsEnabled = !row.Version.IsCurrent;
+        CloudStatusText.Text = row.Version.HasConflict
+            ? $"版本 {row.Version.VersionId[..8]} 与当前 Head 分叉；服务器保留双方内容。"
+            : row.Version.IsCurrent
+                ? $"版本 {row.Version.VersionId[..8]} 是服务器当前固定版本。"
+                : $"版本 {row.Version.VersionId[..8]} 是历史固定版本。";
+    }
+
+    private async void OnPromoteCloudVersion(object sender, RoutedEventArgs e)
+    {
+        if (_current is null
+            || CloudVersionsList.SelectedItem is not CloudVersionRow selected
+            || selected.Version.IsCurrent)
+        {
+            return;
+        }
+
+        var current = (CloudVersionsList.ItemsSource as IEnumerable<CloudVersionRow>)?
+            .FirstOrDefault(row => row.Version.IsCurrent);
+        if (MessageBox.Show(
+                this,
+                $"把服务器版本 {selected.Version.VersionId[..8]} 设为该笔记当前版本？\n\n"
+                + "不会删除冲突版本或本机固定版本。",
+                "解决云端版本冲突",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            var promoted = await _cloud.PromoteVersionAsync(
+                _current.NoteId,
+                Guid.Parse(selected.Version.VersionId),
+                current is null ? null : Guid.Parse(current.Version.VersionId));
+            CloudStatusText.Text = $"服务器当前版本已切换为 {promoted.VersionId[..8]}。";
+            await RefreshCloudVersionsAsync(showErrors: false);
+        }
+        catch (Exception ex)
+        {
+            ShowFailure("切换云端当前版本失败；服务器版本未删除", ex);
+        }
+    }
+
+    private async void OnRefreshCloudResults(object sender, RoutedEventArgs e)
+        => await RefreshCloudResultsAsync(showErrors: true);
+
+    private async Task RefreshCloudResultsAsync(bool showErrors)
+    {
+        if (_current is null)
+        {
+            CloudArtifactsList.ItemsSource = null;
+            return;
+        }
+
+        try
+        {
+            var artifacts = await _cloud.GetDerivedArtifactsAsync(_current.NoteId);
+            var rows = artifacts
+                .SelectMany(artifact => artifact.Versions.Select(version =>
+                    new CloudArtifactRow(
+                        artifact,
+                        version,
+                        $"{ArtifactLabel(artifact.Kind)} · {ResultFlags(version)} · "
+                        + $"{version.Author} · {version.CreatedAt.ToLocalTime():MM-dd HH:mm} · "
+                        + version.ContentSha256[..8])))
+                .OrderByDescending(row => row.Version.CreatedAt)
+                .ToArray();
+            CloudArtifactsList.ItemsSource = rows;
+            CloudArtifactsList.SelectedItem = rows.FirstOrDefault(row => row.Version.IsHead)
+                ?? rows.FirstOrDefault();
+            CloudResultStateText.Text = rows.Length == 0
+                ? "服务器暂无记录或分析结果；只读页不会启动 ASR/模型。"
+                : $"共 {rows.Length} 个结果版本；可查看历史、保存人工修订或切回历史版本。";
+        }
+        catch (Exception ex)
+        {
+            CloudArtifactsList.ItemsSource = null;
+            CloudResultStateText.Text = "云端结果暂不可用。";
+            if (showErrors)
+            {
+                ShowFailure("读取云端结果失败", ex);
+            }
+        }
+    }
+
+    private async void OnCloudArtifactSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (CloudArtifactsList.SelectedItem is not CloudArtifactRow row)
+        {
+            _selectedArtifact = null;
+            _selectedDerivedVersion = null;
+            _selectedDerivedVersionSummary = null;
+            return;
+        }
+
+        try
+        {
+            CloudResultStateText.Text = "正在读取结果版本…";
+            var version = await _cloud.GetDerivedVersionAsync(
+                Guid.Parse(row.Artifact.ArtifactId),
+                Guid.Parse(row.Version.VersionId));
+            _selectedArtifact = row.Artifact;
+            _selectedDerivedVersion = version;
+            _selectedDerivedVersionSummary = row.Version;
+            CloudResultBox.Text = version.ContentMarkdown;
+            CloudResultStateText.Text =
+                $"{ArtifactLabel(version.Kind)} · {version.Author} · {version.CreatedAt.ToLocalTime():yyyy-MM-dd HH:mm} · "
+                + (version.IsHead ? "当前 Head" : "历史版本")
+                + (version.HasConflict ? " · 有冲突" : string.Empty);
+        }
+        catch (Exception ex)
+        {
+            CloudResultBox.Text = string.Empty;
+            CloudResultStateText.Text = "读取所选结果失败。";
+            ShowFailure("读取云端结果版本失败", ex);
+        }
+    }
+
+    private async void OnSaveCloudRevision(object sender, RoutedEventArgs e)
+    {
+        if (_selectedArtifact is null || _selectedDerivedVersion is null)
+        {
+            MessageBox.Show(this, "请先选择一个云端结果版本。", "PIM 云端结果", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                "把编辑框内容保存为新的 USER 人工修订？\n\n不会启动 ASR 或模型，也不会覆盖旧版本。",
+                "保存人工修订",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            var saved = await _cloud.SaveManualRevisionAsync(
+                Guid.Parse(_selectedArtifact.ArtifactId),
+                string.IsNullOrWhiteSpace(_selectedArtifact.HeadVersionId)
+                    ? null
+                    : Guid.Parse(_selectedArtifact.HeadVersionId),
+                _selectedArtifact.Revision,
+                CloudResultBox.Text);
+            CloudResultStateText.Text = saved.HasConflict
+                ? "人工修订已保存为新版本，但当前 Head 已被另一端更新；双方版本均保留。"
+                : "人工修订已保存为新的不可变结果版本。";
+            await RefreshCloudResultsAsync(showErrors: false);
+        }
+        catch (Exception ex)
+        {
+            ShowFailure("保存人工修订失败；旧结果未覆盖", ex);
+        }
+    }
+
+    private async void OnSelectCloudResultVersion(object sender, RoutedEventArgs e)
+    {
+        if (_selectedArtifact is null
+            || _selectedDerivedVersion is null
+            || _selectedDerivedVersionSummary is null)
+        {
+            MessageBox.Show(this, "请先选择一个云端结果版本。", "PIM 云端结果", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (_selectedDerivedVersionSummary.IsHead)
+        {
+            MessageBox.Show(this, "所选版本已经是结果当前版本。", "PIM 云端结果", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                $"把结果版本 {_selectedDerivedVersion.VersionId[..8]} 设为当前版本？\n\n旧版本仍保留。",
+                "选择结果当前版本",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            _ = await _cloud.SelectDerivedVersionAsync(
+                Guid.Parse(_selectedArtifact.ArtifactId),
+                Guid.Parse(_selectedDerivedVersion.VersionId),
+                _selectedArtifact.Revision);
+            CloudResultStateText.Text = "结果当前版本已切换。";
+            await RefreshCloudResultsAsync(showErrors: false);
+        }
+        catch (Exception ex)
+        {
+            ShowFailure("切换结果当前版本失败；旧版本未删除", ex);
+        }
+    }
+
     private static string ReasonLabel(LocalNoteCheckpointReason reason) => reason switch
     {
         LocalNoteCheckpointReason.Initial => "创建",
@@ -641,6 +968,26 @@ public partial class NativeNotesWindow : Window
     };
 
     private sealed record LocalNoteVersionRow(Guid VersionId, string Label);
+
+    private sealed record CloudVersionRow(NoteMaterialUploadDto Version, string Label);
+
+    private sealed record CloudArtifactRow(
+        NoteDerivedArtifactDto Artifact,
+        NoteDerivedVersionSummaryDto Version,
+        string Label);
+
+    private static string VersionFlags(NoteMaterialUploadDto version)
+        => version.IsCurrent ? "[当前]" : version.HasConflict ? "[冲突]" : "[历史]";
+
+    private static string ResultFlags(NoteDerivedVersionSummaryDto version)
+        => version.IsHead ? "[当前]" : version.HasConflict ? "[冲突]" : "[历史]";
+
+    private static string ArtifactLabel(NoteDerivedArtifactKind kind) => kind switch
+    {
+        NoteDerivedArtifactKind.CompleteRecord => "完整记录",
+        NoteDerivedArtifactKind.IndependentAnalysis => "独立分析",
+        _ => kind.ToString(),
+    };
 
     private static string InferMediaType(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {

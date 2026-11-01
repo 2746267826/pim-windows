@@ -15,31 +15,38 @@
 - 本机入口：主 Shell、托盘可打开笔记；托盘可直接开始/停止笔记录音。
 - 本机导出/导入：`.pimnote.zip` 固定正文、版本清单、材料原件、逐文件 SHA-256；导入时校验版本、正文摘要、材料长度与摘要，拒绝篡改包。
 - 旧快速记录兼容入口：主 Shell 增加“旧快速记录（Web 兼容）”，导航 `/quick-notes`；旧数据继续由 Web 承载，未被新本机笔记库删除或冒充迁移完成。
+- 云端固定材料上传：按服务器 schema-v1 从本机固定版本生成 `note.json`、`document.md`、照片、手写墨迹/预览、录音清单与 16 kHz PCM 分片；使用已有 typed begin/part/complete/promote/sources/derived/manual-revision/select operations。
+- 云端绑定恢复：按规范化服务器 URL + 当前账号持久化本机笔记与云端 Head 绑定；丢失绑定时从服务器已有版本恢复 `baseVersionId`，同版本重试复用首次请求并可跳过已上传分片。
+- 服务器材料目录：`asr-tasks/sources?offset=&limit=` 以 `includeWithoutAudio=true` 展示当前账号已完成材料版本，按标题、版本数、录音段数、时长、当前/冲突状态分组；可跳回同 `noteId` 的本机笔记。
+- 云端结果入口：Windows 笔记窗口可读取服务器固定版本/冲突状态、完整记录、独立分析、历史结果版本和人工修订；只读打开不会启动 ASR 或付费模型。
 
 当前未覆盖：
 
-- 原生云端笔记目录、创建及正文更新接口尚不存在，客户端不能诚实地提交本机笔记为新云端笔记。
-- 云端 ASR/完整记录/独立分析/人工修订/冲突的真实 Windows 产品入口尚未接入；现有 Web 只读结果页不能算 Windows 主动记录或迁移完成。
+- 原生云端笔记目录、笔记级标题/元数据分页与显式删除/回收站尚不存在；用户仍需从本机笔记进入对应稳定 `noteId`，不能浏览服务器上的全部笔记目录。
+- 服务器实现 `GET /api/v1/native-notes/versions/{versionId}/files/{fileIndex}`，但 Windows 仓 canonical OpenAPI 的 200 content schema 缺失；尚不生成猜测的 typed 下载，因此云端回读是逐版本结果/材料元数据，不是跨端完整本地往返。
+- 云端 ASR/派生生成启动需要管理员路由配置与显式计费/模型 consent；本批只读取已有结果并保存人工修订，不自动启动真实 ASR/模型，也不能把只读结果页当作主动记录迁移完成。
+- 完整 M3 Markdown 富编辑仍缺；当前 WPF `TextBox` 只是保留的源码编辑基础，不能标记 Tiptap/ProseMirror 等价能力完成。
 - 真实麦克风、声学、长时、睡眠/唤醒、设备切换与隐私权限路径未操作硬件，保持 `NOT-VERIFIED`。
-- `.pimnote.zip` 目前是 Windows 本机固定版本交换格式；Android/Web 包互导仍未验收。
+- `.pimnote.zip` 是 Windows 本机固定版本交换格式；服务器 schema-v1 包由独立 builder 生成，不能把两者称为跨端往返完成。
 
 ## 契约缺口（需要父侧安排后端）
 
-已核对 canonical `contract/openapi.json`，没有以下原生笔记目录能力：
+已核对 canonical `contract/openapi.json`。首次稳定 UUID 上传、分片、完成/提升、ASR sources、派生结果、人工修订与选择已有 typed 操作，**不构成当前上传/结果链硬阻塞**。仍缺以下用户体验能力：
 
 1. `GET /api/v1/native-notes`：按当前账号分页列出笔记及当前版本/冲突摘要。
-2. `POST /api/v1/native-notes`：创建笔记并返回稳定的 `noteId`，避免客户端猜测服务端身份。
-3. `GET /api/v1/native-notes/{noteId}`：读取笔记元数据；当前该路径只有 `DELETE`。
-4. `PATCH` 或 `PUT /api/v1/native-notes/{noteId}`：更新标题、当前版本指针或冲突选择；当前不存在。
+2. `GET /api/v1/native-notes/{noteId}`：读取笔记元数据与当前 Head；当前该路径只有 `DELETE`。
+3. `PATCH` 或 `PUT /api/v1/native-notes/{noteId}`：更新标题/笔记级元数据；当前不存在。
+4. `GET /api/v1/native-notes/versions/{versionId}/files/{fileIndex}`：路径已有、实现已有，但 OpenAPI 200 content schema 缺失；补 schema 后才能生成不猜测的 typed 下载。
+5. 如 promote + 版本列表不足，需要显式笔记级冲突列表/解决操作；当前 Windows 用 `isCurrent/hasConflict` 与 `promote(expectedCurrentVersionId)` 展示并解决材料版本冲突。
 
-现有版本材料上传链已经有这些操作：
+已接入的版本材料与结果 typed 操作：
 
 - `POST /api/v1/native-notes/versions`：`BeginNoteMaterialUploadRequest` 必填 `noteId`、`versionId`、`manifestJson`、`inputJson`、`storageConsent`，`baseVersionId` 可空；客户端可先生成稳定 `noteId/versionId`，首次上传时 `baseVersionId=null`，完成首版本后由服务器建立笔记 Head。
 - `GET /api/v1/native-notes/{noteId}/versions`、`GET /api/v1/native-notes/versions/{versionId}`：读取笔记版本列表/上传版本状态。
 - `POST /api/v1/native-notes/versions/{versionId}/complete`、`POST /api/v1/native-notes/versions/{versionId}/promote`：完成与提升版本；promote 已接受可空 `expectedCurrentVersionId`。
-- `GET /api/v1/native-notes/versions/{versionId}/files/{fileIndex}` 与 `PUT/DELETE .../parts/{partIndex}`：读取材料文件并提供分片上传/删除；版本与文件元数据遵循现有 upload contract。
+- `PUT/DELETE /api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}`：原始 `application/octet-stream` 分片上传/删除；生成器已支持安全标量 query 与已登记二进制请求体。
 
-这些上传操作不能替代笔记目录创建：`POST /api/v1/native-notes` 与 GET 目录不存在；不能先上传材料再假设服务端会自动建笔记。版本链虽有 `expectedCurrentVersionId`，尚没有笔记标题更新/目录冲突的读写语义。
+当前服务器 `NoteMaterialUploadStore.BeginAsync` 直接接受客户端稳定 `noteId + versionId`，首次 `baseVersionId=null`；ledger 新增该版本，`Complete` 在无并发时建立 Head。因此无需 `POST /api/v1/native-notes` 才能建立首版本；目录/元数据 CRUD 只影响服务器侧浏览体验，不阻塞 Windows 上传。
 
 已有、可复用的云端结果契约包括：
 
@@ -53,9 +60,7 @@
 - `POST /api/v1/native-notes/derived-artifacts/{artifactId}/select`
 - ASR task/segment/retry/stop 现有任务接口
 
-这些结果接口不是笔记创建。另有一个客户端生成器限制：`generate-csharp.py` 当前拒绝 query 参数，因此上述带 `offset/limit/noteId` 的契约尚未进入 `ApiClient`。必须扩展生成器并正规重建 typed operation，不能手改 `ContractModels.cs` / `ContractOperations.cs`。
-
-后端增加目录与正文版本 API 后，Windows 客户端接入顺序应为：刷新 OpenAPI snapshot → 扩展 generator 对 query 参数的类型化序列化/URI 编码和测试 → 在 `client-operations.json` 登记具体 operation → 重生成 C# typed operation → 再接目录、修订和冲突 UI。不要在客户端用裸 URL 或未生成 DTO 绕过缺口。
+这些结果接口不是笔记创建。`generate-csharp.py` 已扩展 path/query 参数合并、类型校验、URI 编码、required/unknown/duplicate 拒绝和笔记材料二进制请求体；上述 operations 已登记并从 contract 重生成。没有手改 generated。后端增加目录/元数据 API 后仍须刷新 snapshot → 登记 operation → 重新生成，不能使用裸 URL。
 
 ## MIG-01 至 MIG-13 轻量盘点
 

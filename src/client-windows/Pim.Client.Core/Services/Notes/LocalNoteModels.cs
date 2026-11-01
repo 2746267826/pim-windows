@@ -104,6 +104,20 @@ public sealed record LocalNoteMaterialFile(
     LocalNoteMaterial Material,
     string AbsolutePath);
 
+public sealed record LocalNoteCloudBinding
+{
+    public int SchemaVersion { get; init; } = 1;
+    public required Guid NoteId { get; init; }
+    public required string ServerUrl { get; init; }
+    public required string AccountId { get; init; }
+    public Guid? BaseVersionId { get; init; }
+    public Guid? CurrentVersionId { get; init; }
+    public required Guid LastVersionId { get; init; }
+    public required string Phase { get; init; }
+    public bool HasConflict { get; init; }
+    public required DateTimeOffset UpdatedAt { get; init; }
+}
+
 public sealed record LocalNoteImportLimits
 {
     public static LocalNoteImportLimits Default { get; } = new();

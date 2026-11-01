@@ -1,0 +1,40 @@
+<Window x:Class="Pim.Client.App.CloudNoteSourcesWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="服务器笔记目录" Width="780" Height="580" MinWidth="620" MinHeight="420"
+        WindowStartupLocation="CenterOwner" Background="{StaticResource PimMutedSurfaceBrush}"
+        Loaded="OnLoaded">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <DockPanel Grid.Row="0" Margin="0,0,0,8">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button Content="刷新目录" Style="{StaticResource PimSecondaryButton}"
+                        Margin="4,0" Click="OnRefresh" />
+                <Button Content="选择此笔记" Style="{StaticResource PimPrimaryButton}"
+                        Margin="4,0" Click="OnSelect" />
+            </StackPanel>
+            <StackPanel>
+                <TextBlock Text="服务器笔记目录" FontSize="21" FontWeight="SemiBold"
+                           Foreground="{StaticResource PimTextBrush}" />
+                <TextBlock Text="按当前账号读取已完成材料版本；不会启动录音、ASR 或模型任务。"
+                           Margin="0,4,0,0" FontSize="12"
+                           Foreground="{StaticResource PimMutedTextBrush}" />
+            </StackPanel>
+        </DockPanel>
+        <TextBlock x:Name="StatusText" Grid.Row="1" Margin="0,2,0,10"
+                   Text="正在读取服务器目录…" TextWrapping="Wrap"
+                   Foreground="{StaticResource PimMutedTextBrush}" />
+        <ListBox x:Name="SourcesList" Grid.Row="2"
+                 BorderBrush="{StaticResource PimBorderBrush}"
+                 DisplayMemberPath="Label" MouseDoubleClick="OnSourceDoubleClick" />
+        <TextBlock Grid.Row="3" Margin="0,10,0,0"
+                   Text="如果服务器笔记来自其他设备，本机仍需要对应 noteId 才能进入现有本机编辑与材料版本视图；未提供猜测的二进制下载链路。"
+                   TextWrapping="Wrap" FontSize="12"
+                   Foreground="{StaticResource PimMutedTextBrush}" />
+    </Grid>
+</Window>
