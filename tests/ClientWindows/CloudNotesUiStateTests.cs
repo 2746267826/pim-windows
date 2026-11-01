@@ -6,6 +6,19 @@ namespace Pim.Client.App.Tests;
 public sealed class CloudNotesUiStateTests
 {
     [Fact]
+    public void DeclinedNoteSwitchCanRestoreTheCurrentEditorTicket()
+    {
+        var state = new CloudNotesUiState();
+        var originalNoteTicket = state.BeginNoteSelection();
+        var originalArtifactTicket = state.BeginArtifactSelection();
+        var attemptedNoteTicket = state.BeginNoteSelection();
+        var attemptedArtifactTicket = state.BeginArtifactSelection();
+
+        Assert.False(state.IsResultEditorCurrent(originalNoteTicket, originalArtifactTicket));
+        Assert.True(state.IsResultEditorCurrent(attemptedNoteTicket, attemptedArtifactTicket));
+    }
+
+    [Fact]
     public void StaleNoteAndArtifactRequestsCannotUpdateTheCurrentSelection()
     {
         var state = new CloudNotesUiState();

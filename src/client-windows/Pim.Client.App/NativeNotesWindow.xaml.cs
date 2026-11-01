@@ -165,6 +165,9 @@ public partial class NativeNotesWindow : Window
         {
             if (selectionGeneration == _cloudUi.NoteGeneration)
             {
+                _loading = true;
+                NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == _current?.NoteId);
+                _loading = false;
                 RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
                 ShowFailure("打开笔记失败", ex);
             }
