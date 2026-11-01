@@ -34,7 +34,7 @@
 
 现有版本材料上传链已经有这些操作：
 
-- `POST /api/v1/native-notes/versions`：`BeginNoteMaterialUploadRequest` 必填 `noteId`、`versionId`、`manifestJson`、`inputJson`、`storageConsent`，`baseVersionId` 可空；只能为已有笔记创建上传版本。
+- `POST /api/v1/native-notes/versions`：`BeginNoteMaterialUploadRequest` 必填 `noteId`、`versionId`、`manifestJson`、`inputJson`、`storageConsent`，`baseVersionId` 可空；客户端可先生成稳定 `noteId/versionId`，首次上传时 `baseVersionId=null`，完成首版本后由服务器建立笔记 Head。
 - `GET /api/v1/native-notes/{noteId}/versions`、`GET /api/v1/native-notes/versions/{versionId}`：读取笔记版本列表/上传版本状态。
 - `POST /api/v1/native-notes/versions/{versionId}/complete`、`POST /api/v1/native-notes/versions/{versionId}/promote`：完成与提升版本；promote 已接受可空 `expectedCurrentVersionId`。
 - `GET /api/v1/native-notes/versions/{versionId}/files/{fileIndex}` 与 `PUT/DELETE .../parts/{partIndex}`：读取材料文件并提供分片上传/删除；版本与文件元数据遵循现有 upload contract。

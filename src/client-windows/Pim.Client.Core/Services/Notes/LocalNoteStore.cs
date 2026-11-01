@@ -10,6 +10,7 @@ public sealed class LocalNoteStore
 {
     private const int SchemaVersion = 1;
     private readonly string _root;
+    private readonly LocalNoteImportLimits _importLimits;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -17,7 +18,7 @@ public sealed class LocalNoteStore
         Converters = { new JsonStringEnumConverter() },
     };
 
-    public LocalNoteStore(string root)
+    public LocalNoteStore(string root, LocalNoteImportLimits? importLimits = null)
     {
         if (string.IsNullOrWhiteSpace(root))
         {
@@ -25,6 +26,8 @@ public sealed class LocalNoteStore
         }
 
         _root = Path.GetFullPath(root);
+        _importLimits = importLimits ?? LocalNoteImportLimits.Default;
+        _importLimits.Validate();
     }
 
     public string Root => _root;
@@ -512,6 +515,9 @@ public sealed class LocalNoteStore
 
         await _gate.WaitAsync(cancellationToken);
         var importedTemporaryFiles = new List<string>();
+        var importedTargetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Guid? importingNoteId = null;
+        var importCommitted = false;
         try
         {
             EnsureDirectoriesLocked();
@@ -531,16 +537,33 @@ public sealed class LocalNoteStore
                 64 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
             using var archive = new ZipArchive(package, ZipArchiveMode.Read, leaveOpen: false);
+            ValidateArchiveEntries(archive);
 
-            var version = await ReadRequiredZipJsonAsync<LocalNoteVersion>(
+            long totalUncompressedBytes = 0;
+            var versionResult = await ReadRequiredZipJsonAsync<LocalNoteVersion>(
                 archive,
                 "version.json",
+                _importLimits.MaxMetadataEntryBytes,
+                _importLimits.MaxTotalUncompressedBytes - totalUncompressedBytes,
                 cancellationToken);
-            var manifest = await ReadRequiredZipJsonAsync<ExportManifest>(
+            var version = versionResult.Value;
+            totalUncompressedBytes = checked(totalUncompressedBytes + versionResult.Length);
+            var manifestResult = await ReadRequiredZipJsonAsync<ExportManifest>(
                 archive,
                 "bundle-manifest.json",
+                _importLimits.MaxMetadataEntryBytes,
+                _importLimits.MaxTotalUncompressedBytes - totalUncompressedBytes,
                 cancellationToken);
-            var noteMarkdown = await ReadRequiredZipTextAsync(archive, "note.md", cancellationToken);
+            var manifest = manifestResult.Value;
+            totalUncompressedBytes = checked(totalUncompressedBytes + manifestResult.Length);
+            var markdownResult = await ReadRequiredZipTextAsync(
+                archive,
+                "note.md",
+                _importLimits.MaxDocumentEntryBytes,
+                _importLimits.MaxTotalUncompressedBytes - totalUncompressedBytes,
+                cancellationToken);
+            var noteMarkdown = markdownResult.Value;
+            totalUncompressedBytes = checked(totalUncompressedBytes + markdownResult.Length);
             ValidateImportedPackage(version, manifest, noteMarkdown);
 
             var importedMaterials = new List<LocalNoteMaterial>(manifest.Materials.Count);
@@ -560,7 +583,10 @@ public sealed class LocalNoteStore
                     entry,
                     temporaryPath,
                     manifestMaterial.Length,
+                    _importLimits.MaxMaterialEntryBytes,
+                    _importLimits.MaxTotalUncompressedBytes - totalUncompressedBytes,
                     cancellationToken);
+                totalUncompressedBytes = checked(totalUncompressedBytes + imported.Length);
                 if (!string.Equals(imported.Sha256, manifestMaterial.ContentSha256, StringComparison.OrdinalIgnoreCase)
                     || imported.Length != manifestMaterial.Length)
                 {
@@ -586,6 +612,7 @@ public sealed class LocalNoteStore
                 {
                     File.Move(temporaryPath, targetPath);
                     importedTemporaryFiles.Remove(temporaryPath);
+                    importedTargetFiles.Add(targetPath);
                 }
 
                 importedMaterials.Add(new LocalNoteMaterial
@@ -608,6 +635,7 @@ public sealed class LocalNoteStore
 
             var now = DateTimeOffset.UtcNow;
             var noteId = Guid.NewGuid();
+            importingNoteId = noteId;
             var versionId = Guid.NewGuid();
             var note = new LocalNoteDocument
             {
@@ -628,6 +656,7 @@ public sealed class LocalNoteStore
                 importedMaterials);
             await WriteVersionLockedAsync(noteId, importedVersion, cancellationToken);
             await WriteNoteLockedAsync(note, cancellationToken);
+            importCommitted = true;
             return new LocalNotePackageImport(
                 noteId,
                 versionId,
@@ -651,6 +680,35 @@ public sealed class LocalNoteStore
                 }
                 catch
                 {
+                }
+            }
+
+            if (!importCommitted)
+            {
+                foreach (var targetPath in importedTargetFiles)
+                {
+                    try
+                    {
+                        File.Delete(targetPath);
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (importingNoteId is { } noteId)
+                {
+                    try
+                    {
+                        var noteDirectory = NoteDirectoryLocked(noteId);
+                        if (Directory.Exists(noteDirectory))
+                        {
+                            Directory.Delete(noteDirectory, recursive: true);
+                        }
+                    }
+                    catch
+                    {
+                    }
                 }
             }
 
@@ -965,29 +1023,122 @@ public sealed class LocalNoteStore
         }
     }
 
-    private async Task<T> ReadRequiredZipJsonAsync<T>(
+    private async Task<(T Value, long Length)> ReadRequiredZipJsonAsync<T>(
         ZipArchive archive,
         string entryName,
+        long entryLimit,
+        long remainingPackageBudget,
         CancellationToken cancellationToken)
     {
-        var entry = archive.GetEntry(entryName)
-            ?? throw new LocalNoteStoreException($"笔记包缺少 {entryName}。");
-        await using var stream = entry.Open();
-        return await JsonSerializer.DeserializeAsync<T>(stream, _jsonOptions, cancellationToken)
+        var bytes = await ReadBoundedZipEntryAsync(
+            archive,
+            entryName,
+            entryLimit,
+            remainingPackageBudget,
+            cancellationToken);
+        var value = JsonSerializer.Deserialize<T>(bytes, _jsonOptions)
             ?? throw new LocalNoteStoreException($"笔记包 {entryName} 内容为空。");
+        return (value, bytes.LongLength);
     }
 
-    private static async Task<string> ReadRequiredZipTextAsync(
+    private async Task<(string Value, long Length)> ReadRequiredZipTextAsync(
         ZipArchive archive,
         string entryName,
+        long entryLimit,
+        long remainingPackageBudget,
         CancellationToken cancellationToken)
     {
-        var entry = archive.GetEntry(entryName)
-            ?? throw new LocalNoteStoreException($"笔记包缺少 {entryName}。");
-        await using var stream = entry.Open();
-        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        return await reader.ReadToEndAsync(cancellationToken);
+        var bytes = await ReadBoundedZipEntryAsync(
+            archive,
+            entryName,
+            entryLimit,
+            remainingPackageBudget,
+            cancellationToken);
+        try
+        {
+            var value = new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true).GetString(bytes);
+            return (value, bytes.LongLength);
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new LocalNoteStoreException($"笔记包 {entryName} 不是有效的 UTF-8 文本。", ex);
+        }
     }
+
+    private void ValidateArchiveEntries(ZipArchive archive)
+    {
+        if (archive.Entries.Count > _importLimits.MaxArchiveEntries)
+        {
+            throw new LocalNoteStoreException(
+                $"笔记包文件项过多：{archive.Entries.Count}，上限 {_importLimits.MaxArchiveEntries}。");
+        }
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in archive.Entries)
+        {
+            var name = entry.FullName;
+            if (!IsSafeArchivePath(name))
+            {
+                throw new LocalNoteStoreException($"笔记包包含无效文件路径：{name}");
+            }
+
+            if (!names.Add(name))
+            {
+                throw new LocalNoteStoreException($"笔记包包含重复文件项：{name}");
+            }
+        }
+    }
+
+    private async Task<byte[]> ReadBoundedZipEntryAsync(
+        ZipArchive archive,
+        string entryName,
+        long entryLimit,
+        long remainingPackageBudget,
+        CancellationToken cancellationToken)
+    {
+        var entry = GetRequiredEntry(archive, entryName);
+        var maxBytes = Math.Min(entryLimit, remainingPackageBudget);
+        if (maxBytes <= 0)
+        {
+            throw new LocalNoteStoreException("笔记包解压总量超过安全上限。");
+        }
+
+        if (entry.Length > maxBytes)
+        {
+            throw new LocalNoteStoreException($"笔记包文件项超过读取上限：{entryName}");
+        }
+
+        await using var stream = entry.Open();
+        using var output = new MemoryStream(
+            capacity: (int)Math.Clamp(entry.Length, 0, 64 * 1024));
+        var buffer = new byte[64 * 1024];
+        long length = 0;
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            length = checked(length + read);
+            if (length > maxBytes)
+            {
+                throw new LocalNoteStoreException($"笔记包文件项读取超过上限：{entryName}");
+            }
+
+            output.Write(buffer, 0, read);
+        }
+
+        return output.ToArray();
+    }
+
+    private static ZipArchiveEntry GetRequiredEntry(ZipArchive archive, string entryName) =>
+        archive.Entries.SingleOrDefault(entry =>
+            string.Equals(entry.FullName, entryName, StringComparison.Ordinal))
+        ?? throw new LocalNoteStoreException($"笔记包缺少 {entryName}。");
 
     private static ZipArchiveEntry ResolveMaterialEntry(
         ZipArchive archive,
@@ -996,8 +1147,9 @@ public sealed class LocalNoteStore
         if (!string.IsNullOrWhiteSpace(material.ArchivePath))
         {
             if (material.ArchivePath.StartsWith("materials/", StringComparison.Ordinal)
-                && !material.ArchivePath.Contains("..", StringComparison.Ordinal)
-                && archive.GetEntry(material.ArchivePath) is { } exactEntry)
+                && IsSafeArchivePath(material.ArchivePath)
+                && archive.Entries.SingleOrDefault(entry =>
+                    string.Equals(entry.FullName, material.ArchivePath, StringComparison.Ordinal)) is { } exactEntry)
             {
                 return exactEntry;
             }
@@ -1019,11 +1171,24 @@ public sealed class LocalNoteStore
         ZipArchiveEntry entry,
         string temporaryPath,
         long expectedLength,
+        long materialEntryLimit,
+        long remainingPackageBudget,
         CancellationToken cancellationToken)
     {
         if (expectedLength <= 0)
         {
             throw new LocalNoteStoreException($"笔记包材料长度无效：{entry.FullName}");
+        }
+
+        var maxBytes = Math.Min(materialEntryLimit, remainingPackageBudget);
+        if (expectedLength > maxBytes)
+        {
+            throw new LocalNoteStoreException($"笔记包材料超过安全上限：{entry.FullName}");
+        }
+
+        if (entry.Length > maxBytes)
+        {
+            throw new LocalNoteStoreException($"笔记包材料声明长度超过安全上限：{entry.FullName}");
         }
 
         await using var source = entry.Open();
@@ -1045,10 +1210,10 @@ public sealed class LocalNoteStore
                 break;
             }
 
-            length += read;
-            if (length > expectedLength)
+            length = checked(length + read);
+            if (length > expectedLength || length > maxBytes)
             {
-                throw new LocalNoteStoreException($"笔记包材料超过清单长度：{entry.FullName}");
+                throw new LocalNoteStoreException($"笔记包材料读取超过清单或安全上限：{entry.FullName}");
             }
 
             await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
@@ -1069,9 +1234,12 @@ public sealed class LocalNoteStore
             || manifest.NoteId != version.NoteId
             || manifest.VersionId != version.VersionId
             || manifest.Materials is null
-            || version.MaterialIds is null)
+            || version.MaterialIds is null
+            || !IsSha256Hex(version.DocumentSha256)
+            || !IsSha256Hex(manifest.DocumentSha256)
+            || manifest.Materials.Any(material => material is null || !IsSha256Hex(material.ContentSha256)))
         {
-            throw new LocalNoteStoreException("笔记包版本或清单结构不受支持。");
+            throw new LocalNoteStoreException("笔记包版本或清单结构不受支持，或摘要格式无效。");
         }
 
         if (!string.Equals(noteMarkdown, version.Markdown ?? string.Empty, StringComparison.Ordinal))
@@ -1095,6 +1263,27 @@ public sealed class LocalNoteStore
         {
             throw new LocalNoteStoreException("笔记包固定版本与材料清单不一致。");
         }
+    }
+
+    private static bool IsSha256Hex(string? value) =>
+        value is { Length: 64 }
+        && value.All(character =>
+            character is >= '0' and <= '9'
+                or >= 'a' and <= 'f'
+                or >= 'A' and <= 'F');
+
+    private static bool IsSafeArchivePath(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || value[0] == '/'
+            || value.Contains('\\')
+            || value.Contains('\0')
+            || value.EndsWith("/", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return !value.Split('/').Any(segment => segment is "" or "." or "..");
     }
 
     private async Task WriteZipTextAsync(

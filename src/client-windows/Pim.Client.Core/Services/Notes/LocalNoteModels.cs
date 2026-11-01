@@ -104,6 +104,29 @@ public sealed record LocalNoteMaterialFile(
     LocalNoteMaterial Material,
     string AbsolutePath);
 
+public sealed record LocalNoteImportLimits
+{
+    public static LocalNoteImportLimits Default { get; } = new();
+
+    public int MaxArchiveEntries { get; init; } = 2_048;
+    public long MaxMetadataEntryBytes { get; init; } = 4 * 1024 * 1024;
+    public long MaxDocumentEntryBytes { get; init; } = 16 * 1024 * 1024;
+    public long MaxMaterialEntryBytes { get; init; } = 4L * 1024 * 1024 * 1024;
+    public long MaxTotalUncompressedBytes { get; init; } = 8L * 1024 * 1024 * 1024;
+
+    internal void Validate()
+    {
+        if (MaxArchiveEntries <= 0
+            || MaxMetadataEntryBytes <= 0
+            || MaxDocumentEntryBytes <= 0
+            || MaxMaterialEntryBytes <= 0
+            || MaxTotalUncompressedBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(LocalNoteImportLimits), "笔记包导入限制必须为正数。");
+        }
+    }
+}
+
 public sealed class LocalNoteStoreException : Exception
 {
     public LocalNoteStoreException(string message) : base(message)

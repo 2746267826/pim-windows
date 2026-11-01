@@ -267,6 +267,194 @@ public sealed class LocalNoteStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ImportRejectsCompressedMetadataBombAndPreservesExistingLibrary()
+    {
+        var sourceStore = new LocalNoteStore(Path.Combine(_root, "metadata-source"));
+        var source = await sourceStore.CreateAsync("元数据压缩炸弹");
+        var packagePath = Path.Combine(_root, "exports", "metadata-bomb.pimnote.zip");
+        await sourceStore.ExportAsync(source.NoteId, source.CurrentVersionId, packagePath);
+
+        string versionJson;
+        using (var archive = ZipFile.OpenRead(packagePath))
+        {
+            using var reader = new StreamReader(
+                archive.GetEntry("version.json")!.Open(),
+                Encoding.UTF8);
+            versionJson = await reader.ReadToEndAsync();
+        }
+
+        await ReplaceZipEntryAsync(
+            packagePath,
+            "version.json",
+            versionJson + new string(' ', 2 * 1024 * 1024));
+
+        var libraryRoot = Path.Combine(_root, "metadata-target");
+        var existingStore = new LocalNoteStore(libraryRoot);
+        var existing = await existingStore.CreateAsync("保留笔记");
+        var limitedStore = new LocalNoteStore(
+            libraryRoot,
+            new LocalNoteImportLimits
+            {
+                MaxMetadataEntryBytes = 64 * 1024,
+            });
+
+        await Assert.ThrowsAsync<LocalNoteStoreException>(() => limitedStore.ImportAsync(packagePath));
+
+        var preserved = await existingStore.LoadAsync(existing.NoteId);
+        Assert.Equal("保留笔记", preserved.Title);
+        Assert.Single(await existingStore.ListAsync());
+    }
+
+    [Fact]
+    public async Task ImportRejectsMaterialDocumentAndArchiveCountLimitsBeforeCommit()
+    {
+        var sourceRoot = Path.Combine(_root, "limits-source");
+        var sourceStore = new LocalNoteStore(sourceRoot);
+        var source = await sourceStore.CreateAsync("限制");
+        await sourceStore.SaveAsync(source.NoteId, "限制", new string('x', 4096));
+        var withPhoto = await sourceStore.AddMaterialsAsync(source.NoteId,
+        [
+            new LocalNoteMaterialInput(
+                new MemoryStream(Encoding.UTF8.GetBytes("0123456789abcdef")),
+                "photo.png",
+                LocalNoteMaterialKind.Photo,
+                "image/png"),
+        ]);
+        var packagePath = Path.Combine(_root, "exports", "limits.pimnote.zip");
+        await sourceStore.ExportAsync(source.NoteId, withPhoto.CurrentVersionId, packagePath);
+
+        await AssertImportRejectedWithoutNotesAsync(
+            packagePath,
+            new LocalNoteImportLimits { MaxDocumentEntryBytes = 1024 },
+            "document");
+        await AssertImportRejectedWithoutNotesAsync(
+            packagePath,
+            new LocalNoteImportLimits { MaxMaterialEntryBytes = 8 },
+            "material");
+        await AssertImportRejectedWithoutNotesAsync(
+            packagePath,
+            new LocalNoteImportLimits { MaxArchiveEntries = 2 },
+            "entry-count");
+    }
+
+    [Fact]
+    public async Task ImportRejectsDuplicateCriticalEntryAndBadShortDigest()
+    {
+        var sourceStore = new LocalNoteStore(Path.Combine(_root, "duplicate-source"));
+        var source = await sourceStore.CreateAsync("重复项");
+        var packagePath = Path.Combine(_root, "exports", "duplicate.pimnote.zip");
+        await sourceStore.ExportAsync(source.NoteId, source.CurrentVersionId, packagePath);
+
+        using (var archive = ZipFile.Open(packagePath, ZipArchiveMode.Update))
+        {
+            var duplicate = archive.CreateEntry("version.json");
+            await using var stream = duplicate.Open();
+            await stream.WriteAsync(Encoding.UTF8.GetBytes("{}"));
+        }
+
+        await AssertImportRejectedWithoutNotesAsync(
+            packagePath,
+            LocalNoteImportLimits.Default,
+            "duplicate");
+
+        var digestPackagePath = Path.Combine(_root, "exports", "short-digest.pimnote.zip");
+        var digestSource = await sourceStore.CreateAsync("坏摘要");
+        var photo = await sourceStore.AddMaterialsAsync(digestSource.NoteId,
+        [
+            new LocalNoteMaterialInput(
+                new MemoryStream(Encoding.UTF8.GetBytes("digest-material")),
+                "digest.png",
+                LocalNoteMaterialKind.Photo,
+                "image/png"),
+        ]);
+        await sourceStore.ExportAsync(digestSource.NoteId, photo.CurrentVersionId, digestPackagePath);
+        await ModifyZipJsonAsync(
+            digestPackagePath,
+            "bundle-manifest.json",
+            root => root["materials"]![0]!["contentSha256"] = "abc");
+
+        await AssertImportRejectedWithoutNotesAsync(
+            digestPackagePath,
+            LocalNoteImportLimits.Default,
+            "short-digest");
+    }
+
+    [Fact]
+    public async Task ImportRejectsStreamLongerThanManifestAndRollsBackEarlierMaterials()
+    {
+        var sourceStore = new LocalNoteStore(Path.Combine(_root, "stream-source"));
+        var source = await sourceStore.CreateAsync("流上限");
+        var withMaterials = await sourceStore.AddMaterialsAsync(source.NoteId,
+        [
+            new LocalNoteMaterialInput(
+                new MemoryStream(Encoding.UTF8.GetBytes("first-material")),
+                "first.png",
+                LocalNoteMaterialKind.Photo,
+                "image/png"),
+            new LocalNoteMaterialInput(
+                new MemoryStream(Encoding.UTF8.GetBytes("second-material")),
+                "second.png",
+                LocalNoteMaterialKind.Photo,
+                "image/png"),
+        ]);
+        var packagePath = Path.Combine(_root, "exports", "stream-limit.pimnote.zip");
+        await sourceStore.ExportAsync(source.NoteId, withMaterials.CurrentVersionId, packagePath);
+
+        long metadataBytes;
+        long firstMaterialBytes;
+        using (var archive = ZipFile.OpenRead(packagePath))
+        {
+            metadataBytes = archive.GetEntry("version.json")!.Length
+                + archive.GetEntry("bundle-manifest.json")!.Length
+                + archive.GetEntry("note.md")!.Length;
+            firstMaterialBytes = archive.Entries
+                .Where(entry => entry.FullName.StartsWith("materials/", StringComparison.Ordinal))
+                .OrderBy(entry => entry.FullName, StringComparer.Ordinal)
+                .First()
+                .Length;
+        }
+
+        var libraryRoot = Path.Combine(_root, "stream-target");
+        var existingStore = new LocalNoteStore(libraryRoot);
+        var existing = await existingStore.CreateAsync("原有笔记");
+        var limitedStore = new LocalNoteStore(
+            libraryRoot,
+            new LocalNoteImportLimits
+            {
+                MaxTotalUncompressedBytes = metadataBytes + firstMaterialBytes,
+            });
+
+        await Assert.ThrowsAsync<LocalNoteStoreException>(() => limitedStore.ImportAsync(packagePath));
+
+        Assert.Equal("原有笔记", (await existingStore.LoadAsync(existing.NoteId)).Title);
+        Assert.Single(await existingStore.ListAsync());
+        var materialsRoot = Path.Combine(libraryRoot, "materials");
+        Assert.True(!Directory.Exists(materialsRoot) || !Directory.EnumerateFiles(
+            materialsRoot,
+            "*",
+            SearchOption.AllDirectories).Any());
+
+        var manifestLengthPackage = Path.Combine(_root, "exports", "manifest-length.pimnote.zip");
+        await sourceStore.ExportAsync(source.NoteId, withMaterials.CurrentVersionId, manifestLengthPackage);
+        await ModifyZipJsonAsync(
+            manifestLengthPackage,
+            "bundle-manifest.json",
+            root => root["materials"]![0]!["length"] = 4);
+        await AssertImportRejectedWithoutNotesAsync(
+            manifestLengthPackage,
+            LocalNoteImportLimits.Default,
+            "stream-overrun");
+    }
+
+    [Fact]
+    public void DefaultImportLimitsAccommodateLongRecordingPackages()
+    {
+        Assert.True(LocalNoteImportLimits.Default.MaxMaterialEntryBytes >= 4L * 1024 * 1024 * 1024);
+        Assert.True(LocalNoteImportLimits.Default.MaxTotalUncompressedBytes >= 8L * 1024 * 1024 * 1024);
+        Assert.True(LocalNoteImportLimits.Default.MaxArchiveEntries >= 1024);
+    }
+
+    [Fact]
     public async Task EmptyMaterialAndUnknownNoteFailClearly()
     {
         var store = new LocalNoteStore(_root);
@@ -369,5 +557,50 @@ public sealed class LocalNoteStoreTests : IDisposable
 
         writer.Flush();
         return stream.ToArray();
+    }
+
+    private async Task AssertImportRejectedWithoutNotesAsync(
+        string packagePath,
+        LocalNoteImportLimits limits,
+        string scenario)
+    {
+        var libraryRoot = Path.Combine(_root, "rejected-" + scenario + "-" + Guid.NewGuid().ToString("N"));
+        var store = new LocalNoteStore(libraryRoot, limits);
+        await Assert.ThrowsAsync<LocalNoteStoreException>(() => store.ImportAsync(packagePath));
+        Assert.Empty(await store.ListAsync());
+    }
+
+    private static async Task ReplaceZipEntryAsync(
+        string packagePath,
+        string entryName,
+        string content)
+    {
+        using var archive = ZipFile.Open(packagePath, ZipArchiveMode.Update);
+        archive.GetEntry(entryName)?.Delete();
+        var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
+        await using var stream = entry.Open();
+        await using var writer = new StreamWriter(
+            stream,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        await writer.WriteAsync(content);
+    }
+
+    private static async Task ModifyZipJsonAsync(
+        string packagePath,
+        string entryName,
+        Action<JsonNode> modify)
+    {
+        string json;
+        using (var archive = ZipFile.OpenRead(packagePath))
+        {
+            await using var stream = archive.GetEntry(entryName)!.Open();
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            json = await reader.ReadToEndAsync();
+        }
+
+        var root = JsonNode.Parse(json)
+            ?? throw new InvalidOperationException("测试包 JSON 为空。");
+        modify(root);
+        await ReplaceZipEntryAsync(packagePath, entryName, root.ToJsonString());
     }
 }
