@@ -915,6 +915,17 @@ public class ContractBoundaryBehaviorTests
             (api, _) => api.GetNoteMaterialVersionAsync(
                 Guid.Parse("22222222-2222-2222-2222-222222222222")),
             ExpectedPath: "/api/v1/native-notes/versions/22222222-2222-2222-2222-222222222222"),
+        new("GET", "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}", null,
+            async (api, _) =>
+            {
+                await using var response = await api.DownloadNoteMaterialFileAsync(
+                    Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                    1,
+                    maxContentBytes: 1024);
+                Assert.NotNull(response);
+            },
+            ResponseFactory: SuccessfulNoteMaterialResponse,
+            ExpectedPath: "/api/v1/native-notes/versions/22222222-2222-2222-2222-222222222222/files/1"),
         new("POST", "/api/v1/native-notes/versions/{versionId}/complete", null,
             (api, _) => api.CompleteNoteMaterialUploadAsync(
                 Guid.Parse("22222222-2222-2222-2222-222222222222")),
@@ -1097,6 +1108,29 @@ public class ContractBoundaryBehaviorTests
         response.Headers.TryAddWithoutValidation(
             "X-Pim-Version-Id",
             "66666666-6666-6666-6666-666666666666");
+        return response;
+    }
+
+    private static HttpResponseMessage SuccessfulNoteMaterialResponse()
+    {
+        var payload = "material"u8.ToArray();
+        var content = new ByteArrayContent(payload);
+        content.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        content.Headers.ContentDisposition =
+            new System.Net.Http.Headers.ContentDispositionHeaderValue("attachment")
+            {
+                FileName = "note.json",
+            };
+        var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = content,
+        };
+        response.Headers.TryAddWithoutValidation("Cache-Control", "private, no-store");
+        response.Headers.TryAddWithoutValidation(
+            "X-Content-SHA256",
+            Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant());
+        response.Headers.TryAddWithoutValidation("X-Content-Type-Options", "nosniff");
         return response;
     }
 

@@ -203,6 +203,7 @@ ALLOWED_REQUEST_HEADERS = {
 }
 
 SEGMENT_CONTENT_PATH = "/api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content"
+NOTE_MATERIAL_FILE_PATH = "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"
 NOTE_MATERIAL_PART_PATH = "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}"
 
 RESPONSE_HEADER_KINDS = {
@@ -220,6 +221,18 @@ RESPONSE_HEADER_KINDS = {
     "X-Pim-Source-Offset-Samples": "int64",
     "X-Pim-Source-SHA256": "plain-string",
     "X-Pim-Version-Id": "plain-string",
+}
+
+NOTE_MATERIAL_FILE_HEADER_KINDS = {
+    "Cache-Control": "plain-string",
+    "Content-Disposition": "plain-string",
+    "X-Content-SHA256": "sha256",
+    "X-Content-Type-Options": "plain-string",
+}
+
+BINARY_RESPONSE_BOUNDARIES = {
+    SEGMENT_CONTENT_PATH: ("audio/wav", RESPONSE_HEADER_KINDS),
+    NOTE_MATERIAL_FILE_PATH: ("application/octet-stream", NOTE_MATERIAL_FILE_HEADER_KINDS),
 }
 
 
@@ -352,6 +365,84 @@ def validate_parameters(op: dict, op_path: str, path_item: dict | None = None,
         )
 
 
+def validate_response_header_schema(
+        header_name: str,
+        schema: dict,
+        expected_kind: str,
+        op_path: str) -> str:
+    """Validate one modeled response header without dropping wire constraints."""
+    allowed_keys = {
+        "type", "format", "description", "example", "title", "deprecated",
+        "default", "nullable", "pattern",
+    }
+    unknown = sorted(key for key in schema if key not in allowed_keys and not key.startswith("x-"))
+    if unknown:
+        raise GenerationError(
+            f"operation {op_path} 的响应头 {header_name} 带生成器无法表达的键"
+            f"（{', '.join(unknown)}）：拒绝静默丢掉契约约束。"
+        )
+    if schema.get("type") != "string":
+        return validate_parameter_schema(
+            {"name": header_name, "in": "header", "schema": schema},
+            op_path,
+            f"response header {header_name}")[1]
+    if schema.get("format") is not None or schema.get("nullable") is True:
+        raise GenerationError(
+            f"operation {op_path} 的响应头 {header_name} 使用了未建模的 format/nullable。"
+        )
+
+    pattern = schema.get("pattern")
+    if expected_kind == "sha256":
+        if pattern != "^[0-9a-f]{64}$":
+            raise GenerationError(
+                f"operation {op_path} 的响应头 {header_name} 必须是 lowercase SHA-256 pattern。"
+            )
+        return "sha256"
+
+    if pattern is not None:
+        raise GenerationError(
+            f"operation {op_path} 的响应头 {header_name} 带 pattern，但未建模为 sha256。"
+        )
+    return "plain-string"
+
+
+def validate_binary_response(
+        op_path: str,
+        response: dict,
+        media_type: str,
+        header_kinds: dict[str, str]) -> None:
+    """Require the exact binary media type and exact modeled response headers."""
+    content = response.get("content") or {}
+    if set(content.keys()) != {media_type}:
+        raise GenerationError(
+            f"operation {op_path} 的 200 响应必须恰好使用 {media_type}："
+            f"{sorted(content.keys())}"
+        )
+    schema = content[media_type].get("schema") or {}
+    if schema != {"type": "string", "format": "binary"}:
+        raise GenerationError(
+            f"operation {op_path} 的 200 {media_type} 必须是 string/binary 根 schema。"
+        )
+
+    headers = response.get("headers") or {}
+    if set(headers.keys()) != set(header_kinds):
+        raise GenerationError(
+            f"operation {op_path} 的 200 响应头必须恰好是已建模的 "
+            f"{len(header_kinds)} 个：{sorted(headers.keys())}"
+        )
+    for header_name, expected_kind in header_kinds.items():
+        actual = validate_response_header_schema(
+            header_name,
+            headers[header_name].get("schema") or {},
+            expected_kind,
+            op_path)
+        if actual != expected_kind:
+            raise GenerationError(
+                f"operation {op_path} 的 200 响应头 {header_name} 形状是 {actual}，"
+                f"与已建模的 {expected_kind} 不一致。"
+            )
+
+
 def lift_inline_enums(contract: dict, operations: list[dict]) -> None:
     """Give property-level string enums deterministic component names.
 
@@ -479,29 +570,10 @@ def success_response_schemas(op: dict, op_path: str = "") -> list[dict]:
         has_responses = True
         media = (response.get("content") or {}).get("application/json")
         if media is None or media.get("schema") is None:
-            if (op_path == SEGMENT_CONTENT_PATH and str(status) == "200"
-                    and set((response.get("content") or {}).keys()) == {"audio/wav"}):
-                schema = response["content"]["audio/wav"].get("schema") or {}
-                if schema != {"type": "string", "format": "binary"}:
-                    raise GenerationError(
-                        f"operation {op_path} 的 200 audio/wav 必须是 string/binary 根 schema。"
-                    )
-                headers = response.get("headers") or {}
-                if set(headers.keys()) != set(RESPONSE_HEADER_KINDS):
-                    raise GenerationError(
-                        f"operation {op_path} 的 200 响应头必须恰好是已建模的 12 个："
-                        f"{sorted(headers.keys())}"
-                    )
-                for header_name, shape in RESPONSE_HEADER_KINDS.items():
-                    parameter = dict(headers[header_name])
-                    parameter["schema"] = headers[header_name].get("schema") or {}
-                    _, actual = validate_parameter_schema(
-                        parameter, op_path, f"response header {header_name}")
-                    if actual != shape:
-                        raise GenerationError(
-                            f"operation {op_path} 的 200 响应头 {header_name} 形状是 {actual}，"
-                            f"与已建模的 {shape} 不一致。"
-                        )
+            boundary = BINARY_RESPONSE_BOUNDARIES.get(op_path)
+            if boundary is not None and str(status) == "200":
+                media_type, header_kinds = boundary
+                validate_binary_response(op_path, response, media_type, header_kinds)
                 continue
             raise GenerationError(f"operation 的 {status} 响应不是 application/json（生成器只支持 JSON 边界）")
         if (response.get("headers") or {}):
@@ -1015,21 +1087,28 @@ def operation_metadata(entry: dict, contract: dict) -> dict:
             request_headers.append((name, shape))
     response_media = "application/json"
     response_headers = []
+    binary_boundary = BINARY_RESPONSE_BOUNDARIES.get(full_path)
     for status, response in (op.get("responses") or {}).items():
         if str(status) != "200":
             continue
         media_types = sorted((response.get("content") or {}).keys())
-        if media_types:
-            if media_types != ["application/json"] and full_path != SEGMENT_CONTENT_PATH:
+        if binary_boundary is not None:
+            media_type, header_kinds = binary_boundary
+            validate_binary_response(full_path, response, media_type, header_kinds)
+            response_media = media_type
+        elif media_types:
+            if media_types != ["application/json"]:
                 raise GenerationError(f"operation {full_path} 的 200 媒体类型未建模：{media_types}")
             response_media = media_types[0]
         for header_name, header_schema in (response.get("headers") or {}).items():
-            parameter = {
-                "name": header_name,
-                "in": "header",
-                "schema": header_schema.get("schema") or {},
-            }
-            _, shape = validate_parameter_schema(parameter, full_path, header_name)
+            if binary_boundary is None:
+                raise GenerationError(
+                    f"operation {full_path} 的 200 响应头 {header_name} 未建模，拒绝静默丢掉。")
+            shape = validate_response_header_schema(
+                header_name,
+                header_schema.get("schema") or {},
+                binary_boundary[1][header_name],
+                full_path)
             response_headers.append((header_name, shape))
     return {
         "routeKinds": route_kinds,

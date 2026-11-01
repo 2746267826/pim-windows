@@ -500,7 +500,7 @@ public sealed class ServerNoteMaterialBundleBuilder
         }
     }
 
-    private static async Task ValidateImageSignatureAsync(
+    internal static async Task ValidateImageSignatureAsync(
         Stream stream,
         string path,
         string mediaType,
@@ -527,7 +527,7 @@ public sealed class ServerNoteMaterialBundleBuilder
         }
     }
 
-    private static async Task<long> ValidatePcm16WaveAsync(
+    internal static async Task<long> ValidatePcm16WaveAsync(
         string path,
         CancellationToken cancellationToken)
     {

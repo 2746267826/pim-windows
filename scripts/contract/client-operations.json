@@ -180,6 +180,11 @@
       "path": "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}"
     },
     {
+      "apiClient": "DownloadNoteMaterialFileAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"
+    },
+    {
       "apiClient": "DeleteNoteMaterialPartAsync",
       "method": "DELETE",
       "path": "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}"

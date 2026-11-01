@@ -841,6 +841,232 @@ public sealed class LocalNoteStore
         }
     }
 
+    /// <summary>
+    /// Imports already-downloaded schema-v1 server materials as one new local
+    /// note. Files are independently rehashed and the note/version JSON is
+    /// written only after the caller's account/server fence succeeds.
+    /// </summary>
+    public async Task<LocalNoteServerImport> ImportServerRestoreAsync(
+        LocalNoteServerRestorePackage package,
+        Func<Task>? beforeCommit = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        if (package.SourceNoteId == Guid.Empty
+            || package.SourceVersionId == Guid.Empty
+            || package.Materials is null
+            || package.Materials.Count > _importLimits.MaxArchiveEntries
+            || package.Materials.Select(material => material.MaterialId).Distinct().Count()
+                != package.Materials.Count)
+        {
+            throw new LocalNoteStoreException("服务器笔记恢复元数据无效。");
+        }
+
+        await _gate.WaitAsync(cancellationToken);
+        var importedTemporaryFiles = new List<string>();
+        var importedTargetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Guid? importingNoteId = null;
+        var importCommitted = false;
+        try
+        {
+            EnsureDirectoriesLocked();
+            var title = NormalizeTitle(package.Title);
+            var markdown = package.Markdown ?? string.Empty;
+            long totalBytes = Encoding.UTF8.GetByteCount(title) + Encoding.UTF8.GetByteCount(markdown);
+            var materials = new List<LocalNoteMaterial>(package.Materials.Count);
+            foreach (var input in package.Materials)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (input.MaterialId == Guid.Empty
+                    || input.Length <= 0
+                    || !IsSha256Hex(input.ContentSha256)
+                    || string.IsNullOrWhiteSpace(input.SourcePath)
+                    || !File.Exists(input.SourcePath))
+                {
+                    throw new LocalNoteStoreException("服务器笔记恢复材料清单无效。");
+                }
+
+                totalBytes = checked(totalBytes + input.Length);
+                if (totalBytes > _importLimits.MaxTotalUncompressedBytes)
+                {
+                    throw new LocalNoteStoreException("服务器笔记恢复总量超过安全上限。");
+                }
+
+                var temporaryPath = Path.Combine(
+                    TemporaryRootLocked(),
+                    Guid.NewGuid().ToString("N") + ".server-import");
+                importedTemporaryFiles.Add(temporaryPath);
+                var copied = await CopyServerRestoreMaterialAsync(
+                    input.SourcePath,
+                    temporaryPath,
+                    input.Length,
+                    _importLimits.MaxMaterialEntryBytes,
+                    _importLimits.MaxTotalUncompressedBytes - totalBytes + input.Length,
+                    cancellationToken);
+                if (copied.Length != input.Length
+                    || !string.Equals(
+                        copied.Sha256,
+                        input.ContentSha256,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new LocalNoteStoreException(
+                        $"服务器笔记恢复材料摘要或长度不一致：{input.DisplayName}");
+                }
+
+                var displayName = NormalizeDisplayName(input.DisplayName);
+                var extension = ResolveExtension(displayName, input.MediaType);
+                var relativePath = MaterialRelativePath(copied.Sha256, extension);
+                var targetPath = Path.Combine(_root, relativePath);
+                EnsureUnderRootLocked(Path.GetFullPath(targetPath));
+                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+                if (File.Exists(targetPath))
+                {
+                    var existingSha = await ComputeSha256Async(targetPath, cancellationToken);
+                    if (!string.Equals(existingSha, copied.Sha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new LocalNoteStoreException(
+                            $"本机内容寻址材料已损坏，已拒绝复用：{displayName}");
+                    }
+                }
+                else
+                {
+                    File.Move(temporaryPath, targetPath);
+                    importedTemporaryFiles.Remove(temporaryPath);
+                    importedTargetFiles.Add(targetPath);
+                }
+
+                if (input.Kind is LocalNoteMaterialKind.Photo or LocalNoteMaterialKind.Handwriting)
+                {
+                    await using var image = new FileStream(
+                        targetPath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read,
+                        64,
+                        FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    await ServerNoteMaterialBundleBuilder.ValidateImageSignatureAsync(
+                        image,
+                        targetPath,
+                        input.MediaType,
+                        cancellationToken);
+                }
+                else if (input.Kind == LocalNoteMaterialKind.Recording)
+                {
+                    var samples = await ServerNoteMaterialBundleBuilder.ValidatePcm16WaveAsync(
+                        targetPath,
+                        cancellationToken);
+                    if (input.ExpectedSamples is { } expectedSamples && samples != expectedSamples)
+                    {
+                        throw new LocalNoteStoreException("服务器录音 WAV 样本数与 manifest 不一致。");
+                    }
+                }
+
+                materials.Add(new LocalNoteMaterial
+                {
+                    MaterialId = input.MaterialId,
+                    Kind = input.Kind,
+                    DisplayName = displayName,
+                    ContentSha256 = copied.Sha256,
+                    RelativePath = relativePath,
+                    MediaType = string.IsNullOrWhiteSpace(input.MediaType)
+                        ? InferMediaType(extension)
+                        : input.MediaType,
+                    Length = copied.Length,
+                    AddedAt = DateTimeOffset.UtcNow,
+                    Width = input.Width,
+                    Height = input.Height,
+                    DurationMilliseconds = input.DurationMilliseconds,
+                });
+            }
+
+            if (beforeCommit is not null)
+            {
+                await beforeCommit();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = DateTimeOffset.UtcNow;
+            var noteId = Guid.NewGuid();
+            importingNoteId = noteId;
+            var versionId = Guid.NewGuid();
+            var note = new LocalNoteDocument
+            {
+                NoteId = noteId,
+                CreatedAt = now,
+                UpdatedAt = now,
+                CurrentVersionId = versionId,
+                Title = title,
+                Markdown = markdown,
+                Materials = materials,
+            };
+            var version = CreateVersion(
+                note,
+                versionId,
+                parentVersionId: null,
+                now,
+                LocalNoteCheckpointReason.ImportedPackage,
+                materials);
+            await WriteVersionLockedAsync(noteId, version, cancellationToken);
+            await WriteNoteLockedAsync(note, cancellationToken);
+            importCommitted = true;
+            return new LocalNoteServerImport(
+                noteId,
+                versionId,
+                package.SourceNoteId,
+                package.SourceVersionId,
+                title,
+                materials);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or InvalidDataException)
+        {
+            throw new LocalNoteStoreException("恢复服务器笔记失败；本机笔记库未切换。", ex);
+        }
+        finally
+        {
+            foreach (var temporaryPath in importedTemporaryFiles)
+            {
+                try
+                {
+                    File.Delete(temporaryPath);
+                }
+                catch
+                {
+                }
+            }
+
+            if (!importCommitted)
+            {
+                foreach (var targetPath in importedTargetFiles)
+                {
+                    try
+                    {
+                        File.Delete(targetPath);
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (importingNoteId is { } noteId)
+                {
+                    try
+                    {
+                        var noteDirectory = NoteDirectoryLocked(noteId);
+                        if (Directory.Exists(noteDirectory))
+                        {
+                            Directory.Delete(noteDirectory, recursive: true);
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            _gate.Release();
+        }
+    }
+
     private async Task<LocalNoteDocument> CreateCheckpointLockedAsync(
         LocalNoteDocument note,
         string title,
@@ -1365,6 +1591,59 @@ public sealed class LocalNoteStore
             if (length > expectedLength || length > maxBytes)
             {
                 throw new LocalNoteStoreException($"笔记包材料读取超过清单或安全上限：{entry.FullName}");
+            }
+
+            await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            hash.AppendData(buffer, 0, read);
+        }
+
+        await target.FlushAsync(cancellationToken);
+        return (Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), length);
+    }
+
+    private static async Task<(string Sha256, long Length)> CopyServerRestoreMaterialAsync(
+        string sourcePath,
+        string temporaryPath,
+        long expectedLength,
+        long materialEntryLimit,
+        long remainingPackageBudget,
+        CancellationToken cancellationToken)
+    {
+        var maxBytes = Math.Min(materialEntryLimit, remainingPackageBudget);
+        if (expectedLength <= 0 || expectedLength > maxBytes)
+        {
+            throw new LocalNoteStoreException("服务器笔记恢复材料超过安全上限。");
+        }
+
+        await using var source = new FileStream(
+            sourcePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using var target = new FileStream(
+            temporaryPath,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[64 * 1024];
+        long length = 0;
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            length = checked(length + read);
+            if (length > expectedLength || length > maxBytes)
+            {
+                throw new LocalNoteStoreException("服务器笔记恢复材料读取超过清单或安全上限。");
             }
 
             await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);

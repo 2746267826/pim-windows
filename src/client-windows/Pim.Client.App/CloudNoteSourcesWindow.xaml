@@ -32,9 +32,8 @@
         <ListBox x:Name="SourcesList" Grid.Row="2"
                  BorderBrush="{StaticResource PimBorderBrush}"
                  DisplayMemberPath="Label" MouseDoubleClick="OnSourceDoubleClick" />
-        <TextBlock Grid.Row="3" Margin="0,10,0,0"
-                   Text="如果服务器笔记来自其他设备，本机仍需要对应 noteId 才能进入现有本机编辑与材料版本视图；未提供猜测的二进制下载链路。"
-                   TextWrapping="Wrap" FontSize="12"
-                   Foreground="{StaticResource PimMutedTextBrush}" />
+        <Button Grid.Row="3" Margin="0,10,0,0" HorizontalAlignment="Right"
+                Content="下载并恢复为本机笔记" Style="{StaticResource PimPrimaryButton}"
+                Click="OnRestore" />
     </Grid>
 </Window>

@@ -573,6 +573,48 @@ reject_case "cookie_parameter" "带 cookie 参数（生成器未建模 cookie）
 reject_case "unsupported_binary_request_body" "非笔记材料分片 operation 使用二进制请求体" \
   'doc["paths"]["/api/v1/auth/login"]["post"]["requestBody"]["content"] = {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}'
 
+section "⑰ 真实笔记材料文件下载：octet-stream + 精确响应头 + SHA pattern"
+SB="$WORK/sb-note-material-download"; mksb "$SB"
+"$PY" - "$SB/scripts/contract/client-operations.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+doc = json.load(open(path, encoding="utf-8"))
+required = {
+    ("DownloadNoteMaterialFileAsync", "GET",
+     "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"),
+}
+declared = {
+    (entry["apiClient"], entry["method"], entry["path"])
+    for entry in doc["operations"]
+}
+assert required <= declared, required - declared
+PY
+run_generator "$SB"
+record "generator_accepts_note_material_binary_download" $([ "$GEN_RC" -eq 0 ] && echo 0 || echo 1) \
+  "rc=$GEN_RC for the development contract shape"
+grep -q 'DownloadNoteMaterialFile =' "$SB/$OPS_REL" \
+  && grep -q '"application/octet-stream"' "$SB/$OPS_REL" \
+  && grep -q 'new("X-Content-SHA256", "sha256")' "$SB/$OPS_REL" \
+  && grep -q 'new("Content-Disposition", "plain-string")' "$SB/$OPS_REL" \
+  && grep -q 'new("X-Content-Type-Options", "plain-string")' "$SB/$OPS_REL"
+record "note_material_binary_metadata_is_typed" $([ $? -eq 0 ] && echo 0 || echo 1) \
+  "generated operation carries the binary media type and exact header kinds"
+
+reject_case "note_material_binary_header_missing" "笔记材料下载缺少 nosniff 响应头" \
+  'download = doc["paths"]["/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"]["get"]
+headers = download["responses"]["200"]["headers"]
+headers.pop("X-Content-Type-Options")'
+reject_case "note_material_binary_header_extra" "笔记材料下载出现未建模响应头" \
+  'download = doc["paths"]["/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"]["get"]
+download["responses"]["200"]["headers"]["X-Unmodelled"] = {"schema": {"type": "string"}}'
+reject_case "note_material_binary_sha_pattern" "笔记材料下载 SHA 响应头绕过契约 pattern" \
+  'download = doc["paths"]["/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"]["get"]
+download["responses"]["200"]["headers"]["X-Content-SHA256"]["schema"].pop("pattern")'
+reject_case "note_material_binary_media_type" "笔记材料下载媒体类型变化" \
+  'download = doc["paths"]["/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"]["get"]
+response = download["responses"]["200"]
+response["content"]["text/plain"] = response["content"].pop("application/octet-stream")'
+
 section "⑭ 生成物固定 UTF-8 + LF（Windows 刷新与 Linux CI 复跑必须逐字节相同）"
 CR_CHECK="$("$PY" - "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractModels.cs" "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs" <<'PYEOF'
 import sys

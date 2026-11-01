@@ -100,6 +100,34 @@ public sealed record LocalNotePackageImport(
     long PackageLength,
     IReadOnlyList<LocalNoteMaterial> Materials);
 
+public sealed record LocalNoteServerMaterialInput(
+    Guid MaterialId,
+    LocalNoteMaterialKind Kind,
+    string DisplayName,
+    string ContentSha256,
+    string MediaType,
+    long Length,
+    string SourcePath,
+    int? Width = null,
+    int? Height = null,
+    long? DurationMilliseconds = null,
+    long? ExpectedSamples = null);
+
+public sealed record LocalNoteServerRestorePackage(
+    Guid SourceNoteId,
+    Guid SourceVersionId,
+    string Title,
+    string Markdown,
+    IReadOnlyList<LocalNoteServerMaterialInput> Materials);
+
+public sealed record LocalNoteServerImport(
+    Guid NoteId,
+    Guid VersionId,
+    Guid SourceNoteId,
+    Guid SourceVersionId,
+    string Title,
+    IReadOnlyList<LocalNoteMaterial> Materials);
+
 public sealed record LocalNoteMaterialFile(
     LocalNoteMaterial Material,
     string AbsolutePath);

@@ -763,18 +763,6 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        var note = (await _store.ListAsync()).FirstOrDefault(item => item.NoteId == noteId);
-        if (note is null)
-        {
-            MessageBox.Show(
-                this,
-                "服务器目录包含该笔记，但本机没有同 noteId 的笔记内容。当前契约缺少可生成的二进制文件下载响应，不能把仅元数据回读称为跨端往返。",
-                "本机没有对应笔记",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-            return;
-        }
-
         SearchBox.Text = string.Empty;
         await RefreshNotesAsync();
         NotesList.SelectedItem = _notes.FirstOrDefault(item => item.NoteId == noteId);
