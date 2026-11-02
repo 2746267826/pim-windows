@@ -222,8 +222,9 @@ public interface ILocalAsrNodeTransport
 }
 
 /// <summary>
-/// Typed extension seam for a backend contract that accepts claim-time resource
-/// decisions atomically. It must not acquire a lease for a rejected decision.
+/// Typed extension seam for a backend contract that reports claim-time resource
+/// decisions atomically. Implementations report failed decisions without obtaining
+/// a lease, and return ordinary claim results only for passing decisions.
 /// </summary>
 public interface ILocalAsrResourceDecisionTransport
 {

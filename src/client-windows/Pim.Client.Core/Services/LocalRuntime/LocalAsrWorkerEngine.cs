@@ -210,13 +210,6 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
                     ex.Message);
             }
 
-            if (!resourceDecision.Satisfied)
-            {
-                return LocalAsrWorkerRunResult.WithoutTask(
-                    LocalAsrWorkerRunStatus.ResourceBlocked,
-                    string.Join(",", resourceDecision.Reasons));
-            }
-
             LocalAsrClaimResult claim;
             try
             {
@@ -250,6 +243,10 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
                         LocalAsrWorkerRunStatus.Deferred,
                         claim.ReasonCode,
                         claim.RetryAfterUtc?.ToString("O"));
+                case LocalAsrClaimStatus.ResourceBlocked:
+                    return LocalAsrWorkerRunResult.WithoutTask(
+                        LocalAsrWorkerRunStatus.ResourceBlocked,
+                        claim.ReasonCode ?? string.Join(",", resourceDecision.Reasons));
                 case LocalAsrClaimStatus.Rejected:
                     return LocalAsrWorkerRunResult.WithoutTask(
                         LocalAsrWorkerRunStatus.Failed,

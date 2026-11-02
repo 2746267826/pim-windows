@@ -145,6 +145,68 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task TypedTransport_ReportsFrozenResourceFailureWithoutStartingRuntime()
+    {
+        var transport = new TypedFakeTransport();
+        var runtime = new FakeRuntimeAdapter("must-not-run");
+        var outbox = new LocalAsrResourceDecisionOutbox(Path.Combine(_root, "typed-resource-outbox"));
+        var decisionAdapter = new LocalAsrClaimDecisionAdapter(transport, outbox);
+        var resources = new MutableResourceProvider(ResourceSnapshot.Unknown(DateTimeOffset.UtcNow));
+        var engine = CreateEngine(
+            transport,
+            runtime,
+            () => resources.Snapshot,
+            claimDecisionAdapter: decisionAdapter);
+
+        var result = await engine.ProcessOnceAsync(Scope, LocalAsrWorkTrigger.Manual, "typed-rejected-key");
+        var pending = await outbox.FindPendingAsync(Scope, "node-a", "typed-rejected-key");
+        resources.Snapshot = GoodSnapshot()();
+        var replay = await engine.ProcessOnceAsync(Scope, LocalAsrWorkTrigger.Automatic, "typed-rejected-key");
+        var replayPending = await outbox.FindPendingAsync(Scope, "node-a", "typed-rejected-key");
+
+        Assert.Equal(LocalAsrWorkerRunStatus.ResourceBlocked, result.Status);
+        Assert.Equal(LocalAsrWorkerRunStatus.ResourceBlocked, replay.Status);
+        Assert.Equal(2, transport.TypedCallCount);
+        Assert.Equal(0, transport.LegacyCallCount);
+        Assert.NotNull(transport.ReceivedDecision);
+        Assert.False(transport.ReceivedDecision.Passed);
+        Assert.Contains(LocalRuntimeReasonCodes.ResourceCpuUnknown, transport.ReceivedDecision.Reasons);
+        Assert.NotNull(pending);
+        Assert.True(pending.Acknowledged);
+        Assert.Equal(LocalAsrClaimStatus.ResourceBlocked.ToString(), pending.AcknowledgedOutcome);
+        Assert.NotNull(replayPending);
+        Assert.False(replayPending.Decision.Passed);
+        Assert.Equal(pending.Decision.Reasons, replayPending.Decision.Reasons);
+        Assert.Equal(pending.Decision.SampledAtUtc, replayPending.Decision.SampledAtUtc);
+        Assert.Equal(0, runtime.CallCount);
+    }
+
+    [Fact]
+    public async Task TypedTransport_PassingDecisionIsReportedBeforeNormalClaimExecution()
+    {
+        var bytes = new[] { "typed-pass"u8.ToArray() };
+        var task = CreateClaim(bytes);
+        var transport = new TypedFakeTransport(new LocalAsrClaimResult(LocalAsrClaimStatus.Claimed, task));
+        var runtime = new FakeRuntimeAdapter("typed pass");
+        var outbox = new LocalAsrResourceDecisionOutbox(Path.Combine(_root, "typed-pass-outbox"));
+        var decisionAdapter = new LocalAsrClaimDecisionAdapter(transport, outbox);
+        var engine = CreateEngine(transport, runtime, GoodSnapshot(), claimDecisionAdapter: decisionAdapter);
+
+        var result = await engine.ProcessOnceAsync(Scope, LocalAsrWorkTrigger.Manual, "typed-passed-key");
+        var pending = await outbox.FindPendingAsync(Scope, "node-a", "typed-passed-key");
+
+        Assert.Equal(LocalAsrWorkerRunStatus.Completed, result.Status);
+        Assert.Equal(1, transport.TypedCallCount);
+        Assert.Equal(0, transport.LegacyCallCount);
+        Assert.True(transport.ReceivedDecision!.Passed);
+        Assert.True(Assert.Single(result.Segments).Succeeded);
+        Assert.Equal(1, runtime.CallCount);
+        Assert.NotNull(pending);
+        Assert.True(pending.Acknowledged);
+        Assert.Equal(LocalAsrClaimStatus.Claimed.ToString(), pending.AcknowledgedOutcome);
+    }
+
+    [Fact]
     public async Task ScopeSwitchAfterSampling_CancelsBeforeAnyClaimIsSent()
     {
         var transport = new FakeTransport(
@@ -717,7 +779,7 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
     }
 
     private LocalAsrWorkerEngine CreateEngine(
-        FakeTransport transport,
+        ILocalAsrNodeTransport transport,
         FakeRuntimeAdapter adapter,
         Func<ResourceSnapshot> snapshot,
         RuntimeBackoffStore? backoff = null,
@@ -1051,5 +1113,71 @@ public sealed class LocalAsrWorkerEngineTests : IDisposable
                 return _withdrawals.ToArray();
             }
         }
+    }
+
+    private sealed class TypedFakeTransport : ILocalAsrNodeTransport, ILocalAsrResourceDecisionTransport
+    {
+        private readonly LocalAsrClaimResult _result;
+
+        public TypedFakeTransport()
+            : this(new LocalAsrClaimResult(LocalAsrClaimStatus.ResourceBlocked, null,
+                LocalRuntimeReasonCodes.ResourceMemoryInsufficient))
+        {
+        }
+
+        public TypedFakeTransport(LocalAsrClaimResult result) => _result = result;
+
+        public int TypedCallCount { get; private set; }
+        public int LegacyCallCount { get; private set; }
+        public LocalAsrFrozenResourceDecision? ReceivedDecision { get; private set; }
+
+        public Task<LocalAsrClaimResult> ClaimWithResourceDecisionAsync(
+            LocalAsrClaimRequest request,
+            LocalAsrFrozenResourceDecision decision,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            TypedCallCount++;
+            ReceivedDecision = decision;
+            return Task.FromResult(_result with { ResourceDecisionAccepted = true });
+        }
+
+        public Task<LocalAsrClaimResult> ClaimAsync(
+            LocalAsrClaimRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            LegacyCallCount++;
+            return Task.FromResult(_result);
+        }
+
+        public Task<LocalAsrRenewResult> RenewAsync(LocalAsrLease lease,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new LocalAsrRenewResult(LocalAsrRenewStatus.Renewed, lease));
+
+        public Task<LocalAsrSegmentContent> OpenSegmentContentAsync(LocalAsrLease lease,
+            LocalAsrInputSegment segment, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new LocalAsrSegmentContent(
+                new MemoryStream("typed-pass"u8.ToArray(), writable: false),
+                Scope.ServerBaseAddress,
+                Scope.OwnerIdentity,
+                "node-a",
+                new ApiContentResponseBinding(
+                    lease.AttemptId,
+                    lease.VersionId,
+                    lease.LeaseId,
+                    lease.FencingToken,
+                    segment.SegmentIndex,
+                    segment.SourceSha256 ?? string.Empty,
+                    segment.SourceOffsetSamples,
+                    segment.Samples,
+                    Sha256("typed-pass"u8.ToArray()))));
+
+        public Task<LocalAsrAckResult> AcknowledgeAsync(LocalAsrLease lease, LocalAsrAckRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new LocalAsrAckResult(LocalAsrAckStatus.Accepted));
+
+        public Task<LocalAsrWithdrawResult> WithdrawAsync(LocalAsrWithdrawRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new LocalAsrWithdrawResult(LocalAsrWithdrawStatus.Withdrawn));
     }
 }

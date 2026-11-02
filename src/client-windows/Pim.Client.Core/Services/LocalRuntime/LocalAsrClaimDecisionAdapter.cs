@@ -3,9 +3,9 @@ using Pim.Client.Core.Models.LocalRuntime;
 namespace Pim.Client.Core.Services.LocalRuntime;
 
 /// <summary>
-/// Freezes a claim's local resource verdict before any claim transport call. The
-/// current generated API client has no resource-decision field, so its legacy path
-/// remains unchanged and the durable association stays pending for typed integration.
+/// Freezes a claim's local resource verdict before any claim transport call. A typed
+/// transport receives both passing and failing decisions atomically; the legacy
+/// generated API path remains unchanged until its backend contract is available.
 /// </summary>
 public sealed class LocalAsrClaimDecisionAdapter(
     ILocalAsrNodeTransport transport,
@@ -45,10 +45,10 @@ public sealed class LocalAsrClaimDecisionAdapter(
             || !string.Equals(request.IdempotencyKey, frozen.IdempotencyKey, StringComparison.Ordinal))
             return new(LocalAsrClaimStatus.Rejected, null, LocalRuntimeReasonCodes.ScopeChanged);
 
-        if (!frozen.Decision.Passed)
+        if (!frozen.Decision.Passed && transport is not ILocalAsrResourceDecisionTransport)
         {
-            // A failed local gate never sends a claim. Keep the immutable decision
-            // pending so retries cannot turn the same key into a different verdict.
+            // Legacy transports cannot report resource feedback. Keep the immutable
+            // decision pending so retries cannot turn the same key into a new verdict.
             return new(LocalAsrClaimStatus.ResourceBlocked, null,
                 string.Join(",", frozen.Decision.Reasons));
         }
@@ -60,6 +60,13 @@ public sealed class LocalAsrClaimDecisionAdapter(
             result = await decisionTransport.ClaimWithResourceDecisionAsync(
                     request with { ResourceDecision = frozen.Decision }, frozen.Decision, cancellationToken)
                 .ConfigureAwait(false);
+            if (!frozen.Decision.Passed
+                && (result.Status == LocalAsrClaimStatus.Claimed || result.Task is not null))
+            {
+                // A rejected resource decision must never be allowed to carry a lease
+                // into the worker, even if a faulty server adapter returns one.
+                return new(LocalAsrClaimStatus.Rejected, null, "resource_decision_claimed_despite_block");
+            }
         }
         else
         {

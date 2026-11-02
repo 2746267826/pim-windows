@@ -5,7 +5,7 @@ namespace Pim.Client.Core.Services.LocalRuntime;
 
 /// <summary>
 /// Durable owner/node/key association for claim-time resource decisions. It freezes
-/// the local evaluator result while the typed API operation is being integrated.
+/// the local evaluator result until an accepting typed transport acknowledges it.
 /// </summary>
 public sealed class LocalAsrResourceDecisionOutbox
 {
