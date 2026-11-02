@@ -443,6 +443,7 @@ public sealed class CloudNoteMaterialService
                     parsed,
                     noteJson,
                     serverVersion.InputJson,
+                    serverVersion.ManifestJson,
                     stagedFiles,
                     stagingDirectory,
                     _restoreLimits,
@@ -820,6 +821,7 @@ public sealed class CloudNoteMaterialService
         ServerNoteMaterialRestorePackage parsed,
         string noteJson,
         string inputJson,
+        string manifestJson,
         IReadOnlyDictionary<string, string> stagedFiles,
         string stagingDirectory,
         LocalNoteImportLimits restoreLimits,
@@ -850,6 +852,9 @@ public sealed class CloudNoteMaterialService
         };
         var materials = new List<LocalNoteServerMaterialInput>();
         var ids = new HashSet<Guid>();
+        var materialIdsByPath = new Dictionary<string, Guid>(StringComparer.Ordinal);
+        var blockMaterials = new Dictionary<string, IReadOnlyList<Guid>>(StringComparer.Ordinal);
+        var recordingManifestJsonByPath = new Dictionary<string, string>(StringComparer.Ordinal);
         var photoIndex = 0;
         var inkIndex = 0;
         foreach (var block in parsed.Blocks)
@@ -857,6 +862,7 @@ public sealed class CloudNoteMaterialService
             cancellationToken.ThrowIfCancellationRequested();
             if (block.Kind == "markdown")
             {
+                blockMaterials.Add(block.Id, []);
                 continue;
             }
 
@@ -888,6 +894,8 @@ public sealed class CloudNoteMaterialService
                     stagedFiles[materialFile.Path],
                     ToPixel(block.Width),
                     ToPixel(block.Height)));
+                materialIdsByPath.Add(materialFile.Path, materialId);
+                blockMaterials.Add(block.Id, [materialId]);
                 continue;
             }
 
@@ -904,8 +912,10 @@ public sealed class CloudNoteMaterialService
                 .ConfigureAwait(false);
             var inkBytes = Encoding.UTF8.GetBytes(localInk);
             var inkSha = Convert.ToHexString(SHA256.HashData(inkBytes)).ToLowerInvariant();
+            var sourceMaterialId = Guid.NewGuid();
+            var previewMaterialId = Guid.NewGuid();
             materials.Add(new LocalNoteServerMaterialInput(
-                Guid.NewGuid(),
+                sourceMaterialId,
                 LocalNoteMaterialKind.HandwritingSource,
                 $"手写-{inkIndex:D3}.ink.json",
                 inkSha,
@@ -915,7 +925,7 @@ public sealed class CloudNoteMaterialService
                 ToPixel(block.Width),
                 ToPixel(block.Height)));
             materials.Add(new LocalNoteServerMaterialInput(
-                Guid.NewGuid(),
+                previewMaterialId,
                 LocalNoteMaterialKind.Handwriting,
                 $"手写-{inkIndex:D3}.png",
                 materialFile.Sha256,
@@ -924,6 +934,8 @@ public sealed class CloudNoteMaterialService
                 stagedFiles[materialFile.Path],
                 ToPixel(block.Width),
                 ToPixel(block.Height)));
+            materialIdsByPath.Add(materialFile.Path, previewMaterialId);
+            blockMaterials.Add(block.Id, [sourceMaterialId, previewMaterialId]);
         }
 
         var recordingManifests = parsed.Files
@@ -934,39 +946,19 @@ public sealed class CloudNoteMaterialService
         {
             throw new InvalidDataException("服务器 input 缺少 recordings 数组。");
         }
-        var inputRecordings = rawRecordings.EnumerateArray()
-            .ToDictionary(
-                recording => Guid.Parse(recording.GetProperty("id").GetString()!),
-                recording => recording);
-        if (inputRecordings.Count != recordingManifests.Length
-            || parsed.Files.Count(file => file.Kind == "AudioChunk") != recordingManifests.Length)
+        var inputRecordings = new Dictionary<Guid, System.Text.Json.JsonElement>();
+        foreach (var recording in rawRecordings.EnumerateArray())
         {
-            throw new InvalidDataException("服务器录音 input/manifest/音频分片数量不一致。");
+            var recordingId = Guid.Parse(recording.GetProperty("id").GetString()!);
+            if (!inputRecordings.TryAdd(recordingId, recording))
+            {
+                throw new InvalidDataException("服务器录音 input 包含重复 recordingId。");
+            }
         }
         foreach (var recordingManifest in recordingManifests)
         {
             consumed.Add(recordingManifest.Path);
-            var chunks = parsed.Files
-                .Where(file => file.Kind == "AudioChunk"
-                    && string.Equals(
-                        file.RecordingId,
-                        recordingManifest.RecordingId,
-                        StringComparison.Ordinal))
-                .ToArray();
-            if (chunks.Length != 1)
-            {
-                throw new InvalidDataException(
-                    "当前客户端只支持 schema-v1 单分片录音恢复；未保存不完整副本。");
-            }
-
-            var chunk = chunks[0];
-            consumed.Add(chunk.Path);
             var recordingId = Guid.Parse(recordingManifest.RecordingId!);
-            if (!ids.Add(recordingId))
-            {
-                throw new InvalidDataException("服务器录音材料标识重复。");
-            }
-
             if (!inputRecordings.TryGetValue(recordingId, out var recordingJson))
             {
                 throw new InvalidDataException("服务器录音 input 缺少对应 manifest 身份。");
@@ -984,29 +976,91 @@ public sealed class CloudNoteMaterialService
                 throw new InvalidDataException("服务器 recording manifest 与 input 记录不一致。");
             }
 
-            if (Guid.Parse(recordingJson.GetProperty("noteId").GetString()!) != parsed.NoteId
+            if (Guid.Parse(recordingJson.GetProperty("id").GetString()!) != recordingId
+                || Guid.Parse(recordingJson.GetProperty("noteId").GetString()!) != parsed.NoteId
                 || recordingJson.GetProperty("schemaVersion").GetInt32() != 1
                 || !string.Equals(
                     recordingJson.GetProperty("phase").GetString(),
                     "Completed",
                     StringComparison.Ordinal)
+                || !recordingJson.TryGetProperty("currentSegment", out var currentSegmentValue)
+                || !currentSegmentValue.TryGetInt32(out var currentSegment)
+                || currentSegment <= 0
                 || !recordingJson.TryGetProperty("chunks", out var recordingChunks)
                 || recordingChunks.ValueKind != System.Text.Json.JsonValueKind.Array
-                || recordingChunks.GetArrayLength() != 1
-                || recordingChunks[0].GetProperty("samples").GetInt64() != chunk.Samples)
+                || recordingChunks.GetArrayLength() == 0)
             {
-                throw new InvalidDataException("服务器录音 input 与单分片材料元数据不一致。");
+                throw new InvalidDataException("服务器录音 input 与 manifest 身份或状态无效。");
             }
 
-            materials.Add(new LocalNoteServerMaterialInput(
-                recordingId,
-                LocalNoteMaterialKind.Recording,
-                $"录音-{materials.Count + 1:D3}.wav",
-                chunk.Sha256,
-                "audio/wav",
-                chunk.SizeBytes,
-                stagedFiles[chunk.Path],
-                ExpectedSamples: chunk.Samples));
+            var audioFiles = parsed.Files
+                .Where(file => file.Kind == "AudioChunk"
+                    && string.Equals(file.RecordingId, recordingId.ToString("D"), StringComparison.Ordinal))
+                .ToArray();
+            var previousSegment = 0;
+            var expectedChunkIndex = 0;
+            var chunkNumber = 0;
+            foreach (var chunk in recordingChunks.EnumerateArray())
+            {
+                var segment = chunk.GetProperty("segment").GetInt32();
+                var chunkIndex = chunk.GetProperty("index").GetInt32();
+                var samples = chunk.GetProperty("samples").GetInt64();
+                if (segment < 1 || segment > currentSegment || chunkIndex < 1 || samples <= 0
+                    || previousSegment == 0 && (segment != 1 || chunkIndex != 1)
+                    || segment < previousSegment
+                    || (segment == previousSegment && chunkIndex != expectedChunkIndex + 1)
+                    || (segment > previousSegment && chunkIndex != 1)
+                    || (previousSegment > 0 && segment > previousSegment + 1))
+                {
+                    throw new InvalidDataException("服务器录音 chunks 顺序、segment 或采样数无效。");
+                }
+
+                var matches = audioFiles.Where(file => file.Segment == segment
+                    && file.ChunkIndex == chunkIndex
+                    && file.Samples == samples).ToArray();
+                if (matches.Length != 1 || !consumed.Add(matches[0].Path))
+                {
+                    throw new InvalidDataException("服务器录音 manifest 与材料文件缺失、重复或不匹配。");
+                }
+
+                var materialFile = matches[0];
+                var materialId = Guid.NewGuid();
+                if (!ids.Add(materialId))
+                {
+                    throw new InvalidDataException("服务器录音分片材料标识重复。");
+                }
+
+                chunkNumber++;
+                materials.Add(new LocalNoteServerMaterialInput(
+                    materialId,
+                    LocalNoteMaterialKind.RecordingSegment,
+                    $"录音-{materials.Count + 1:D3}-s{segment:D4}-c{chunkIndex:D6}.wav",
+                    materialFile.Sha256,
+                    "audio/wav",
+                    materialFile.SizeBytes,
+                    stagedFiles[materialFile.Path],
+                    ExpectedSamples: samples,
+                    RecordingId: recordingId,
+                    RecordingSegment: segment,
+                    RecordingChunkIndex: chunkIndex));
+                materialIdsByPath.Add(materialFile.Path, materialId);
+                previousSegment = segment;
+                expectedChunkIndex = chunkIndex;
+            }
+
+            if (chunkNumber != audioFiles.Length || previousSegment != currentSegment)
+            {
+                throw new InvalidDataException("服务器录音材料包含 manifest 未引用的分片。");
+            }
+
+            recordingManifestJsonByPath.Add(recordingManifest.Path, recordingManifestText);
+            inputRecordings.Remove(recordingId);
+        }
+
+        if (inputRecordings.Count != 0
+            || parsed.Files.Any(file => file.Kind == "AudioChunk" && !consumed.Contains(file.Path)))
+        {
+            throw new InvalidDataException("服务器录音 input、manifest 与所有分片文件不一致。");
         }
 
         if (consumed.Count != parsed.Files.Count)
@@ -1014,15 +1068,69 @@ public sealed class CloudNoteMaterialService
             throw new InvalidDataException("服务器材料清单包含客户端无法映射的文件。");
         }
 
+        var serverSource = new LocalNoteServerSource(
+            parsed.NoteId,
+            parsed.VersionId,
+            inputJson,
+            manifestJson,
+            noteJson,
+            parsed.Markdown,
+            parsed.Blocks.Select(block => new LocalNoteServerSourceBlock(
+                block.Id,
+                block.Kind,
+                block.RawJson,
+                blockMaterials[block.Id])).ToArray(),
+            parsed.Files.Select(file => new LocalNoteServerSourceFile(
+                file.Path,
+                file.Kind,
+                file.Sha256,
+                file.SizeBytes,
+                file.BlockId,
+                file.RecordingId,
+                file.Segment,
+                file.ChunkIndex,
+                file.Samples,
+                materialIdsByPath.GetValueOrDefault(file.Path),
+                file.Kind switch
+                {
+                    "Document" => noteJson,
+                    "Markdown" => parsed.Markdown,
+                    "RecordingManifest" => recordingManifestJsonByPath[file.Path],
+                    _ => null,
+                })).ToArray());
+        ServerNoteSourceIntegrity.Validate(
+            serverSource,
+            parsed.Title,
+            parsed.Markdown,
+            materials.Select(material => new LocalNoteMaterial
+            {
+                MaterialId = material.MaterialId,
+                Kind = material.Kind,
+                DisplayName = material.DisplayName,
+                ContentSha256 = material.ContentSha256,
+                RelativePath = string.Empty,
+                MediaType = material.MediaType,
+                Length = material.Length,
+                AddedAt = DateTimeOffset.UnixEpoch,
+                Width = material.Width,
+                Height = material.Height,
+                DurationMilliseconds = material.DurationMilliseconds,
+                RecordingId = material.RecordingId,
+                RecordingSegment = material.RecordingSegment,
+                RecordingChunkIndex = material.RecordingChunkIndex,
+                RecordingSamples = material.ExpectedSamples,
+            }).ToArray());
+
         return new LocalNoteServerRestorePackage(
             parsed.NoteId,
             parsed.VersionId,
             parsed.Title,
             parsed.Markdown,
-            materials);
+            materials,
+            serverSource);
     }
 
-    private static string ConvertServerInkToLocalSource(
+    internal static string ConvertServerInkToLocalSource(
         string inkJson,
         double? blockWidth,
         double? blockHeight)

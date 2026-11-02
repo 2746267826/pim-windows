@@ -13,7 +13,8 @@ public sealed record ServerNoteMaterialRestoreBlock(
     string? Text,
     string? InkJson,
     double? Width,
-    double? Height);
+    double? Height,
+    string RawJson);
 
 public sealed record ServerNoteMaterialRestoreFile(
     string Path,
@@ -101,7 +102,7 @@ public static class ServerNoteMaterialRestoreParser
                 noteId,
                 versionId,
                 title,
-                blocks.Single(block => block.Kind == "markdown").Text!,
+                ProjectMarkdown(blocks, files),
                 blocks,
                 files);
         }
@@ -156,7 +157,8 @@ public static class ServerNoteMaterialRestoreParser
                     RequiredString(raw, null, "text", "Text"),
                     null,
                     null,
-                    null));
+                    null,
+                    raw.GetRawText()));
                 continue;
             }
 
@@ -178,7 +180,8 @@ public static class ServerNoteMaterialRestoreParser
                     null,
                     null,
                     OptionalNumber(raw, "width", "Width"),
-                    OptionalNumber(raw, "height", "Height")));
+                    OptionalNumber(raw, "height", "Height"),
+                    raw.GetRawText()));
                 continue;
             }
 
@@ -199,7 +202,8 @@ public static class ServerNoteMaterialRestoreParser
                 null,
                 ink.GetRawText(),
                 width,
-                height));
+                height,
+                raw.GetRawText()));
         }
 
         return blocks;
@@ -270,10 +274,9 @@ public static class ServerNoteMaterialRestoreParser
         IReadOnlyList<ServerNoteMaterialRestoreFile> files,
         string? markdown)
     {
-        var markdownBlocks = blocks.Where(block => block.Kind == "markdown").ToArray();
-        if (markdownBlocks.Length != 1)
+        if (!blocks.Any(block => block.Kind == "markdown"))
         {
-            throw new LocalNoteStoreException("服务器 note.json 必须包含唯一 Markdown 正文块。");
+            throw new LocalNoteStoreException("服务器 note.json 必须包含 Markdown 正文块。");
         }
 
         var byBlock = files
@@ -367,21 +370,34 @@ public static class ServerNoteMaterialRestoreParser
             var blockFiles = files
                 .Where(file => !string.IsNullOrWhiteSpace(file.BlockId))
                 .ToDictionary(file => file.BlockId!, StringComparer.Ordinal);
-            var documentSections = new List<string> { markdownBlocks[0].Text! };
-            foreach (var block in blocks.Where(block => block.Kind is "photo" or "ink"))
-            {
-                var path = blockFiles[block.Id].Path;
-                documentSections.Add(block.Kind == "photo"
-                    ? $"![照片]({path})"
-                    : $"![手写卡片]({path})\n<!-- 可编辑笔迹、身份和尺寸保存在同包 note.json 中 -->");
-            }
-
-            var expected = string.Join("\n\n", documentSections);
+            var expected = ProjectMarkdown(blocks, files);
             if (!string.Equals(expected, markdown, StringComparison.Ordinal))
             {
                 throw new LocalNoteStoreException("服务器 note.json、manifest 与 document.md 正文不一致。");
             }
         }
+    }
+
+    private static string ProjectMarkdown(
+        IReadOnlyList<ServerNoteMaterialRestoreBlock> blocks,
+        IReadOnlyList<ServerNoteMaterialRestoreFile> files)
+    {
+        var blockFiles = files
+            .Where(file => !string.IsNullOrWhiteSpace(file.BlockId))
+            .ToDictionary(file => file.BlockId!, StringComparer.Ordinal);
+        var sections = new List<string>(blocks.Count);
+        foreach (var block in blocks)
+        {
+            sections.Add(block.Kind switch
+            {
+                "markdown" => block.Text!,
+                "photo" => $"![照片]({blockFiles[block.Id].Path})",
+                "ink" => $"![手写卡片]({blockFiles[block.Id].Path})\n<!-- 可编辑笔迹、身份和尺寸保存在同包 note.json 中 -->",
+                _ => throw new LocalNoteStoreException("服务器笔记块类型不受支持。"),
+            });
+        }
+
+        return string.Join("\n\n", sections);
     }
 
     private static bool IsSafeRelativePath(string path)

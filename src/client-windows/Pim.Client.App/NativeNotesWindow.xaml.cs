@@ -360,6 +360,17 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        if (_current.IsServerSourceReadOnly && !_recording.IsRecording)
+        {
+            MessageBox.Show(
+                this,
+                "该云端混排版本在当前编辑器中只读。请导出完整原件后，在本机笔记中开始录音。",
+                "笔记版本只读",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
         try
         {
             if (_recording.IsRecording)
@@ -431,6 +442,7 @@ public partial class NativeNotesWindow : Window
             if (state.IsRecording)
             {
                 RecordingStatusText.Text = $"录音中 {state.Elapsed:mm\\:ss} · 实际输入峰值 {state.PeakLevel:P0}";
+                RecordButton.IsEnabled = true;
                 return;
             }
 
@@ -442,6 +454,11 @@ public partial class NativeNotesWindow : Window
             if (state.Error is not null)
             {
                 RecordingStatusText.Text = state.Error;
+            }
+
+            if (RecordButton is not null)
+            {
+                RecordButton.IsEnabled = _current is null || !_current.IsServerSourceReadOnly;
             }
         });
     }
@@ -542,10 +559,24 @@ public partial class NativeNotesWindow : Window
         }
 
         MaterialsList.ItemsSource = _current.Materials;
-        var recordings = _current.Materials.Count(item => item.Kind == LocalNoteMaterialKind.Recording);
+        var recordings = _current.Materials
+            .Where(item => item.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
+            .Select(item => item.RecordingId ?? item.MaterialId)
+            .Distinct()
+            .Count();
         var photos = _current.Materials.Count(item => item.Kind == LocalNoteMaterialKind.Photo);
         var handwriting = _current.Materials.Count(item => item.Kind == LocalNoteMaterialKind.Handwriting);
         MaterialsText.Text = $"固定版本 {_current.CurrentVersionId.ToString("N")[..8]} · 照片 {photos} · 手写 {handwriting} · 音频 {recordings}";
+        TitleBox.IsReadOnly = _current.IsServerSourceReadOnly;
+        MarkdownBox.IsReadOnly = _current.IsServerSourceReadOnly;
+        AddPhotoButton.IsEnabled = !_current.IsServerSourceReadOnly;
+        AddHandwritingButton.IsEnabled = !_current.IsServerSourceReadOnly;
+        AddRecordingButton.IsEnabled = !_current.IsServerSourceReadOnly;
+        RecordButton.IsEnabled = _recording.IsRecording || !_current.IsServerSourceReadOnly;
+        if (_current.IsServerSourceReadOnly)
+        {
+            MaterialsText.Text += " · 云端混排原件只读，导出保留完整块序";
+        }
     }
 
     private void ShowEmptyEditor()
@@ -558,6 +589,12 @@ public partial class NativeNotesWindow : Window
         MarkdownBox.Text = string.Empty;
         TitleBox.IsEnabled = false;
         MarkdownBox.IsEnabled = false;
+        TitleBox.IsReadOnly = false;
+        MarkdownBox.IsReadOnly = false;
+        AddPhotoButton.IsEnabled = false;
+        AddHandwritingButton.IsEnabled = false;
+        AddRecordingButton.IsEnabled = false;
+        RecordButton.IsEnabled = _recording.IsRecording;
         _loading = false;
         MaterialsText.Text = "选择或新建笔记以开始";
         MaterialsList.ItemsSource = null;
