@@ -1,6 +1,13 @@
+using System.Reflection;
+using System.Runtime.ExceptionServices;
+using System.Threading;
+using System.Windows;
+using System.Windows.Controls;
 using Pim.Client.App;
 using Pim.Client.Core.Contract;
 using Pim.Client.Core.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Application = System.Windows.Application;
 using Xunit;
 
 namespace Pim.Client.App.Tests;
@@ -92,6 +99,87 @@ public sealed class AppKnowledgeUiStateTests
         Assert.DoesNotContain(descendant, editParents);
     }
 
+    [Fact]
+    public void BuiltinCategoryIsReadonlyThenNewCategoryIsEditableWithBuiltinParentWithoutNetwork()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var app = new Application();
+                app.Resources.MergedDictionaries.Add(new ResourceDictionary
+                {
+                    Source = new Uri("pack://application:,,,/Pim.Client.App;component/Styles/Theme.xaml"),
+                });
+
+                var handler = new NoNetworkHandler();
+                var api = new ApiClient(() => handler);
+                var knowledge = new AppKnowledgeService(api, () => null);
+                using var provider = new ServiceCollection()
+                    .AddSingleton(api)
+                    .AddSingleton(knowledge)
+                    .BuildServiceProvider();
+                var servicesProperty = typeof(App).GetProperty(nameof(App.Services), BindingFlags.Public | BindingFlags.Static)!;
+                var previousServices = servicesProperty.GetValue(null);
+                servicesProperty.SetValue(null, provider);
+
+                try
+                {
+                    var window = new AppKnowledgeWindow();
+                    var builtin = Category(Guid.Parse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"));
+                    builtin.IsBuiltin = true;
+                    var rowType = typeof(AppKnowledgeWindow).GetNestedType("CategoryRow", BindingFlags.NonPublic)!;
+                    var fromNode = rowType.GetMethod("From", BindingFlags.Public | BindingFlags.Static)!;
+                    var row = fromNode.Invoke(null, [builtin])!;
+                    var tree = Assert.IsType<TreeView>(window.FindName("CategoryTree"));
+                    tree.ItemsSource = new[] { row };
+
+                    typeof(AppKnowledgeWindow).GetMethod("OnCategorySelected", BindingFlags.NonPublic | BindingFlags.Instance)!
+                        .Invoke(window, [tree, new RoutedPropertyChangedEventArgs<object>(null!, row)]);
+
+                    Assert.False(Assert.IsType<TextBox>(window.FindName("CategoryNameBox")).IsEnabled);
+                    Assert.False(Assert.IsType<TextBox>(window.FindName("CategoryColorBox")).IsEnabled);
+                    Assert.False(Assert.IsType<ComboBox>(window.FindName("ProductivityBox")).IsEnabled);
+                    Assert.False(Assert.IsType<ComboBox>(window.FindName("ParentCategoryBox")).IsEnabled);
+
+                    typeof(AppKnowledgeWindow).GetMethod("OnNewCategory", BindingFlags.NonPublic | BindingFlags.Instance)!
+                        .Invoke(window, [null, new RoutedEventArgs()]);
+
+                    Assert.True(Assert.IsType<TextBox>(window.FindName("CategoryNameBox")).IsEnabled);
+                    Assert.True(Assert.IsType<TextBox>(window.FindName("CategoryColorBox")).IsEnabled);
+                    Assert.True(Assert.IsType<ComboBox>(window.FindName("ProductivityBox")).IsEnabled);
+                    var parentBox = Assert.IsType<ComboBox>(window.FindName("ParentCategoryBox"));
+                    Assert.True(parentBox.IsEnabled);
+                    Assert.Same(row, parentBox.SelectedItem);
+                    Assert.Equal(0, handler.RequestCount);
+
+                    typeof(AppKnowledgeWindow).GetField("_allowClose", BindingFlags.NonPublic | BindingFlags.Instance)!
+                        .SetValue(window, true);
+                    window.Close();
+                }
+                finally
+                {
+                    servicesProperty.SetValue(null, previousServices);
+                    knowledge.Dispose();
+                    app.Shutdown();
+                }
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+
     private static CategoryTreeNode Category(Guid id, List<CategoryTreeNode>? children = null)
         => new()
         {
@@ -105,4 +193,17 @@ public sealed class AppKnowledgeUiStateTests
             IsBuiltin = false,
             Children = children ?? [],
         };
+
+    private sealed class NoNetworkHandler : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            throw new InvalidOperationException("The UI regression test must not send HTTP requests.");
+        }
+    }
 }

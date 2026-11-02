@@ -142,6 +142,10 @@ public partial class AppKnowledgeWindow : Window
         ParentCategoryBox.ItemsSource = parentRows;
         ParentCategoryBox.SelectedItem = parentRows.FirstOrDefault(row => row.Node.Id == _selectedCategory?.Id);
         BuiltinCategoryNotice.Text = "正在新建自定义分类。";
+        CategoryNameBox.IsEnabled = true;
+        CategoryColorBox.IsEnabled = true;
+        ProductivityBox.IsEnabled = true;
+        ParentCategoryBox.IsEnabled = true;
         SaveCategoryButton.IsEnabled = true;
         DeleteCategoryButton.IsEnabled = false;
         _loading = false;
