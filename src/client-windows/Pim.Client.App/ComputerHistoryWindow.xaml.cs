@@ -22,11 +22,22 @@ public partial class ComputerHistoryWindow : Window
     private int _remoteAvailablePage;
 
     public ComputerHistoryWindow()
+        : this(
+            App.Services.GetRequiredService<TrackerHistoryStore>(),
+            App.Services.GetRequiredService<RemoteComputerHistoryService>(),
+            App.Services.GetRequiredService<ApiClient>())
+    {
+    }
+
+    internal ComputerHistoryWindow(
+        TrackerHistoryStore store,
+        RemoteComputerHistoryService remoteHistory,
+        ApiClient api)
     {
         InitializeComponent();
-        _store = App.Services.GetRequiredService<TrackerHistoryStore>();
-        _remoteHistory = App.Services.GetRequiredService<RemoteComputerHistoryService>();
-        _api = App.Services.GetRequiredService<ApiClient>();
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _remoteHistory = remoteHistory ?? throw new ArgumentNullException(nameof(remoteHistory));
+        _api = api ?? throw new ArgumentNullException(nameof(api));
         _api.ExternalScopeChanged += OnExternalScopeChanged;
         RemotePolicyText.Text =
             $"只查询当前账号可见的服务器记录；一次最多 31 天，最多 {RemoteComputerHistoryService.MaximumPages} 页 × "
@@ -104,9 +115,14 @@ public partial class ComputerHistoryWindow : Window
     private async void OnModeChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!ReferenceEquals(e.OriginalSource, HistoryModeTabs)
-            || !ReferenceEquals(sender, HistoryModeTabs)
-            || !IsLoaded
-            || HistoryModeTabs.SelectedIndex != 1)
+            || !ReferenceEquals(sender, HistoryModeTabs))
+            return;
+
+        ShowSelectedHistoryDetail();
+        if (!IsLoaded)
+            return;
+
+        if (HistoryModeTabs.SelectedIndex != 1)
             return;
 
         if (RemoteDeviceBox.Items.Count <= 1)
@@ -169,7 +185,7 @@ public partial class ComputerHistoryWindow : Window
                 RemoteDeviceBox.ItemsSource = new[] { new RemoteDeviceChoice("全部设备", null) };
                 RemoteDeviceBox.SelectedIndex = 0;
                 RemoteSummaryText.Text = "账号或服务器已切换；服务器历史已清空，请重新查询。";
-                DetailText.Text = "选择左侧记录查看详情。";
+                ShowSelectedHistoryDetail();
                 _remotePage = 1;
             }
             finally
@@ -236,7 +252,8 @@ public partial class ComputerHistoryWindow : Window
             RemoteHistoryList.ItemsSource = null;
             PreviousPageButton.IsEnabled = false;
             NextPageButton.IsEnabled = false;
-            DetailText.Text = "选择左侧记录查看详情。";
+            if (HistoryModeTabs.SelectedIndex == 1)
+                DetailText.Text = "选择左侧记录查看详情。";
             RemoteSummaryText.Text = "请选择开始与结束日期。空结果不代表设备采集或上传完整。";
             return;
         }
@@ -275,7 +292,7 @@ public partial class ComputerHistoryWindow : Window
             PreviousPageButton.IsEnabled = result.Page > 1;
             _remoteAvailablePage = Math.Min(result.TotalPages, RemoteComputerHistoryService.MaximumPages);
             NextPageButton.IsEnabled = result.Page < _remoteAvailablePage;
-            if (rows.Length == 0)
+            if (rows.Length == 0 && HistoryModeTabs.SelectedIndex == 1)
                 DetailText.Text = "当前页没有记录。";
         }
         catch (Exception ex)
@@ -286,7 +303,8 @@ public partial class ComputerHistoryWindow : Window
                 _remoteAvailablePage = 0;
                 PreviousPageButton.IsEnabled = false;
                 NextPageButton.IsEnabled = false;
-                DetailText.Text = "服务器查询失败；本机历史不受影响。";
+                if (HistoryModeTabs.SelectedIndex == 1)
+                    DetailText.Text = "服务器查询失败；本机历史不受影响。";
                 RemoteSummaryText.Text = ex is ArgumentOutOfRangeException
                     ? ex.Message
                     : $"查询失败：{ex.Message}";
@@ -301,8 +319,29 @@ public partial class ComputerHistoryWindow : Window
 
     private void OnRemoteHistorySelected(object sender, SelectionChangedEventArgs e)
     {
-        if (RemoteHistoryList.SelectedItem is not RemoteComputerHistoryRow row)
+        ShowRemoteHistoryDetail();
+    }
+
+    private void ShowSelectedHistoryDetail()
+    {
+        if (HistoryModeTabs.SelectedIndex == 0)
+            ShowLocalHistoryDetail();
+        else if (HistoryModeTabs.SelectedIndex == 1)
+            ShowRemoteHistoryDetail();
+        else
+            DetailText.Text = "选择左侧记录查看详情。";
+    }
+
+    private void ShowRemoteHistoryDetail()
+    {
+        if (HistoryModeTabs.SelectedIndex != 1)
             return;
+
+        if (RemoteHistoryList.SelectedItem is not RemoteComputerHistoryRow row)
+        {
+            DetailText.Text = "选择左侧记录查看详情。";
+            return;
+        }
 
         var record = row.Record;
         DetailText.Text =
@@ -357,6 +396,7 @@ public partial class ComputerHistoryWindow : Window
                 .ToArray();
             HistoryList.ItemsSource = rows;
             HistoryList.SelectedItem = rows.FirstOrDefault();
+            ShowLocalHistoryDetail();
             var totalSeconds = entries.Sum(entry => entry.DurationSeconds);
             var summary = string.Join(
                 " · ",
@@ -378,13 +418,22 @@ public partial class ComputerHistoryWindow : Window
             }
 
             HistoryList.ItemsSource = null;
-            DetailText.Text = "读取失败；已有本机采集不受影响。";
+            if (HistoryModeTabs.SelectedIndex == 0)
+                DetailText.Text = "读取失败；已有本机采集不受影响。";
             SummaryText.Text = ex.Message;
         }
     }
 
     private void OnHistorySelected(object sender, SelectionChangedEventArgs e)
     {
+        ShowLocalHistoryDetail();
+    }
+
+    private void ShowLocalHistoryDetail()
+    {
+        if (HistoryModeTabs.SelectedIndex != 0)
+            return;
+
         if (HistoryList.SelectedItem is not ComputerHistoryRow row)
         {
             DetailText.Text = "选择左侧记录查看详情。";
