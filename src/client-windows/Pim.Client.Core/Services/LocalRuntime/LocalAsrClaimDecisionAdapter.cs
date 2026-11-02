@@ -22,8 +22,8 @@ public sealed class LocalAsrClaimDecisionAdapter(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return await outbox.FreezeAsync(request.Scope, request.NodeId, request.IdempotencyKey,
-            trigger, decision, sampledAtUtc, cancellationToken).ConfigureAwait(false);
+        return await outbox.FreezeAsync(request, trigger, decision, sampledAtUtc, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public Task<LocalAsrPendingResourceDecision?> FindPendingAsync(
@@ -32,6 +32,12 @@ public sealed class LocalAsrClaimDecisionAdapter(
         string idempotencyKey,
         CancellationToken cancellationToken = default) =>
         outbox.FindPendingAsync(scope, nodeId, idempotencyKey, cancellationToken);
+
+    public Task<IReadOnlyList<LocalAsrPendingResourceDecision>> ListPendingAsync(
+        LocalAccountScope scope,
+        string nodeId,
+        CancellationToken cancellationToken = default) =>
+        outbox.ListPendingAsync(scope, nodeId, cancellationToken);
 
     public async Task<LocalAsrClaimResult> ClaimAsync(
         LocalAsrClaimRequest request,
@@ -45,10 +51,20 @@ public sealed class LocalAsrClaimDecisionAdapter(
             || !string.Equals(request.IdempotencyKey, frozen.IdempotencyKey, StringComparison.Ordinal))
             return new(LocalAsrClaimStatus.Rejected, null, LocalRuntimeReasonCodes.ScopeChanged);
 
+        if (frozen.RequestPayload is null
+            || !string.Equals(request.RuntimeId, frozen.RequestPayload.RuntimeId, StringComparison.Ordinal)
+            || !string.Equals(request.ModelId, frozen.RequestPayload.ModelId, StringComparison.Ordinal)
+            || !string.Equals(request.ModelRevision, frozen.RequestPayload.ModelRevision, StringComparison.Ordinal)
+            || !string.Equals(request.ModelSha256, frozen.RequestPayload.ModelSha256,
+                StringComparison.OrdinalIgnoreCase))
+            return new(LocalAsrClaimStatus.Rejected, null, LocalRuntimeReasonCodes.InvalidConfiguration);
+
         if (!frozen.Decision.Passed && transport is not ILocalAsrResourceDecisionTransport)
         {
-            // Legacy transports cannot report resource feedback. Keep the immutable
-            // decision pending so retries cannot turn the same key into a new verdict.
+            // No request was sent, so a local-only rejection must not pin future
+            // manual attempts behind an intent this transport cannot report.
+            if (!frozen.Acknowledged)
+                await outbox.RemovePendingAsync(frozen, cancellationToken).ConfigureAwait(false);
             return new(LocalAsrClaimStatus.ResourceBlocked, null,
                 string.Join(",", frozen.Decision.Reasons));
         }

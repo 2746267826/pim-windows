@@ -119,9 +119,27 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
             var token = linked.Token;
             var backoffKey = BackoffKey(scope);
             var requestedIdempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey)
-                ? "asr-worker-" + Guid.NewGuid().ToString("N")
+                ? null
                 : idempotencyKey.Trim();
-            if (requestedIdempotencyKey.Length > MaximumIdLength)
+            LocalAsrPendingResourceDecision? activePending = null;
+            if (requestedIdempotencyKey is null)
+            {
+                var pending = await _claimDecisionAdapter.ListPendingAsync(scope, _options.NodeId, token)
+                    .ConfigureAwait(false);
+                activePending = pending.FirstOrDefault();
+                if (activePending is not null && !MatchesCurrentPayload(activePending))
+                {
+                    return LocalAsrWorkerRunResult.WithoutTask(
+                        LocalAsrWorkerRunStatus.Deferred,
+                        "pending-resource-decision-requires-original-model",
+                        activePending.IdempotencyKey);
+                }
+
+                requestedIdempotencyKey = activePending?.IdempotencyKey
+                    ?? "asr-worker-" + Guid.NewGuid().ToString("N");
+            }
+
+            if (requestedIdempotencyKey!.Length > MaximumIdLength)
             {
                 return LocalAsrWorkerRunResult.WithoutTask(
                     LocalAsrWorkerRunStatus.InvalidConfiguration,
@@ -149,6 +167,7 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
                         requestedIdempotencyKey,
                         token)
                     .ConfigureAwait(false);
+                existing ??= activePending;
                 if (existing is not null)
                 {
                     frozen = new LocalAsrFrozenDecisionResult(existing, IsReplay: true);
@@ -306,6 +325,17 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
             _runGate.Release();
         }
     }
+
+    private bool MatchesCurrentPayload(LocalAsrPendingResourceDecision pending) =>
+        pending.RequestPayload is not null
+        && string.Equals(pending.RequestPayload.RuntimeId, _options.RuntimeManifest.RuntimeId,
+            StringComparison.Ordinal)
+        && string.Equals(pending.RequestPayload.ModelId, _options.ModelManifest.ModelId,
+            StringComparison.Ordinal)
+        && string.Equals(pending.RequestPayload.ModelRevision, _options.ModelManifest.Revision,
+            StringComparison.Ordinal)
+        && string.Equals(pending.RequestPayload.ModelSha256, _options.ModelManifest.Sha256,
+            StringComparison.OrdinalIgnoreCase);
 
     public async Task<LocalAsrScopeSwitchResult> SwitchScopeAsync(
         LocalAccountScope? newScope,

@@ -20,17 +20,16 @@ public sealed class LocalAsrResourceDecisionOutbox
     }
 
     public async Task<LocalAsrFrozenDecisionResult> FreezeAsync(
-        LocalAccountScope scope,
-        string nodeId,
-        string idempotencyKey,
+        LocalAsrClaimRequest request,
         LocalAsrWorkTrigger trigger,
         ResourceDecision decision,
         DateTimeOffset sampledAtUtc,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Scope);
         ArgumentNullException.ThrowIfNull(decision);
-        ValidateIdentity(nodeId, idempotencyKey);
+        ValidateIdentity(request.NodeId, request.IdempotencyKey);
         var reasons = decision.Reasons?.Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal).ToArray()
             ?? throw new ArgumentException("resource decision reasons are required", nameof(decision));
@@ -38,20 +37,30 @@ public sealed class LocalAsrResourceDecisionOutbox
             throw new ArgumentException("resource decision payload is inconsistent", nameof(decision));
 
         var pending = new LocalAsrPendingResourceDecision(
-            scope.ServerBaseAddress,
-            scope.OwnerIdentity,
-            nodeId,
-            idempotencyKey,
+            request.Scope.ServerBaseAddress,
+            request.Scope.OwnerIdentity,
+            request.NodeId,
+            request.IdempotencyKey,
             new LocalAsrFrozenResourceDecision(
                 trigger == LocalAsrWorkTrigger.Automatic,
                 decision.Satisfied,
                 Array.AsReadOnly(reasons),
-                sampledAtUtc.ToUniversalTime()));
-        var path = PendingPath(scope, nodeId, idempotencyKey);
+                sampledAtUtc.ToUniversalTime()),
+            new LocalAsrClaimPayload(
+                request.RuntimeId,
+                request.ModelId,
+                request.ModelRevision,
+                request.ModelSha256));
+        var path = PendingPath(request.Scope, request.NodeId, request.IdempotencyKey);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        if (File.Exists(path))
-            return new(await ReadAndValidateAsync(path, scope, nodeId, idempotencyKey, cancellationToken)
-                .ConfigureAwait(false), IsReplay: true);
+        var existing = await FindPendingAsync(request.Scope, request.NodeId, request.IdempotencyKey,
+            cancellationToken).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            if (!PayloadEquals(existing.RequestPayload, pending.RequestPayload))
+                throw new InvalidDataException("claim idempotency key was reused with a different payload");
+            return new(existing, IsReplay: true);
+        }
 
         var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
@@ -63,10 +72,16 @@ public sealed class LocalAsrResourceDecisionOutbox
                 File.Move(temp, path, overwrite: false);
                 return new(Snapshot(pending), IsReplay: false);
             }
-            catch (IOException) when (File.Exists(path))
+            catch (IOException) when (File.Exists(path) || File.Exists(AcknowledgedPath(
+                       request.Scope, request.NodeId, request.IdempotencyKey)) || File.Exists(
+                       LegacyPath(request.Scope, request.NodeId, request.IdempotencyKey)))
             {
-                return new(await ReadAndValidateAsync(path, scope, nodeId, idempotencyKey, cancellationToken)
-                    .ConfigureAwait(false), IsReplay: true);
+                var raced = await FindPendingAsync(request.Scope, request.NodeId, request.IdempotencyKey,
+                    cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("resource decision disappeared during creation");
+                if (!PayloadEquals(raced.RequestPayload, pending.RequestPayload))
+                    throw new InvalidDataException("claim idempotency key was reused with a different payload");
+                return new(raced, IsReplay: true);
             }
         }
         finally
@@ -83,7 +98,14 @@ public sealed class LocalAsrResourceDecisionOutbox
     {
         ArgumentNullException.ThrowIfNull(scope);
         ValidateIdentity(nodeId, idempotencyKey);
-        var path = PendingPath(scope, nodeId, idempotencyKey);
+        var pendingPath = PendingPath(scope, nodeId, idempotencyKey);
+        var acknowledgedPath = AcknowledgedPath(scope, nodeId, idempotencyKey);
+        var legacyPath = LegacyPath(scope, nodeId, idempotencyKey);
+        var path = File.Exists(acknowledgedPath)
+            ? acknowledgedPath
+            : File.Exists(pendingPath)
+                ? pendingPath
+                : legacyPath;
         if (!File.Exists(path)) return null;
         return await ReadAndValidateAsync(path, scope, nodeId, idempotencyKey, cancellationToken)
             .ConfigureAwait(false);
@@ -96,13 +118,22 @@ public sealed class LocalAsrResourceDecisionOutbox
     {
         ArgumentNullException.ThrowIfNull(scope);
         ValidateIdentity(nodeId, "pending-list");
-        var directory = NodeDirectory(scope, nodeId);
-        if (!Directory.Exists(directory)) return Array.Empty<LocalAsrPendingResourceDecision>();
+        var directory = PendingDirectory(scope, nodeId);
+        var legacyDirectory = NodeDirectory(scope, nodeId);
+        if (!Directory.Exists(directory) && !Directory.Exists(legacyDirectory))
+            return Array.Empty<LocalAsrPendingResourceDecision>();
 
         var result = new List<LocalAsrPendingResourceDecision>();
-        foreach (var path in Directory.EnumerateFiles(directory, "*" + FileNameSuffix))
+        var paths = new List<string>();
+        if (Directory.Exists(directory))
+            paths.AddRange(Directory.EnumerateFiles(directory, "*" + FileNameSuffix));
+        if (Directory.Exists(legacyDirectory))
+            paths.AddRange(Directory.EnumerateFiles(legacyDirectory, "*" + FileNameSuffix));
+        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (File.Exists(Path.Combine(AcknowledgedDirectory(scope, nodeId), Path.GetFileName(path))))
+                continue;
             var pending = await ReadAsync(path, cancellationToken).ConfigureAwait(false);
             if (!string.Equals(pending.ServerBaseAddress, scope.ServerBaseAddress, StringComparison.Ordinal)
                 || !string.Equals(pending.OwnerIdentity, scope.OwnerIdentity, StringComparison.Ordinal)
@@ -112,7 +143,10 @@ public sealed class LocalAsrResourceDecisionOutbox
                 result.Add(Snapshot(pending));
         }
 
-        return result.OrderBy(item => item.IdempotencyKey, StringComparer.Ordinal).ToArray();
+        return result
+            .OrderBy(item => item.Decision.SampledAtUtc)
+            .ThenBy(item => item.IdempotencyKey, StringComparer.Ordinal)
+            .ToArray();
     }
 
     public async Task RemovePendingAsync(
@@ -122,13 +156,32 @@ public sealed class LocalAsrResourceDecisionOutbox
         ArgumentNullException.ThrowIfNull(expected);
         var scope = new LocalAccountScope(expected.ServerBaseAddress, expected.OwnerIdentity);
         ValidateIdentity(expected.NodeId, expected.IdempotencyKey);
-        var path = PendingPath(scope, expected.NodeId, expected.IdempotencyKey);
-        if (!File.Exists(path)) return;
+        var paths = new[]
+        {
+            PendingPath(scope, expected.NodeId, expected.IdempotencyKey),
+            AcknowledgedPath(scope, expected.NodeId, expected.IdempotencyKey),
+            LegacyPath(scope, expected.NodeId, expected.IdempotencyKey),
+        };
+        var acknowledgedPath = paths[1];
+        if (File.Exists(acknowledgedPath))
+        {
+            var acknowledged = await ReadAndValidateAsync(acknowledgedPath, scope, expected.NodeId,
+                expected.IdempotencyKey, cancellationToken).ConfigureAwait(false);
+            if (!Equivalent(acknowledged, expected))
+                throw new InvalidDataException("resource decision outbox entry changed before removal");
+            foreach (var stale in new[] { paths[0], paths[2] }.Where(File.Exists))
+                File.Delete(stale);
+            return;
+        }
+
+        var path = new[] { paths[0], paths[2] }.FirstOrDefault(File.Exists);
+        if (path is null) return;
         var stored = await ReadAndValidateAsync(path, scope, expected.NodeId, expected.IdempotencyKey,
             cancellationToken).ConfigureAwait(false);
         if (!Equivalent(stored, expected))
-            throw new InvalidDataException("resource decision outbox entry changed before acknowledgement");
-        File.Delete(path);
+            throw new InvalidDataException("resource decision outbox entry changed before removal");
+        foreach (var candidate in new[] { paths[0], paths[2] }.Where(File.Exists))
+            File.Delete(candidate);
     }
 
     public async Task MarkAcknowledgedAsync(
@@ -143,11 +196,27 @@ public sealed class LocalAsrResourceDecisionOutbox
 
         var scope = new LocalAccountScope(expected.ServerBaseAddress, expected.OwnerIdentity);
         ValidateIdentity(expected.NodeId, expected.IdempotencyKey);
-        var path = PendingPath(scope, expected.NodeId, expected.IdempotencyKey);
-        if (!File.Exists(path))
-            throw new FileNotFoundException("resource decision outbox entry is missing", path);
+        var pendingPath = PendingPath(scope, expected.NodeId, expected.IdempotencyKey);
+        var acknowledgedPath = AcknowledgedPath(scope, expected.NodeId, expected.IdempotencyKey);
+        var legacyPath = LegacyPath(scope, expected.NodeId, expected.IdempotencyKey);
+        var existingAckPath = File.Exists(acknowledgedPath) ? acknowledgedPath : null;
+        if (existingAckPath is not null)
+        {
+            var existingAcknowledgement = await ReadAndValidateAsync(existingAckPath, scope, expected.NodeId,
+                expected.IdempotencyKey, cancellationToken).ConfigureAwait(false);
+            if (!Equivalent(existingAcknowledgement, expected)
+                || !string.Equals(existingAcknowledgement.AcknowledgedOutcome, outcome, StringComparison.Ordinal))
+                throw new InvalidDataException("resource decision acknowledgement changed");
+            foreach (var candidate in new[] { pendingPath, legacyPath }.Where(File.Exists))
+                File.Delete(candidate);
+            return;
+        }
 
-        var stored = await ReadAndValidateAsync(path, scope, expected.NodeId, expected.IdempotencyKey,
+        var sourcePath = File.Exists(pendingPath) ? pendingPath : legacyPath;
+        if (!File.Exists(sourcePath))
+            throw new FileNotFoundException("resource decision outbox entry is missing", sourcePath);
+
+        var stored = await ReadAndValidateAsync(sourcePath, scope, expected.NodeId, expected.IdempotencyKey,
             cancellationToken).ConfigureAwait(false);
         if (!Equivalent(stored, expected))
             throw new InvalidDataException("resource decision outbox entry changed before acknowledgement");
@@ -164,12 +233,27 @@ public sealed class LocalAsrResourceDecisionOutbox
             AcknowledgedOutcome = outcome,
             AcknowledgedAtUtc = acknowledgedAtUtc.ToUniversalTime(),
         };
-        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        Directory.CreateDirectory(Path.GetDirectoryName(acknowledgedPath)!);
+        var temp = acknowledgedPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             await File.WriteAllTextAsync(temp, JsonSerializer.Serialize(acknowledged), cancellationToken)
                 .ConfigureAwait(false);
-            File.Move(temp, path, overwrite: true);
+            try
+            {
+                File.Move(temp, acknowledgedPath, overwrite: false);
+            }
+            catch (IOException) when (File.Exists(acknowledgedPath))
+            {
+                var concurrent = await ReadAndValidateAsync(acknowledgedPath, scope, expected.NodeId,
+                    expected.IdempotencyKey, cancellationToken).ConfigureAwait(false);
+                if (!Equivalent(concurrent, expected)
+                    || !string.Equals(concurrent.AcknowledgedOutcome, outcome, StringComparison.Ordinal))
+                    throw new InvalidDataException("resource decision acknowledgement changed");
+            }
+
+            foreach (var candidate in new[] { pendingPath, legacyPath }.Where(File.Exists))
+                File.Delete(candidate);
         }
         finally
         {
@@ -213,7 +297,19 @@ public sealed class LocalAsrResourceDecisionOutbox
     }
 
     private string PendingPath(LocalAccountScope scope, string nodeId, string idempotencyKey) =>
+        Path.Combine(PendingDirectory(scope, nodeId), PathSafety.HashAccountKey(idempotencyKey) + FileNameSuffix);
+
+    private string AcknowledgedPath(LocalAccountScope scope, string nodeId, string idempotencyKey) =>
+        Path.Combine(AcknowledgedDirectory(scope, nodeId), PathSafety.HashAccountKey(idempotencyKey) + FileNameSuffix);
+
+    private string LegacyPath(LocalAccountScope scope, string nodeId, string idempotencyKey) =>
         Path.Combine(NodeDirectory(scope, nodeId), PathSafety.HashAccountKey(idempotencyKey) + FileNameSuffix);
+
+    private string PendingDirectory(LocalAccountScope scope, string nodeId) =>
+        Path.Combine(NodeDirectory(scope, nodeId), "pending");
+
+    private string AcknowledgedDirectory(LocalAccountScope scope, string nodeId) =>
+        Path.Combine(NodeDirectory(scope, nodeId), "acknowledged");
 
     private string NodeDirectory(LocalAccountScope scope, string nodeId) =>
         Path.Combine(_root, "accounts", PathSafety.HashAccountKey(scope.ServerBaseAddress + "\n" + scope.OwnerIdentity),
@@ -235,7 +331,17 @@ public sealed class LocalAsrResourceDecisionOutbox
         && left.Decision.IsAutomatic == right.Decision.IsAutomatic
         && left.Decision.Passed == right.Decision.Passed
         && left.Decision.SampledAtUtc == right.Decision.SampledAtUtc
-        && left.Decision.Reasons.SequenceEqual(right.Decision.Reasons, StringComparer.Ordinal);
+        && left.Decision.Reasons.SequenceEqual(right.Decision.Reasons, StringComparer.Ordinal)
+        && PayloadEquals(left.RequestPayload, right.RequestPayload);
+
+    private static bool PayloadEquals(LocalAsrClaimPayload? left, LocalAsrClaimPayload? right) =>
+        left is null
+            ? right is null
+            : right is not null
+                && string.Equals(left.RuntimeId, right.RuntimeId, StringComparison.Ordinal)
+                && string.Equals(left.ModelId, right.ModelId, StringComparison.Ordinal)
+                && string.Equals(left.ModelRevision, right.ModelRevision, StringComparison.Ordinal)
+                && string.Equals(left.ModelSha256, right.ModelSha256, StringComparison.OrdinalIgnoreCase);
 
     private static LocalAsrPendingResourceDecision Snapshot(LocalAsrPendingResourceDecision value) =>
         value with
@@ -253,9 +359,16 @@ public sealed record LocalAsrPendingResourceDecision(
     string NodeId,
     string IdempotencyKey,
     LocalAsrFrozenResourceDecision Decision,
+    LocalAsrClaimPayload? RequestPayload = null,
     bool Acknowledged = false,
     string? AcknowledgedOutcome = null,
     DateTimeOffset? AcknowledgedAtUtc = null);
+
+public sealed record LocalAsrClaimPayload(
+    string RuntimeId,
+    string ModelId,
+    string ModelRevision,
+    string ModelSha256);
 
 public sealed record LocalAsrFrozenDecisionResult(
     LocalAsrPendingResourceDecision Pending,
