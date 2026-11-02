@@ -935,6 +935,95 @@ public class ApiClient
             request,
             ct);
 
+    /// <summary>列出契约批准的笔记派生任务目标目录。</summary>
+    public Task<NoteDerivedDestinationsDtoApiResponse?> GetNoteDerivedDestinationsAsync(
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedDestinationsDtoApiResponse>(
+            ContractOperation.GetNoteDerivedDestinations,
+            null,
+            null,
+            ct);
+
+    /// <summary>读取当前账号任务建议提取记录。</summary>
+    public Task<NoteTaskSuggestionExtractionDtoApiResponse?> StartNoteTaskSuggestionExtractionAsync(
+        StartNoteTaskSuggestionExtractionRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<NoteTaskSuggestionExtractionDtoApiResponse>(
+            ContractOperation.StartNoteTaskSuggestionExtraction,
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
+    /// <summary>读取任务建议提取状态。</summary>
+    public Task<NoteTaskSuggestionExtractionDtoApiResponse?> GetNoteTaskSuggestionExtractionAsync(
+        Guid id,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionExtractionDtoApiResponse>(
+            ContractOperation.GetNoteTaskSuggestionExtraction,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary>按笔记和可选状态读取任务建议。</summary>
+    public Task<NoteTaskSuggestionListDtoApiResponse?> GetNoteTaskSuggestionsAsync(
+        Guid? noteId = null,
+        NoteTaskSuggestionStatusDto? status = null,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionListDtoApiResponse>(
+            ContractOperation.GetNoteTaskSuggestions,
+            null,
+            null,
+            ct,
+            queryValues:
+            [
+                ("noteId", noteId is { } value
+                    ? RequireGuid(value, nameof(noteId)).ToString("D")
+                    : null),
+                ("status", status?.ToString()),
+            ]);
+
+    /// <summary>读取单条任务建议。</summary>
+    public Task<NoteTaskSuggestionDtoApiResponse?> GetNoteTaskSuggestionAsync(
+        Guid id,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionDtoApiResponse>(
+            ContractOperation.GetNoteTaskSuggestion,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary>以 revision CAS 更新任务建议草稿。</summary>
+    public Task<NoteTaskSuggestionDtoApiResponse?> UpdateNoteTaskSuggestionAsync(
+        Guid id,
+        UpdateNoteTaskSuggestionRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionDtoApiResponse>(
+            ContractOperation.UpdateNoteTaskSuggestion,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
+    /// <summary>以稳定 requestId 幂等确认任务建议。</summary>
+    public Task<NoteTaskSuggestionDtoApiResponse?> ConfirmNoteTaskSuggestionAsync(
+        Guid id,
+        ConfirmNoteTaskSuggestionRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionDtoApiResponse>(
+            ContractOperation.ConfirmNoteTaskSuggestion,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
+    /// <summary>按 revision CAS 放弃任务建议。</summary>
+    public Task<NoteTaskSuggestionDtoApiResponse?> DismissNoteTaskSuggestionAsync(
+        Guid id,
+        DismissNoteTaskSuggestionRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionDtoApiResponse>(
+            ContractOperation.DismissNoteTaskSuggestion,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
     // -----------------------------------------------------------------------
     // 内部实现：只接受生成物里的 operation，平静态类型化的请求体
     // -----------------------------------------------------------------------

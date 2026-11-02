@@ -1084,6 +1084,73 @@ public class ContractBoundaryBehaviorTests
                 Guid.Parse("88888888-8888-8888-8888-888888888888"),
                 (SelectNoteDerivedVersionRequest)req!),
             ExpectedPath: "/api/v1/native-notes/derived-artifacts/88888888-8888-8888-8888-888888888888/select"),
+        new("GET", "/api/v1/native-notes/derived-tasks/destinations", null,
+            (api, _) => api.GetNoteDerivedDestinationsAsync()),
+        new("POST", "/api/v1/native-notes/task-suggestions/extractions",
+            new StartNoteTaskSuggestionExtractionRequest
+            {
+                AcknowledgePossibleCharge = true,
+                ArtifactId = "88888888-8888-8888-8888-888888888888",
+                Consent = new NoteDerivedGenerationConsent
+                {
+                    Confirmed = true,
+                    Endpoint = "https://text.example.test",
+                    ModelId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    ModelRevision = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                },
+                ExpectedContentSha256 = new string('a', 64),
+                ExpectedUserId = "11111111-1111-1111-1111-111111111111",
+                NoteId = "11111111-1111-1111-1111-111111111111",
+                RequestId = "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                VersionId = "99999999-9999-9999-9999-999999999999",
+            },
+            (api, req) => api.StartNoteTaskSuggestionExtractionAsync(
+                (StartNoteTaskSuggestionExtractionRequest)req!)),
+        new("GET", "/api/v1/native-notes/task-suggestions/extractions/{id}", null,
+            (api, _) => api.GetNoteTaskSuggestionExtractionAsync(
+                Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc")),
+            ExpectedPath: "/api/v1/native-notes/task-suggestions/extractions/cccccccc-cccc-cccc-cccc-cccccccccccc"),
+        new("GET", "/api/v1/native-notes/task-suggestions", null,
+            (api, _) => api.GetNoteTaskSuggestionsAsync(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                NoteTaskSuggestionStatusDto.Draft),
+            ExpectedQuery: "?noteId=11111111-1111-1111-1111-111111111111&status=Draft"),
+        new("GET", "/api/v1/native-notes/task-suggestions/{id}", null,
+            (api, _) => api.GetNoteTaskSuggestionAsync(
+                Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd")),
+            ExpectedPath: "/api/v1/native-notes/task-suggestions/dddddddd-dddd-dddd-dddd-dddddddddddd"),
+        new("PUT", "/api/v1/native-notes/task-suggestions/{id}",
+            new UpdateNoteTaskSuggestionRequest
+            {
+                Description = "准备议题",
+                Due = DateTimeOffset.Parse("2026-11-03T10:00:00Z"),
+                ExpectedRevision = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                Priority = 3,
+                Title = "整理评审材料",
+            },
+            (api, req) => api.UpdateNoteTaskSuggestionAsync(
+                Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+                (UpdateNoteTaskSuggestionRequest)req!),
+            ExpectedPath: "/api/v1/native-notes/task-suggestions/dddddddd-dddd-dddd-dddd-dddddddddddd"),
+        new("POST", "/api/v1/native-notes/task-suggestions/{id}/confirm",
+            new ConfirmNoteTaskSuggestionRequest
+            {
+                ExpectedRevision = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                RequestId = "ffffffff-ffff-ffff-ffff-ffffffffffff",
+            },
+            (api, req) => api.ConfirmNoteTaskSuggestionAsync(
+                Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+                (ConfirmNoteTaskSuggestionRequest)req!),
+            ExpectedPath: "/api/v1/native-notes/task-suggestions/dddddddd-dddd-dddd-dddd-dddddddddddd/confirm"),
+        new("POST", "/api/v1/native-notes/task-suggestions/{id}/dismiss",
+            new DismissNoteTaskSuggestionRequest
+            {
+                ExpectedRevision = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+            },
+            (api, req) => api.DismissNoteTaskSuggestionAsync(
+                Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+                (DismissNoteTaskSuggestionRequest)req!),
+            ExpectedPath: "/api/v1/native-notes/task-suggestions/dddddddd-dddd-dddd-dddd-dddddddddddd/dismiss"),
     };
 
     private static HttpResponseMessage SuccessfulSegmentResponse()

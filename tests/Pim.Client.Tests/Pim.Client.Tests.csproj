@@ -28,6 +28,7 @@
     <Compile Include="../ClientWindows/AwBucketSelectionTests.cs" />
     <Compile Include="../ClientWindows/BrowserBridgeServiceTests.cs" />
     <Compile Include="../ClientWindows/CloudNoteMaterialServiceTests.cs" />
+    <Compile Include="../ClientWindows/NoteTaskSuggestionServiceTests.cs" />
     <Compile Include="../ClientWindows/NoteMaterialRestoreTests.cs" />
     <Compile Include="../ClientWindows/ContractBoundaryTests.cs" />
     <Compile Include="../ClientWindows/EndpointHeartbeatReporterTests.cs" />
