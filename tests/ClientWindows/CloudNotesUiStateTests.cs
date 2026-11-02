@@ -1,4 +1,5 @@
 using Pim.Client.App;
+using Pim.Client.Core.Services.Notes;
 using Xunit;
 
 namespace Pim.Client.App.Tests;
@@ -83,5 +84,55 @@ public sealed class CloudNotesUiStateTests
         state.ClearDraft();
         Assert.False(state.IsDraftDirty);
         Assert.False(state.IsDraftCurrent(saveTicket));
+    }
+
+    [Fact]
+    public void LoadedTaskSourceRejectsAccountGenerationChangeEvenWhenAccountReturns()
+    {
+        var account = new CloudNoteAccountScope("https://pim.example", "owner-a");
+        var fence = new LoadedCloudArtifactFence(
+            SourceSelectionGeneration: 3,
+            NoteGeneration: 7,
+            NoteId: Guid.NewGuid(),
+            ArtifactId: Guid.NewGuid(),
+            VersionId: Guid.NewGuid(),
+            Account: account,
+            AccountGeneration: 12);
+
+        Assert.True(CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+            fence, 3, 7, fence.NoteId, fence.ArtifactId, fence.VersionId, account, 12));
+        Assert.False(CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+            fence,
+            3,
+            7,
+            fence.NoteId,
+            fence.ArtifactId,
+            fence.VersionId,
+            new CloudNoteAccountScope("https://pim.example", "owner-b"),
+            12));
+        Assert.False(CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+            fence, 3, 7, fence.NoteId, fence.ArtifactId, fence.VersionId, account, 14));
+    }
+
+    [Fact]
+    public void LoadedTaskSourceRejectsChangedNoteVersionAndSelection()
+    {
+        var fence = new LoadedCloudArtifactFence(
+            SourceSelectionGeneration: 3,
+            NoteGeneration: 7,
+            NoteId: Guid.NewGuid(),
+            ArtifactId: Guid.NewGuid(),
+            VersionId: Guid.NewGuid(),
+            Account: new CloudNoteAccountScope("https://pim.example", "owner-a"),
+            AccountGeneration: 12);
+
+        Assert.False(CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+            fence, 4, 7, fence.NoteId, fence.ArtifactId, fence.VersionId, fence.Account, 12));
+        Assert.False(CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+            fence, 3, 8, fence.NoteId, fence.ArtifactId, fence.VersionId, fence.Account, 12));
+        Assert.False(CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+            fence, 3, 7, Guid.NewGuid(), fence.ArtifactId, fence.VersionId, fence.Account, 12));
+        Assert.False(CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+            fence, 3, 7, fence.NoteId, fence.ArtifactId, Guid.NewGuid(), fence.Account, 12));
     }
 }

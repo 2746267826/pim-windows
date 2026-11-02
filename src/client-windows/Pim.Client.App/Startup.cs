@@ -21,6 +21,11 @@ public static class Startup
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PIM", "Notes")));
         services.AddSingleton<ServerNoteMaterialBundleBuilder>();
         services.AddSingleton<CloudNoteMaterialService>();
+        services.AddSingleton<NoteTaskSuggestionService>(sp => new NoteTaskSuggestionService(
+            sp.GetRequiredService<ApiClient>(),
+            sp.GetRequiredService<LocalNoteStore>(),
+            () => sp.GetRequiredService<CloudNoteMaterialService>().CurrentAccountScope,
+            () => sp.GetRequiredService<CloudNoteMaterialService>().AccountGeneration));
         services.AddSingleton<WindowsRecordingService>();
         services.AddSingleton<TrackerLogger>();
         services.AddSingleton<TrackerHistoryStore>();
