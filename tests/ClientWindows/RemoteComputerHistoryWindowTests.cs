@@ -8,6 +8,7 @@ using Pim.Client.App;
 using Pim.Client.Core.Contract;
 using Pim.Client.Core.Models;
 using Pim.Client.Core.Services;
+using WpfApplication = System.Windows.Application;
 using Xunit;
 
 namespace Pim.Client.App.Tests;
@@ -72,7 +73,7 @@ public sealed class RemoteComputerHistoryWindowTests
     {
         RunSta(() =>
         {
-            if (Application.Current is null)
+            if (WpfApplication.Current is null)
             {
                 var app = new App();
                 app.InitializeComponent();
