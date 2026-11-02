@@ -156,6 +156,46 @@ internal static class ServerNoteSourceIntegrity
                 throw InvalidSource();
             }
 
+            var filesByBlockId = new Dictionary<string, List<LocalNoteServerSourceFile>>(StringComparer.Ordinal);
+            var audioByRecordingId = new Dictionary<
+                Guid,
+                Dictionary<(int Segment, int ChunkIndex, long Samples), LocalNoteServerSourceFile>>();
+            foreach (var file in source.Files)
+            {
+                if (!string.IsNullOrWhiteSpace(file.BlockId))
+                {
+                    if (!filesByBlockId.TryGetValue(file.BlockId, out var blockFiles))
+                    {
+                        blockFiles = [];
+                        filesByBlockId.Add(file.BlockId, blockFiles);
+                    }
+
+                    blockFiles.Add(file);
+                }
+
+                if (file.Kind == "AudioChunk")
+                {
+                    if (!Guid.TryParse(file.RecordingId, out var recordingId)
+                        || file.Segment is not { } segment
+                        || file.ChunkIndex is not { } chunkIndex
+                        || file.Samples is not { } samples)
+                    {
+                        throw InvalidSource();
+                    }
+
+                    if (!audioByRecordingId.TryGetValue(recordingId, out var chunks))
+                    {
+                        chunks = [];
+                        audioByRecordingId.Add(recordingId, chunks);
+                    }
+
+                    if (!chunks.TryAdd((segment, chunkIndex, samples), file))
+                    {
+                        throw InvalidSource();
+                    }
+                }
+            }
+
             if (source.Files.Select(file => file.Path)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Count() != source.Files.Count)
@@ -168,13 +208,13 @@ internal static class ServerNoteSourceIntegrity
             var markdownFile = source.Files.Single(file => file.Kind == "Markdown");
             RequireInlineFile(markdownFile, "document.md", source.DocumentMarkdown);
 
-            var manifestRecordings = new Dictionary<Guid, LocalNoteServerSourceFile>();
+            var manifestRecordingIds = new HashSet<Guid>();
             long inlineSourceBytes = 0;
             foreach (var file in source.Files.Where(file => file.Kind == "RecordingManifest"))
             {
                 if (!Guid.TryParse(file.RecordingId, out var recordingId)
                     || file.InlineJson is null
-                    || !manifestRecordings.TryAdd(recordingId, file))
+                    || !manifestRecordingIds.Add(recordingId))
                 {
                     throw InvalidSource();
                 }
@@ -197,7 +237,12 @@ internal static class ServerNoteSourceIntegrity
                     throw InvalidSource();
                 }
 
-                ValidateRecordingChunks(recordingJson.RootElement, source.Files, recordingId, source.SourceNoteId);
+                if (!audioByRecordingId.TryGetValue(recordingId, out var audioFiles))
+                {
+                    audioFiles = [];
+                }
+
+                ValidateRecordingChunks(recordingJson.RootElement, audioFiles, recordingId, source.SourceNoteId);
             }
 
             if (inputRecordings.Count != 0)
@@ -206,13 +251,21 @@ internal static class ServerNoteSourceIntegrity
             }
 
             var mappedMaterialIds = new HashSet<Guid>();
+            var parsedBlocksById = parsed.Blocks.ToDictionary(block => block.Id, StringComparer.Ordinal);
             foreach (var block in source.Blocks)
             {
-                var blockFiles = source.Files.Where(file => file.BlockId == block.Id).ToArray();
+                var blockFiles = filesByBlockId.TryGetValue(block.Id, out var indexedBlockFiles)
+                    ? indexedBlockFiles
+                    : [];
+                if (!parsedBlocksById.TryGetValue(block.Id, out var parsedBlock))
+                {
+                    throw InvalidSource();
+                }
+
                 switch (block.Kind)
                 {
                     case "markdown":
-                        if (block.MaterialIds.Count != 0 || blockFiles.Length != 0)
+                        if (block.MaterialIds.Count != 0 || blockFiles.Count != 0)
                         {
                             throw InvalidSource();
                         }
@@ -222,11 +275,10 @@ internal static class ServerNoteSourceIntegrity
                     {
                         var file = blockFiles.SingleOrDefault(item => item.Kind == "Photo");
                         if (file?.MaterialId is not { } photoId
-                            || blockFiles.Length != 1
+                            || blockFiles.Count != 1
                             || block.MaterialIds.Count != 1
                             || block.MaterialIds[0] != photoId
-                            || !Guid.TryParse(JsonDocument.Parse(block.RawJson).RootElement
-                                .GetProperty("assetId").GetString(), out var assetId)
+                            || !Guid.TryParse(parsedBlock.AssetId, out var assetId)
                             || assetId != photoId)
                         {
                             throw InvalidSource();
@@ -243,7 +295,7 @@ internal static class ServerNoteSourceIntegrity
                     {
                         var file = blockFiles.SingleOrDefault(item => item.Kind == "InkPreview");
                         if (file?.MaterialId is not { } previewId
-                            || blockFiles.Length != 1
+                            || blockFiles.Count != 1
                             || block.MaterialIds.Count != 2
                             || block.MaterialIds[1] != previewId
                             || !materialById.TryGetValue(block.MaterialIds[0], out var vector)
@@ -254,9 +306,9 @@ internal static class ServerNoteSourceIntegrity
                         }
 
                         var expectedInk = CloudNoteMaterialService.ConvertServerInkToLocalSource(
-                            JsonDocument.Parse(block.RawJson).RootElement.GetProperty("ink").GetRawText(),
-                            BlockRawWidth(block.RawJson),
-                            BlockRawHeight(block.RawJson));
+                            parsedBlock.InkJson!,
+                            parsedBlock.Width,
+                            parsedBlock.Height);
                         var expectedInkBytes = Encoding.UTF8.GetBytes(expectedInk);
                         if (vector.Length != expectedInkBytes.LongLength
                             || !string.Equals(vector.ContentSha256, Hash(expectedInkBytes), StringComparison.Ordinal)
@@ -299,11 +351,10 @@ internal static class ServerNoteSourceIntegrity
                 };
                 if (material.Kind != expectedKind
                     || (file.Kind is "Photo" or "InkPreview")
-                        && (material.MediaType != (file.Kind == "Photo"
-                                ? ReadBlockString(source.Blocks, file.BlockId!, "mimeType")
-                                : "image/png")
-                            || material.Width != ReadBlockPixel(source.Blocks, file.BlockId!, "width")
-                            || material.Height != ReadBlockPixel(source.Blocks, file.BlockId!, "height"))
+                        && (!parsedBlocksById.TryGetValue(file.BlockId!, out var fileBlock)
+                            || material.MediaType != (file.Kind == "Photo" ? fileBlock.MimeType : "image/png")
+                            || material.Width != ToPixel(fileBlock.Width)
+                            || material.Height != ToPixel(fileBlock.Height))
                     || material.RecordingId?.ToString("D") != file.RecordingId
                     || material.RecordingSegment != file.Segment
                     || material.RecordingChunkIndex != file.ChunkIndex
@@ -352,7 +403,7 @@ internal static class ServerNoteSourceIntegrity
 
     private static void ValidateRecordingChunks(
         JsonElement recording,
-        IReadOnlyList<LocalNoteServerSourceFile> files,
+        IReadOnlyDictionary<(int Segment, int ChunkIndex, long Samples), LocalNoteServerSourceFile> audioFiles,
         Guid recordingId,
         Guid sourceNoteId)
     {
@@ -362,8 +413,6 @@ internal static class ServerNoteSourceIntegrity
             throw InvalidSource();
         }
 
-        var audioFiles = files.Where(file => file.Kind == "AudioChunk"
-            && file.RecordingId == recordingId.ToString("D")).ToArray();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var previousSegment = 0;
         var previousIndex = 0;
@@ -372,16 +421,13 @@ internal static class ServerNoteSourceIntegrity
             var segment = chunk.GetProperty("segment").GetInt32();
             var index = chunk.GetProperty("index").GetInt32();
             var samples = chunk.GetProperty("samples").GetInt64();
-            var matches = audioFiles.Where(file => file.Segment == segment
-                && file.ChunkIndex == index
-                && file.Samples == samples).ToArray();
             if (segment <= 0 || index <= 0 || samples <= 0
                 || previousSegment == 0 && (segment != 1 || index != 1)
                 || segment < previousSegment
                 || segment == previousSegment && index != previousIndex + 1
                 || segment > previousSegment && (segment != previousSegment + 1 || index != 1)
-                || matches.Length != 1
-                || !seen.Add(matches[0].Path))
+                || !audioFiles.TryGetValue((segment, index, samples), out var audioFile)
+                || !seen.Add(audioFile.Path))
             {
                 throw InvalidSource();
             }
@@ -390,7 +436,7 @@ internal static class ServerNoteSourceIntegrity
             previousIndex = index;
         }
 
-        if (seen.Count != audioFiles.Length
+        if (seen.Count != audioFiles.Count
             || recording.GetProperty("currentSegment").GetInt32() != previousSegment
             || !string.Equals(ReadString(recording, "phase"), "Completed", StringComparison.Ordinal)
             || ReadGuid(recording, "noteId") != sourceNoteId
@@ -420,48 +466,9 @@ internal static class ServerNoteSourceIntegrity
             : throw InvalidSource();
     }
 
-    private static double? BlockRawWidth(string rawJson)
-    {
-        using var block = JsonDocument.Parse(rawJson);
-        var value = block.RootElement.GetProperty("ink").GetProperty("width");
-        return value.TryGetDouble(out var width) ? width : null;
-    }
-
-    private static double? BlockRawHeight(string rawJson)
-    {
-        using var block = JsonDocument.Parse(rawJson);
-        var value = block.RootElement.GetProperty("ink").GetProperty("height");
-        return value.TryGetDouble(out var height) ? height : null;
-    }
-
-    private static string ReadBlockString(
-        IReadOnlyList<LocalNoteServerSourceBlock> blocks,
-        string blockId,
-        string property)
-    {
-        var block = blocks.Single(item => item.Id == blockId);
-        using var raw = JsonDocument.Parse(block.RawJson);
-        return ReadString(raw.RootElement, property);
-    }
-
-    private static int? ReadBlockPixel(
-        IReadOnlyList<LocalNoteServerSourceBlock> blocks,
-        string blockId,
-        string property)
-    {
-        var block = blocks.Single(item => item.Id == blockId);
-        using var raw = JsonDocument.Parse(block.RawJson);
-        var root = raw.RootElement;
-        if (!root.TryGetProperty(property, out var value)
-            && root.TryGetProperty("ink", out var ink))
-        {
-            value = ink.GetProperty(property);
-        }
-
-        return value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number)
-            ? checked((int)Math.Round(number, MidpointRounding.AwayFromZero))
-            : null;
-    }
+    private static int? ToPixel(double? value) => value is { } number
+        ? checked((int)Math.Round(number, MidpointRounding.AwayFromZero))
+        : null;
 
     private static string ReadString(JsonElement element, string name)
     {

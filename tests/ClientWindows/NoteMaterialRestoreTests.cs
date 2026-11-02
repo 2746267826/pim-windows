@@ -106,6 +106,164 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         Assert.Equal(3, rebuilt.Files.Count(file => file.Kind == "AudioChunk"));
     }
 
+    [Fact]
+    public void SourceIntegrityValidatesLargeInterleavedPhotoSource()
+    {
+        const int photoCount = 1_000;
+        var noteId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var versionId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        var photoBytes = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1 };
+        var photoHash = Hash(photoBytes);
+        var blocks = new JsonArray();
+        var markdownSections = new List<string>(photoCount * 2);
+        var blockMaterialIds = new Dictionary<string, Guid>(StringComparer.Ordinal);
+        for (var index = 1; index <= photoCount; index++)
+        {
+            var markdownId = Guid.Parse($"10000000-0000-4000-8000-{index:x12}");
+            var photoBlockId = Guid.Parse($"20000000-0000-4000-8000-{index:x12}");
+            var assetId = Guid.Parse($"30000000-0000-4000-8000-{index:x12}");
+            blocks.Add(new JsonObject
+            {
+                ["id"] = markdownId.ToString("D"),
+                ["kind"] = "markdown",
+                ["text"] = $"正文段落 {index}",
+            });
+            blocks.Add(new JsonObject
+            {
+                ["id"] = photoBlockId.ToString("D"),
+                ["kind"] = "photo",
+                ["assetId"] = assetId.ToString("D"),
+                ["mimeType"] = "image/png",
+                ["sha256"] = photoHash,
+                ["width"] = 1,
+                ["height"] = 1,
+            });
+            markdownSections.Add($"正文段落 {index}");
+            markdownSections.Add($"![照片](assets/{assetId:D}.png)");
+            blockMaterialIds.Add(photoBlockId.ToString("D"), assetId);
+        }
+
+        var title = "较大交错 source";
+        var noteJson = new JsonObject
+        {
+            ["schemaVersion"] = 1,
+            ["id"] = noteId.ToString("D"),
+            ["revision"] = 1,
+            ["createdAtMillis"] = 1,
+            ["title"] = title,
+            ["blocks"] = blocks,
+        }.ToJsonString(new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var markdown = string.Join("\n\n", markdownSections);
+        var inputJson = new JsonObject
+        {
+            ["schemaVersion"] = 1,
+            ["id"] = versionId.ToString("D"),
+            ["createdAtMillis"] = 1,
+            ["note"] = JsonNode.Parse(noteJson),
+            ["recordings"] = new JsonArray(),
+        }.ToJsonString(new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var noteBytes = Encoding.UTF8.GetBytes(noteJson);
+        var markdownBytes = Encoding.UTF8.GetBytes(markdown);
+        var manifestJson = JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            versionId = versionId.ToString("D"),
+            noteId = noteId.ToString("D"),
+            revision = 1,
+            inputSha256 = Hash(Encoding.UTF8.GetBytes(inputJson)),
+            files = new[]
+            {
+                new
+                {
+                    path = "note.json",
+                    kind = "Document",
+                    sha256 = Hash(noteBytes),
+                    sizeBytes = noteBytes.Length,
+                    blockId = (string?)null,
+                    recordingId = (string?)null,
+                    segment = (int?)null,
+                    chunkIndex = (int?)null,
+                    samples = (long?)null,
+                },
+                new
+                {
+                    path = "document.md",
+                    kind = "Markdown",
+                    sha256 = Hash(markdownBytes),
+                    sizeBytes = markdownBytes.Length,
+                    blockId = (string?)null,
+                    recordingId = (string?)null,
+                    segment = (int?)null,
+                    chunkIndex = (int?)null,
+                    samples = (long?)null,
+                },
+            }.Concat(Enumerable.Range(1, photoCount).Select(index =>
+            {
+                var photoBlockId = $"20000000-0000-4000-8000-{index:x12}";
+                var assetId = $"30000000-0000-4000-8000-{index:x12}";
+                return new
+                {
+                    path = $"assets/{assetId}.png",
+                    kind = "Photo",
+                    sha256 = photoHash,
+                    sizeBytes = photoBytes.Length,
+                    blockId = (string?)photoBlockId,
+                    recordingId = (string?)null,
+                    segment = (int?)null,
+                    chunkIndex = (int?)null,
+                    samples = (long?)null,
+                };
+            })),
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var parsed = ServerNoteMaterialRestoreParser.Parse(inputJson, manifestJson, markdown);
+        var source = new LocalNoteServerSource(
+            noteId,
+            versionId,
+            inputJson,
+            manifestJson,
+            noteJson,
+            markdown,
+            parsed.Blocks.Select(block => new LocalNoteServerSourceBlock(
+                block.Id,
+                block.Kind,
+                block.RawJson,
+                blockMaterialIds.TryGetValue(block.Id, out var materialId) ? [materialId] : [])).ToArray(),
+            parsed.Files.Select(file => new LocalNoteServerSourceFile(
+                file.Path,
+                file.Kind,
+                file.Sha256,
+                file.SizeBytes,
+                file.BlockId,
+                file.RecordingId,
+                file.Segment,
+                file.ChunkIndex,
+                file.Samples,
+                file.BlockId is not null && blockMaterialIds.TryGetValue(file.BlockId, out var materialId)
+                    ? materialId
+                    : null,
+                file.Kind switch
+                {
+                    "Document" => noteJson,
+                    "Markdown" => markdown,
+                    _ => null,
+                })).ToArray());
+        var materials = Enumerable.Range(1, photoCount).Select(index => new LocalNoteMaterial
+        {
+            MaterialId = Guid.Parse($"30000000-0000-4000-8000-{index:x12}"),
+            Kind = LocalNoteMaterialKind.Photo,
+            DisplayName = $"photo-{index:D4}.png",
+            ContentSha256 = photoHash,
+            RelativePath = $"materials/{index:D4}.png",
+            MediaType = "image/png",
+            Length = photoBytes.Length,
+            AddedAt = DateTimeOffset.UnixEpoch,
+            Width = 1,
+            Height = 1,
+        }).ToArray();
+
+        ServerNoteSourceIntegrity.Validate(source, title, markdown, materials);
+    }
+
     [Theory]
     [InlineData("order")]
     [InlineData("text")]
