@@ -1246,6 +1246,57 @@ public partial class NativeNotesWindow : Window
         }
     }
 
+    private void OnOpenTaskSuggestions(object sender, RoutedEventArgs e)
+    {
+        if (_current is null
+            || _selectedArtifact is null
+            || _selectedDerivedVersion is null
+            || _selectedDerivedVersionSummary is null)
+        {
+            MessageBox.Show(
+                this,
+                "请先选择一个已加载的云端结果固定版本。",
+                "从笔记提取任务",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        if (!Guid.TryParse(_selectedArtifact.ArtifactId, out _)
+            || !Guid.TryParse(_selectedDerivedVersion.VersionId, out var versionId)
+            || !Guid.TryParse(_selectedDerivedVersionSummary.VersionId, out var summaryVersionId)
+            || versionId != summaryVersionId
+            || _selectedDerivedVersion.Kind != _selectedArtifact.Kind)
+        {
+            CloudResultStateText.Text = "所选结果身份不完整或不匹配；未打开任务提取。";
+            return;
+        }
+
+        if (_cloud.CurrentAccountScope is null)
+        {
+            CloudResultStateText.Text = "请先登录云端账号，再从固定结果提取任务。";
+            return;
+        }
+
+        try
+        {
+            var window = new NoteTaskSuggestionsWindow(
+                _current.NoteId,
+                _selectedArtifact,
+                _selectedDerivedVersionSummary,
+                _selectedDerivedVersion,
+                App.Services.GetRequiredService<NoteTaskSuggestionService>().CaptureFence())
+            {
+                Owner = this,
+            };
+            window.ShowDialog();
+        }
+        catch (InvalidOperationException)
+        {
+            CloudResultStateText.Text = "账号或服务器刚刚切换；请刷新登录状态后重新打开任务提取。";
+        }
+    }
+
     private void OnCloudResultEdited(object sender, TextChangedEventArgs e)
     {
         if (!_loadingCloudResult && _selectedDerivedVersion is not null)
