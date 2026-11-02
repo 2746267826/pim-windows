@@ -329,6 +329,19 @@ public class ContractBoundaryBehaviorTests
     [Fact]
     public void QueryParameters_AreRequiredTypedAndEscaped()
     {
+        var taskSuggestions = ContractOperation.GetNoteTaskSuggestions;
+        var taskStatus = Assert.Single(
+            taskSuggestions.QueryParameters, parameter => parameter.Name == "status");
+        Assert.Equal("enum", taskStatus.Kind);
+        Assert.Equal(new[] { "Draft", "Confirmed", "Dismissed" }, taskStatus.AllowedValues);
+        Assert.Equal("?status=Draft", taskSuggestions.ResolveQuery(("status", "Draft")));
+        Assert.Equal("?status=Confirmed", taskSuggestions.ResolveQuery(("status", "Confirmed")));
+        Assert.Equal("?status=Dismissed", taskSuggestions.ResolveQuery(("status", "Dismissed")));
+        Assert.Throws<ArgumentException>(
+            () => taskSuggestions.ResolveQuery(("status", "draft")));
+        Assert.Throws<ArgumentException>(
+            () => taskSuggestions.ResolveQuery(("status", "Confirmed&admin=true")));
+
         var artifacts = ContractOperation.GetNoteDerivedArtifacts;
         Assert.Equal(
             new[] { new ContractQueryParameter("noteId", "uuid", true) },

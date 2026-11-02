@@ -560,10 +560,34 @@ grep -q 'new("page", "int64", true)' "$SB/$OPS_REL"
 record "query_parameter_override_keeps_operation_shape" $([ $? -eq 0 ] && echo 0 || echo 1) \
   "operation-level required/type wins without emitting a duplicate"
 
+# TASK-01 uses a real local string enum for its optional status query. Keep the
+# method/path unique and ensure the exact wire values survive generation.
+SB="$WORK/sb-query-enum"; mksb "$SB"
+"$PY" - "$SB/scripts/contract/client-operations.json" <<'PY'
+import json, sys
+ops = json.load(open(sys.argv[1], encoding="utf-8"))
+assert any(entry["apiClient"] == "GetNoteTaskSuggestionsAsync" and
+           entry["method"] == "GET" and
+           entry["path"] == "/api/v1/native-notes/task-suggestions"
+           for entry in ops["operations"]), "real TASK-01 list operation missing"
+PY
+run_generator "$SB"
+record "generator_accepts_query_string_enum_reference" $([ "$GEN_RC" -eq 0 ] && echo 0 || echo 1) \
+  "rc=$GEN_RC for the real TASK-01 status schema reference"
+grep -q 'new("status", "enum", false, new string\[\] { "Draft", "Confirmed", "Dismissed" })' "$SB/$OPS_REL"
+record "query_enum_allowed_values_are_generated" $([ $? -eq 0 ] && echo 0 || echo 1) \
+  "generated TASK-01 query carries every exact enum wire value"
+
 reject_case "query_parameter_unknown_format" "query 参数带未知 format" \
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "string", "format": "custom-page"}}]'
 reject_case "query_parameter_ref" "query 参数用 \$ref 引用（生成器尚未解析 components.parameters）" \
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"$" "ref": "#/components/parameters/Page"}]'
+reject_case "query_enum_schema_ref_missing" "query 枚举引用不存在的具名 schema" \
+  'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "status", "in": "query", "schema": {"$" "ref": "#/components/schemas/MissingStatus"}}]'
+reject_case "query_enum_schema_with_constraints" "query 枚举引用带未建模约束的 schema" \
+  'schemas["TestQueryStatus"] = {"type": "string", "enum": ["Draft"], "pattern": "^D"}; doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "status", "in": "query", "schema": {"$" "ref": "#/components/schemas/TestQueryStatus"}}]'
+reject_case "query_enum_on_unmodelled_operation" "除 TASK-01 外的 operation 使用 query 枚举引用" \
+  'schemas["TestQueryStatus"] = {"type": "string", "enum": ["Draft", "Confirmed"]}; doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "status", "in": "query", "schema": {"$" "ref": "#/components/schemas/TestQueryStatus"}}]'
 reject_case "query_parameter_required_not_boolean" "query 参数的 required 不是布尔值" \
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "required": "yes", "schema": {"type": "integer"}}]'
 reject_case "query_parameter_duplicate" "同一层重复声明同名 query 参数" \

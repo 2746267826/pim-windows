@@ -22,7 +22,7 @@ namespace Pim.Client.Core.Contract;
 /// 需要契约里没有的接口时：不要在这里加，按 AGENTS.md「接口契约与门禁」把需求交给后端。
 /// </summary>
 public sealed record ContractHeader(string Name, string Kind);
-public sealed record ContractQueryParameter(string Name, string Kind, bool Required);
+public sealed record ContractQueryParameter(string Name, string Kind, bool Required, System.Collections.Generic.IReadOnlyList<string>? AllowedValues = null);
 
 public sealed class ContractOperation
 {
@@ -245,6 +245,13 @@ public sealed class ContractOperation
                     if (!bool.TryParse(value, out _))
                     {
                         throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是 boolean", nameof(queryValues));
+                    }
+
+                    break;
+                case "enum":
+                    if (parameter.AllowedValues is null || !parameter.AllowedValues.Contains(value, System.StringComparer.Ordinal))
+                    {
+                        throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是契约声明的枚举值", nameof(queryValues));
                     }
 
                     break;
@@ -711,6 +718,70 @@ public sealed class ContractOperation
     public static readonly ContractOperation SelectNoteDerivedArtifactVersion =
         new("POST", "/api/v1/native-notes/derived-artifacts/{artifactId}/select", "native-notes/derived-artifacts/{artifactId}/select",
             new ContractHeader[] { new("artifactId", "uuid") },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetNoteDerivedDestinations =
+        new("GET", "/api/v1/native-notes/derived-tasks/destinations", "native-notes/derived-tasks/destinations",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation StartNoteTaskSuggestionExtraction =
+        new("POST", "/api/v1/native-notes/task-suggestions/extractions", "native-notes/task-suggestions/extractions",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetNoteTaskSuggestionExtraction =
+        new("GET", "/api/v1/native-notes/task-suggestions/extractions/{id}", "native-notes/task-suggestions/extractions/{id}",
+            new ContractHeader[] { new("id", "uuid") },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetNoteTaskSuggestions =
+        new("GET", "/api/v1/native-notes/task-suggestions", "native-notes/task-suggestions",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] { new("noteId", "uuid", false), new("status", "enum", false, new string[] { "Draft", "Confirmed", "Dismissed" }) },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetNoteTaskSuggestion =
+        new("GET", "/api/v1/native-notes/task-suggestions/{id}", "native-notes/task-suggestions/{id}",
+            new ContractHeader[] { new("id", "uuid") },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation UpdateNoteTaskSuggestion =
+        new("PUT", "/api/v1/native-notes/task-suggestions/{id}", "native-notes/task-suggestions/{id}",
+            new ContractHeader[] { new("id", "uuid") },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation ConfirmNoteTaskSuggestion =
+        new("POST", "/api/v1/native-notes/task-suggestions/{id}/confirm", "native-notes/task-suggestions/{id}/confirm",
+            new ContractHeader[] { new("id", "uuid") },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation DismissNoteTaskSuggestion =
+        new("POST", "/api/v1/native-notes/task-suggestions/{id}/dismiss", "native-notes/task-suggestions/{id}/dismiss",
+            new ContractHeader[] { new("id", "uuid") },
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",

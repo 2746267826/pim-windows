@@ -278,6 +278,46 @@
       "apiClient": "SelectNoteDerivedArtifactVersionAsync",
       "method": "POST",
       "path": "/api/v1/native-notes/derived-artifacts/{artifactId}/select"
+    },
+    {
+      "apiClient": "GetNoteDerivedDestinationsAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/derived-tasks/destinations"
+    },
+    {
+      "apiClient": "StartNoteTaskSuggestionExtractionAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/task-suggestions/extractions"
+    },
+    {
+      "apiClient": "GetNoteTaskSuggestionExtractionAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/task-suggestions/extractions/{id}"
+    },
+    {
+      "apiClient": "GetNoteTaskSuggestionsAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/task-suggestions"
+    },
+    {
+      "apiClient": "GetNoteTaskSuggestionAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/task-suggestions/{id}"
+    },
+    {
+      "apiClient": "UpdateNoteTaskSuggestionAsync",
+      "method": "PUT",
+      "path": "/api/v1/native-notes/task-suggestions/{id}"
+    },
+    {
+      "apiClient": "ConfirmNoteTaskSuggestionAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/task-suggestions/{id}/confirm"
+    },
+    {
+      "apiClient": "DismissNoteTaskSuggestionAsync",
+      "method": "POST",
+      "path": "/api/v1/native-notes/task-suggestions/{id}/dismiss"
     }
   ]
 }
