@@ -1,3 +1,4 @@
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Services;
 
 namespace Pim.Client.App;

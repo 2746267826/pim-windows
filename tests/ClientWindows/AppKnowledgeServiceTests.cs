@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Services;
 using Xunit;
 
