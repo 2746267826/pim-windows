@@ -19,6 +19,7 @@ public sealed class CloudNotesUiStateTests
         Assert.False(fence.IsCurrent(noteId, Guid.NewGuid(), 9, account, 12));
         Assert.False(fence.IsCurrent(noteId, versionId, 9, new CloudNoteAccountScope("https://pim.example", "owner-b"), 12));
         Assert.False(fence.IsCurrent(noteId, versionId, 9, account, 13));
+        Assert.False(fence.IsCurrent(noteId, versionId, 9, account, 12, isParentWindowClosed: true));
 
         var savedVersionId = Guid.NewGuid();
         var savedFence = fence with { VersionId = savedVersionId };

@@ -24,6 +24,7 @@ public partial class NativeNotesWindow : Window
     private bool _loading;
     private bool _closing;
     private bool _allowClose;
+    private bool _closed;
     private bool _loadingCloudResult;
     private bool _restoringCloudSelection;
     private bool _refreshingCloudResults;
@@ -480,6 +481,7 @@ public partial class NativeNotesWindow : Window
         CloudNoteAccountScope? account,
         long accountGeneration)
         => _current?.NoteId == noteId
+           && !_closed
            && selectionGeneration == _cloudUi.NoteGeneration
            && account == _cloud.CurrentAccountScope
            && accountGeneration == _cloud.AccountGeneration;
@@ -490,7 +492,8 @@ public partial class NativeNotesWindow : Window
             _current?.CurrentVersionId,
             _cloudUi.NoteGeneration,
             _cloud.CurrentAccountScope,
-            _cloud.AccountGeneration);
+            _cloud.AccountGeneration,
+            _closed);
 
     private static string RemoveMaterialExtension(string value, string extension)
         => value.EndsWith(extension, StringComparison.OrdinalIgnoreCase)
@@ -923,6 +926,7 @@ public partial class NativeNotesWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _closed = true;
         _recording.StateChanged -= OnRecordingStateChanged;
     }
 

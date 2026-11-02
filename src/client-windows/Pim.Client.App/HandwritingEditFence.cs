@@ -14,8 +14,10 @@ internal sealed record HandwritingEditFence(
         Guid? currentVersionId,
         long currentNoteSelectionGeneration,
         CloudNoteAccountScope? currentAccount,
-        long currentAccountGeneration)
-        => NoteId != Guid.Empty
+        long currentAccountGeneration,
+        bool isParentWindowClosed = false)
+        => !isParentWindowClosed
+           && NoteId != Guid.Empty
            && VersionId != Guid.Empty
            && NoteId == currentNoteId
            && VersionId == currentVersionId
