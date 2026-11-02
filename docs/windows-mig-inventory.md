@@ -70,7 +70,7 @@
 | MIG-02 日历、任务、日历本/任务本 | 新增原生规划工作台，按契约 operation 读取日历/分页日程/任务本/分页任务，可按时间范围、日历、状态和标题筛选；支持创建日程、创建任务、选择任务本、将任务标记完成 | 读取与常见创建/完成动作已原生；系列/重复、提醒、附件、任务规划/分段、批量操作及完整日历本管理仍未迁移 |
 | MIG-03 确认中心、提醒、习惯、报告、数据中心 | Shell 路由 `/confirmations`、`/reports`、`/data-center`；`NotificationActionRouter` 可发端点通知动作，但业务页面仍 Web | 混合，业务未原生化 |
 | MIG-04 快速记录、文件 | 旧快速记录有显式 Web 兼容入口 `/quick-notes`；旧附件仍由服务端/Web；本机新笔记独立保存，二者未合并 | 旧入口保留；迁移未完成 |
-| MIG-05 电脑记录、浏览器使用、电脑明细 | `NativeTrackerService`、`TrackerLogger`、`TrackerSessionManager`、`BrowserBridgeService`、KeyStats 采集与上传均原生保留；新增原生“电脑记录”窗口，将已结束会话写入 30 天/10,000 条/64 MB 有界本机历史，支持今天/7/30 天、类别、搜索和明细查询 | 采集强复用；本机会话查询/分类/明细已原生。服务器全量电脑记录、页面 URL 级明细与跨端历史检索仍 Web，不能标全量迁移完成 |
+| MIG-05 电脑记录、浏览器使用、电脑明细 | `NativeTrackerService`、`TrackerLogger`、`TrackerSessionManager`、`BrowserBridgeService`、KeyStats 采集与上传均原生保留；本机历史继续按最近 30 天、10,000 条、64 MB 有界保留，支持今天/7/30 天、类别、搜索和明细；新增“服务器历史”模式，按最多 31 天的日期范围、当前账号设备和 `window`/`web`/`web-page` 类型查询已上传详情；服务端每页最多 200 条、最多浏览 25 页（5,000 条），明确提示截断及空结果不证明采集/上传完整 | 本机与服务器查询入口均有原生实现；服务端历史依赖已上传数据及现有 owner-scoped API。未覆盖上传前数据、本地与远端合并、超过客户端预算的完整导出或真实多设备/浏览器数据验收，不能标全量迁移完成 |
 | MIG-06 手机记录、历史位置 | Windows 无手机采集、地图/轨迹业务 UI | WebView-only |
 | MIG-07 应用知识库、分类树 | 无 Windows 原生业务页面或 typed operation | WebView-only |
 | MIG-08 设备列表、详情 | 新增原生设备中心，读取 typed `GET /api/v1/endpoints` 与 `GET /api/v1/endpoints/{deviceId}/collection-quality`；显示在线态、平台、App 版本、上传状态、缓存和联网限制阻止数，并可按所选设备检查采集质量 | `partial`（仅只读）：列表/基础详情/采集质量已原生；设备重命名、策略、删除与管理动作仍未迁移 |

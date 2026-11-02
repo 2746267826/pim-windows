@@ -29,6 +29,7 @@ public static class Startup
         services.AddSingleton<WindowsRecordingService>();
         services.AddSingleton<TrackerLogger>();
         services.AddSingleton<TrackerHistoryStore>();
+        services.AddSingleton<RemoteComputerHistoryService>();
         services.AddSingleton<DeviceCenterService>();
         services.AddSingleton<CalendarTaskService>();
         services.AddSingleton<BrowserBridgeService>(sp =>

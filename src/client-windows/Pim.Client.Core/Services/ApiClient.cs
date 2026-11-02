@@ -380,6 +380,57 @@ public class ApiClient
     public Task<Int32ApiResponse?> UploadTrackerEventsAsync(TrackerEventsUploadRequest request, CancellationToken ct = default)
         => SendJsonAsync<Int32ApiResponse>(ContractOperation.UploadTrackerEvents, request, ct);
 
+    /// <summary><c>GET /api/v1/pc/detail</c>.</summary>
+    public Task<TypedDetailQueryResponseApiResponse?> GetPcDetailAsync(
+        string? dateFrom = null,
+        string? dateTo = null,
+        string? dimension = null,
+        string? deviceId = null,
+        string? appName = null,
+        string? categoryName = null,
+        string? keyName = null,
+        string? eventType = null,
+        string? sortBy = null,
+        string? sortDir = null,
+        string? domain = null,
+        string? title = null,
+        string? urlFilter = null,
+        string? view = null,
+        int page = 1,
+        int pageSize = 100,
+        CancellationToken ct = default)
+    {
+        if (page < 1)
+            throw new ArgumentOutOfRangeException(nameof(page));
+        if (pageSize is < 1 or > 200)
+            throw new ArgumentOutOfRangeException(nameof(pageSize));
+
+        return SendAsync<TypedDetailQueryResponseApiResponse>(
+            ContractOperation.GetPcDetail,
+            null,
+            null,
+            ct,
+            queryValues:
+            [
+                ("dateFrom", dateFrom),
+                ("dateTo", dateTo),
+                ("dimension", dimension),
+                ("deviceId", deviceId),
+                ("appName", appName),
+                ("categoryName", categoryName),
+                ("keyName", keyName),
+                ("eventType", eventType),
+                ("sortBy", sortBy),
+                ("sortDir", sortDir),
+                ("domain", domain),
+                ("title", title),
+                ("url", urlFilter),
+                ("view", view),
+                ("page", page.ToString(CultureInfo.InvariantCulture)),
+                ("pageSize", pageSize.ToString(CultureInfo.InvariantCulture)),
+            ]);
+    }
+
     /// <summary><c>POST /api/v1/pc/browser-tt/upload</c>。</summary>
     public Task<Int32ApiResponse?> UploadSiteEventsAsync(SiteEventsUploadRequest request, CancellationToken ct = default)
         => SendJsonAsync<Int32ApiResponse>(ContractOperation.UploadSiteEvents, request, ct);

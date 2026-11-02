@@ -427,6 +427,14 @@ public sealed class ContractOperation
             "application/json",
             "application/json",
             new ContractHeader[] {  });
+    public static readonly ContractOperation GetPcDetail =
+        new("GET", "/api/v1/pc/detail", "pc/detail",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] { new("dateFrom", "plain-string", false), new("dateTo", "plain-string", false), new("dimension", "plain-string", false), new("deviceId", "plain-string", false), new("appName", "plain-string", false), new("categoryName", "plain-string", false), new("keyName", "plain-string", false), new("eventType", "plain-string", false), new("sortBy", "plain-string", false), new("sortDir", "plain-string", false), new("domain", "plain-string", false), new("title", "plain-string", false), new("url", "plain-string", false), new("view", "plain-string", false), new("page", "int32", false), new("pageSize", "int32", false) },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation UploadSiteEvents =
         new("POST", "/api/v1/pc/browser-tt/upload", "pc/browser-tt/upload",
             new ContractHeader[] {  },

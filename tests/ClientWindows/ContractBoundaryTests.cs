@@ -787,6 +787,17 @@ public class ContractBoundaryBehaviorTests
             },
             (api, req) => api.UploadTrackerEventsAsync((TrackerEventsUploadRequest)req!),
             IntEnvelopeBody),
+        new("GET", "/api/v1/pc/detail", null,
+            (api, _) => api.GetPcDetailAsync(
+                dateFrom: "2026-10-01",
+                dateTo: "2026-10-07",
+                deviceId: "PC-01",
+                eventType: "web-page",
+                sortDir: "desc",
+                view: "raw",
+                page: 2,
+                pageSize: 200),
+            ExpectedQuery: "?dateFrom=2026-10-01&dateTo=2026-10-07&deviceId=PC-01&eventType=web-page&sortDir=desc&view=raw&page=2&pageSize=200"),
         new("POST", "/api/v1/pc/browser-tt/upload",
             new SiteEventsUploadRequest
             {
