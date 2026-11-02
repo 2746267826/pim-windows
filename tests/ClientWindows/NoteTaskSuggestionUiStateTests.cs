@@ -34,6 +34,18 @@ public sealed class NoteTaskSuggestionUiStateTests
     }
 
     [Fact]
+    public void EmptySuggestionIdentityCannotProduceCurrentSelectionFence()
+    {
+        var state = new NoteTaskSuggestionUiState();
+        var source = Source();
+        var load = state.BeginLoad(
+            source.NoteId, source.ArtifactId, source.VersionId, source, AccountA, 4);
+        var selection = state.BeginSelection(load, Guid.Empty);
+
+        Assert.False(state.IsCurrentSelection(selection, Guid.Empty, source, AccountA, 4));
+    }
+
+    [Fact]
     public void SessionGenerationAndInvalidationRejectOldWindowReceipts()
     {
         var state = new NoteTaskSuggestionUiState();
