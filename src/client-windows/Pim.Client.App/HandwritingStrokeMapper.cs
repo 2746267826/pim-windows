@@ -47,4 +47,26 @@ internal static class HandwritingStrokeMapper
                 .Select(point => new LocalInkPoint(point.X, point.Y, point.PressureFactor))
                 .ToArray());
     }
+
+    public static IReadOnlyList<LocalInkStroke> FromStrokes(StrokeCollection strokes)
+    {
+        ArgumentNullException.ThrowIfNull(strokes);
+        var seen = new HashSet<Guid>();
+        var mapped = new List<LocalInkStroke>(strokes.Count);
+        foreach (var stroke in strokes)
+        {
+            var local = FromStroke(stroke);
+            if (!seen.Add(local.Id))
+            {
+                local = local with { Id = Guid.NewGuid() };
+                stroke.RemovePropertyData(StrokeIdProperty);
+                stroke.AddPropertyData(StrokeIdProperty, local.Id.ToString("D"));
+                seen.Add(local.Id);
+            }
+
+            mapped.Add(local);
+        }
+
+        return mapped;
+    }
 }

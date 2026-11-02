@@ -1,5 +1,6 @@
 using Pim.Client.App;
 using Pim.Client.Core.Services.Notes;
+using System.Windows.Ink;
 using Xunit;
 
 namespace Pim.Client.App.Tests;
@@ -28,5 +29,29 @@ public sealed class HandwritingStrokeMapperTests
         Assert.Equal(0.2, reopened[0].Points[0].Pressure, 5);
         Assert.Equal(0.85, reopened[0].Points[1].Pressure, 5);
         Assert.Equal(0.5, reopened[1].Points[0].Pressure, 5);
+    }
+
+    [Fact]
+    public void WpfEraseResultSplitsStrokeAndCopiesItsIdentityProperty()
+    {
+        var originalId = Guid.NewGuid();
+        var source = HandwritingStrokeMapper.ToStroke(new LocalInkStroke(
+            originalId,
+            [new LocalInkPoint(10, 50, 0.5), new LocalInkPoint(90, 50, 0.5)]));
+
+        var split = source.GetEraseResult(
+            [new System.Windows.Point(50, 30), new System.Windows.Point(50, 70)],
+            new EllipseStylusShape(12, 12));
+        var mapped = HandwritingStrokeMapper.FromStrokes(split);
+
+        Assert.Equal(2, split.Count);
+        Assert.Equal(originalId, mapped[0].Id);
+        Assert.NotEqual(originalId, mapped[1].Id);
+        Assert.NotEqual(mapped[0].Id, mapped[1].Id);
+        Assert.Equal(mapped.Select(stroke => stroke.Id), HandwritingStrokeMapper.FromStrokes(split).Select(stroke => stroke.Id));
+
+        var saved = LocalInkDocumentCodec.Parse(LocalInkDocumentCodec.Serialize(
+            new LocalInkDocument(1, 100, 100, mapped)));
+        Assert.Equal(mapped.Select(stroke => stroke.Id), saved.Strokes.Select(stroke => stroke.Id));
     }
 }

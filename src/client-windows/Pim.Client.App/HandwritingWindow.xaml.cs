@@ -63,9 +63,7 @@ public partial class HandwritingWindow : Window
         using var png = new MemoryStream();
         encoder.Save(png);
 
-        var strokes = Canvas.Strokes
-            .Select(HandwritingStrokeMapper.FromStroke)
-            .ToArray();
+        var strokes = HandwritingStrokeMapper.FromStrokes(Canvas.Strokes);
         var document = new LocalInkDocument(1, width, height, strokes);
         Capture = new HandwritingCapture(
             png.ToArray(),
