@@ -14,39 +14,94 @@
         <Border Background="{StaticResource PimSurfaceBrush}"
                 BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
                 CornerRadius="12" Padding="16">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <StackPanel>
-                    <TextBlock Text="电脑记录" FontSize="23" FontWeight="SemiBold"
-                               Foreground="{StaticResource PimTextBrush}" />
-                    <TextBlock Text="本机已结束采集会话 · 按活动类别、标题与域名筛选"
-                               Margin="0,4,0,12" FontSize="12"
-                               Foreground="{StaticResource PimMutedTextBrush}" />
-                </StackPanel>
-                <WrapPanel Grid.Row="1" Margin="0,0,0,12">
-                    <ComboBox x:Name="RangeBox" Width="110" Height="34" Margin="0,0,8,0"
-                              SelectionChanged="OnFilterChanged" />
-                    <ComboBox x:Name="CategoryBox" Width="110" Height="34" Margin="0,0,8,0"
-                              SelectionChanged="OnFilterChanged" />
-                    <TextBox x:Name="SearchBox" Width="260" Height="34" Padding="8,5"
-                             VerticalContentAlignment="Center" Margin="0,0,8,0"
-                             TextChanged="OnSearchChanged" ToolTip="搜索应用、窗口标题或域名" />
-                    <Button Content="刷新" Style="{StaticResource PimSecondaryButton}"
-                            Height="34" Click="OnRefresh" />
-                </WrapPanel>
-                <ListBox x:Name="HistoryList" Grid.Row="2"
-                         BorderBrush="{StaticResource PimBorderBrush}"
-                         SelectionChanged="OnHistorySelected"
-                         DisplayMemberPath="Label" />
-                <TextBlock x:Name="SummaryText" Grid.Row="3" Margin="0,10,0,0"
-                           Text="正在读取本机记录…" TextWrapping="Wrap" FontSize="12"
-                           Foreground="{StaticResource PimMutedTextBrush}" />
-            </Grid>
+            <TabControl x:Name="HistoryModeTabs" SelectionChanged="OnModeChanged">
+                <TabItem Header="本机历史">
+                    <Grid Margin="4,10,4,4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="电脑记录 · 本机" FontSize="21" FontWeight="SemiBold"
+                                       Foreground="{StaticResource PimTextBrush}" />
+                            <TextBlock Text="已结束采集会话 · 本地保留最近 30 天"
+                                       Margin="0,4,0,12" FontSize="12"
+                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                        </StackPanel>
+                        <WrapPanel Grid.Row="1" Margin="0,0,0,12">
+                            <ComboBox x:Name="RangeBox" Width="110" Height="34" Margin="0,0,8,0"
+                                      SelectionChanged="OnFilterChanged" />
+                            <ComboBox x:Name="CategoryBox" Width="110" Height="34" Margin="0,0,8,0"
+                                      SelectionChanged="OnFilterChanged" />
+                            <TextBox x:Name="SearchBox" Width="240" Height="34" Padding="8,5"
+                                     VerticalContentAlignment="Center" Margin="0,0,8,0"
+                                     TextChanged="OnSearchChanged" ToolTip="搜索应用、窗口标题或域名" />
+                            <Button Content="刷新" Style="{StaticResource PimSecondaryButton}"
+                                    Height="34" Click="OnRefresh" />
+                        </WrapPanel>
+                        <ListBox x:Name="HistoryList" Grid.Row="2"
+                                 BorderBrush="{StaticResource PimBorderBrush}"
+                                 SelectionChanged="OnHistorySelected"
+                                 DisplayMemberPath="Label" />
+                        <TextBlock x:Name="SummaryText" Grid.Row="3" Margin="0,10,0,0"
+                                   Text="正在读取本机记录…" TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{StaticResource PimMutedTextBrush}" />
+                    </Grid>
+                </TabItem>
+                <TabItem Header="服务器历史">
+                    <Grid Margin="4,10,4,4">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="电脑记录 · 已上传" FontSize="21" FontWeight="SemiBold"
+                                       Foreground="{StaticResource PimTextBrush}" />
+                            <TextBlock x:Name="RemotePolicyText"
+                                       TextWrapping="Wrap" Margin="0,4,0,12" FontSize="12"
+                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                        </StackPanel>
+                        <Grid Grid.Row="1" Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <WrapPanel Grid.Column="0">
+                                <DatePicker x:Name="RemoteFromBox" Width="130" Height="34" Margin="0,0,6,0" />
+                                <DatePicker x:Name="RemoteToBox" Width="130" Height="34" Margin="0,0,6,0" />
+                            </WrapPanel>
+                            <WrapPanel Grid.Column="1">
+                                <ComboBox x:Name="RemoteDeviceBox" Width="160" Height="34" Margin="0,0,6,0"
+                                          SelectionChanged="OnRemoteDeviceChanged" />
+                                <ComboBox x:Name="RemoteTypeBox" Width="120" Height="34" Margin="0,0,6,0"
+                                          SelectionChanged="OnRemoteFilterChanged" />
+                                <Button Content="查询" Style="{StaticResource PimPrimaryButton}"
+                                        Height="34" Click="OnRemoteQuery" />
+                            </WrapPanel>
+                        </Grid>
+                        <ListBox x:Name="RemoteHistoryList" Grid.Row="2"
+                                 BorderBrush="{StaticResource PimBorderBrush}"
+                                 SelectionChanged="OnRemoteHistorySelected"
+                                 DisplayMemberPath="Label" />
+                        <DockPanel Grid.Row="3" Margin="0,10,0,0">
+                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                                <Button x:Name="PreviousPageButton" Content="上一页" Height="30" Margin="0,0,6,0"
+                                        Style="{StaticResource PimSecondaryButton}" Click="OnPreviousPage" />
+                                <Button x:Name="NextPageButton" Content="下一页" Height="30"
+                                        Style="{StaticResource PimSecondaryButton}" Click="OnNextPage" />
+                            </StackPanel>
+                            <TextBlock x:Name="RemoteSummaryText" Text="选择日期与设备后查询服务器历史。"
+                                       TextWrapping="Wrap" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                        </DockPanel>
+                    </Grid>
+                </TabItem>
+            </TabControl>
         </Border>
 
         <Border Grid.Column="2" Background="{StaticResource PimSurfaceBrush}"
@@ -56,7 +111,7 @@
                 <StackPanel DockPanel.Dock="Top">
                     <TextBlock Text="记录详情" FontSize="18" FontWeight="SemiBold"
                                Foreground="{StaticResource PimTextBrush}" />
-                    <TextBlock Text="只展示本机已采集字段，不跟随或打开记录中的 URL。"
+                    <TextBlock Text="仅展示所选记录中实际存在的字段；记录中的 URL 只作为文本，不会打开。"
                                Margin="0,4,0,14" TextWrapping="Wrap" FontSize="12"
                                Foreground="{StaticResource PimMutedTextBrush}" />
                 </StackPanel>

@@ -2776,6 +2776,131 @@ public sealed class OutlookAdditionalInfoItemDto
     public required string Value { get; set; }
 }
 
+/// <summary>契约 <c>components.schemas.PcDetailRecord</c>（response）。</summary>
+public sealed class PcDetailRecord
+{
+    /// <summary>契约字段 <c>absorbedDurationSeconds</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("absorbedDurationSeconds")]
+    public double AbsorbedDurationSeconds { get; set; }
+    /// <summary>契约字段 <c>absorbedShortEventsCount</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("absorbedShortEventsCount")]
+    public int AbsorbedShortEventsCount { get; set; }
+    /// <summary>契约字段 <c>appName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("appName")]
+    public string? AppName { get; set; }
+    /// <summary>契约字段 <c>audible</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("audible")]
+    public bool? Audible { get; set; }
+    /// <summary>契约字段 <c>browserAppName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("browserAppName")]
+    public string? BrowserAppName { get; set; }
+    /// <summary>契约字段 <c>browserWindowTitle</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("browserWindowTitle")]
+    public string? BrowserWindowTitle { get; set; }
+    /// <summary>契约字段 <c>bucketType</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("bucketType")]
+    public string? BucketType { get; set; }
+    /// <summary>契约字段 <c>categoryColor</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("categoryColor")]
+    public string? CategoryColor { get; set; }
+    /// <summary>契约字段 <c>categoryName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("categoryName")]
+    public string? CategoryName { get; set; }
+    /// <summary>契约字段 <c>classificationConfidence</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("classificationConfidence")]
+    public double? ClassificationConfidence { get; set; }
+    /// <summary>契约字段 <c>classificationExplanation</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("classificationExplanation")]
+    public string? ClassificationExplanation { get; set; }
+    /// <summary>契约字段 <c>classificationSource</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("classificationSource")]
+    public string? ClassificationSource { get; set; }
+    /// <summary>契约字段 <c>deviceId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("deviceId")]
+    public required string DeviceId { get; set; }
+    /// <summary>契约字段 <c>displayName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("displayName")]
+    public string? DisplayName { get; set; }
+    /// <summary>契约字段 <c>domain</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("domain")]
+    public string? Domain { get; set; }
+    /// <summary>契约字段 <c>durationSeconds</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("durationSeconds")]
+    public double? DurationSeconds { get; set; }
+    /// <summary>契约字段 <c>end</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("end")]
+    public string? End { get; set; }
+    /// <summary>契约字段 <c>incognito</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("incognito")]
+    public bool? Incognito { get; set; }
+    /// <summary>契约字段 <c>interpretationVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("interpretationVersion")]
+    public string? InterpretationVersion { get; set; }
+    /// <summary>契约字段 <c>isLocalFile</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isLocalFile")]
+    public bool IsLocalFile { get; set; }
+    /// <summary>契约字段 <c>keyCounts</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("keyCounts")]
+    public System.Collections.Generic.Dictionary<string, int>? KeyCounts { get; set; }
+    /// <summary>契约字段 <c>keyPresses</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("keyPresses")]
+    public int? KeyPresses { get; set; }
+    /// <summary>契约字段 <c>mouseDistance</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("mouseDistance")]
+    public double? MouseDistance { get; set; }
+    /// <summary>契约字段 <c>path</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("path")]
+    public string? Path { get; set; }
+    /// <summary>契约字段 <c>projectTag</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("projectTag")]
+    public string? ProjectTag { get; set; }
+    /// <summary>契约字段 <c>raw</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("raw")]
+    public System.Text.Json.JsonElement? Raw { get; set; }
+    /// <summary>契约字段 <c>recordKey</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("recordKey")]
+    public string? RecordKey { get; set; }
+    /// <summary>契约字段 <c>recordKeyStability</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("recordKeyStability")]
+    public string? RecordKeyStability { get; set; }
+    /// <summary>契约字段 <c>recordKeyVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("recordKeyVersion")]
+    public string? RecordKeyVersion { get; set; }
+    /// <summary>契约字段 <c>recordType</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("recordType")]
+    public required string RecordType { get; set; }
+    /// <summary>契约字段 <c>scrollDistance</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("scrollDistance")]
+    public double? ScrollDistance { get; set; }
+    /// <summary>契约字段 <c>sourceBucketIds</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceBucketIds")]
+    public System.Collections.Generic.List<string>? SourceBucketIds { get; set; }
+    /// <summary>契约字段 <c>sourceType</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceType")]
+    public string? SourceType { get; set; }
+    /// <summary>契约字段 <c>sourceWebEventIds</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceWebEventIds")]
+    public System.Collections.Generic.List<long>? SourceWebEventIds { get; set; }
+    /// <summary>契约字段 <c>sourceWindowEventIds</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceWindowEventIds")]
+    public System.Collections.Generic.List<long>? SourceWindowEventIds { get; set; }
+    /// <summary>契约字段 <c>start</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("start")]
+    public required string Start { get; set; }
+    /// <summary>契约字段 <c>tabCount</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("tabCount")]
+    public int? TabCount { get; set; }
+    /// <summary>契约字段 <c>title</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("title")]
+    public string? Title { get; set; }
+    /// <summary>契约字段 <c>totalClicks</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("totalClicks")]
+    public int? TotalClicks { get; set; }
+    /// <summary>契约字段 <c>url</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("url")]
+    public string? Url { get; set; }
+}
+
 /// <summary>契约 <c>components.schemas.PlannedOfflineRequest</c>（request）。</summary>
 public sealed class PlannedOfflineRequest
 {
@@ -3324,6 +3449,43 @@ public sealed class TrackerHealthRequest
     /// <summary>契约字段 <c>uptimeSeconds</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("uptimeSeconds")]
     public required double UptimeSeconds { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.TypedDetailQueryResponse</c>（response）。</summary>
+public sealed class TypedDetailQueryResponse
+{
+    /// <summary>契约字段 <c>items</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("items")]
+    public required System.Collections.Generic.List<PcDetailRecord> Items { get; set; }
+    /// <summary>契约字段 <c>page</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("page")]
+    public required int Page { get; set; }
+    /// <summary>契约字段 <c>pageSize</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("pageSize")]
+    public required int PageSize { get; set; }
+    /// <summary>契约字段 <c>totalCount</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("totalCount")]
+    public required int TotalCount { get; set; }
+    /// <summary>契约字段 <c>totalPages</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("totalPages")]
+    public required int TotalPages { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.TypedDetailQueryResponseApiResponse</c>（response）。</summary>
+public sealed class TypedDetailQueryResponseApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public TypedDetailQueryResponse? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.UpdateNoteTaskSuggestionRequest</c>（request）。</summary>
