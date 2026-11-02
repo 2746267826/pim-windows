@@ -129,8 +129,10 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
         Assert.Equal(1, handler.UpdateRequests);
     }
 
-    [Fact]
-    public async Task SaveEditCannotCrossPendingFenceWhileConfirmResponseIsBlocked()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DraftWritesCannotCrossPendingFenceWhileConfirmResponseIsBlocked(bool dismiss)
     {
         var handler = new TaskSuggestionHandler
         {
@@ -146,15 +148,19 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
 
         var confirm = service.ConfirmAsync(suggestion, Revision);
         await handler.ConfirmStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var save = service.SaveEditAsync(suggestion, edit);
+        var write = dismiss
+            ? service.DismissAsync(suggestion, Revision)
+            : service.SaveEditAsync(suggestion, edit);
         await Task.Yield();
         Assert.Equal(0, handler.UpdateRequests);
+        Assert.Equal(0, handler.DismissRequests);
 
         handler.ReleaseConfirmResponse.TrySetResult();
         await Assert.ThrowsAsync<HttpRequestException>(() => confirm);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => save);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => write);
 
         Assert.Equal(0, handler.UpdateRequests);
+        Assert.Equal(0, handler.DismissRequests);
         Assert.Single(handler.ConfirmRequests);
         Assert.NotNull(await service.GetPendingConfirmationAsync(Guid.Parse(SuggestionId)));
     }
@@ -226,6 +232,7 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
         public int RequestCount { get; private set; }
         public int GetSuggestionRequests { get; private set; }
         public int UpdateRequests { get; private set; }
+        public int DismissRequests { get; private set; }
         public List<(Guid RequestId, string Revision)> ConfirmRequests { get; } = [];
         public Action? AfterRequest { get; set; }
 
@@ -334,6 +341,9 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
                     Code = 0, Data = Current, Message = "ok", Timestamp = DateTimeOffset.UtcNow,
                 });
             }
+
+            if (request.Method == HttpMethod.Post && path.EndsWith("/dismiss", StringComparison.Ordinal))
+                DismissRequests++;
 
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         }
