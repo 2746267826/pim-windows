@@ -1,4 +1,15 @@
+using Pim.Client.Core.Services.Notes;
+
 namespace Pim.Client.App;
+
+internal sealed record LoadedCloudArtifactFence(
+    long SourceSelectionGeneration,
+    long NoteGeneration,
+    Guid NoteId,
+    Guid ArtifactId,
+    Guid VersionId,
+    CloudNoteAccountScope Account,
+    long AccountGeneration);
 
 /// <summary>
 /// Monotonic tickets for note and result selections. Async continuations may only
@@ -47,4 +58,21 @@ internal sealed class CloudNotesUiState
 
     public bool IsArtifactCurrent(long ticket)
         => ticket == ArtifactGeneration;
+
+    public static bool IsLoadedCloudArtifactCurrent(
+        LoadedCloudArtifactFence fence,
+        long sourceSelectionGeneration,
+        long noteGeneration,
+        Guid currentNoteId,
+        Guid currentArtifactId,
+        Guid currentVersionId,
+        CloudNoteAccountScope? currentAccount,
+        long currentAccountGeneration)
+        => fence.SourceSelectionGeneration == sourceSelectionGeneration
+           && fence.NoteGeneration == noteGeneration
+           && fence.NoteId == currentNoteId
+           && fence.ArtifactId == currentArtifactId
+           && fence.VersionId == currentVersionId
+           && fence.Account == currentAccount
+           && fence.AccountGeneration == currentAccountGeneration;
 }

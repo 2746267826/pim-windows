@@ -28,6 +28,8 @@ public partial class NativeNotesWindow : Window
     private NoteDerivedArtifactDto? _selectedArtifact;
     private NoteDerivedVersionDto? _selectedDerivedVersion;
     private NoteDerivedVersionSummaryDto? _selectedDerivedVersionSummary;
+    private LoadedCloudArtifactFence? _loadedTaskSourceFence;
+    private long _taskSourceSelectionGeneration;
 
     public NativeNotesWindow()
     {
@@ -583,6 +585,8 @@ public partial class NativeNotesWindow : Window
     {
         _cloudUi.BeginNoteSelection();
         _cloudUi.BeginArtifactSelection();
+        Interlocked.Increment(ref _taskSourceSelectionGeneration);
+        _loadedTaskSourceFence = null;
         _loading = true;
         _current = null;
         TitleBox.Text = string.Empty;
@@ -972,6 +976,8 @@ public partial class NativeNotesWindow : Window
 
             if (rows.Length == 0)
             {
+                Interlocked.Increment(ref _taskSourceSelectionGeneration);
+                _loadedTaskSourceFence = null;
                 _selectedArtifact = null;
                 _selectedDerivedVersion = null;
                 _selectedDerivedVersionSummary = null;
@@ -1017,6 +1023,8 @@ public partial class NativeNotesWindow : Window
         var selectionGeneration = _cloudUi.NoteGeneration;
         if (CloudArtifactsList.SelectedItem is not CloudArtifactRow row)
         {
+            Interlocked.Increment(ref _taskSourceSelectionGeneration);
+            _loadedTaskSourceFence = null;
             _selectedArtifact = null;
             _selectedDerivedVersion = null;
             _selectedDerivedVersionSummary = null;
@@ -1035,6 +1043,8 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        var sourceSelectionGeneration = Interlocked.Increment(ref _taskSourceSelectionGeneration);
+        _loadedTaskSourceFence = null;
         var previousSelection = (CloudArtifactsList.ItemsSource as IEnumerable<CloudArtifactRow>)?
             .FirstOrDefault(candidate =>
                 candidate.Artifact.ArtifactId == _selectedArtifact?.ArtifactId
@@ -1065,6 +1075,14 @@ public partial class NativeNotesWindow : Window
             _selectedArtifact = row.Artifact;
             _selectedDerivedVersion = version;
             _selectedDerivedVersionSummary = row.Version;
+            _loadedTaskSourceFence = new LoadedCloudArtifactFence(
+                sourceSelectionGeneration,
+                selectionGeneration,
+                noteId!.Value,
+                Guid.Parse(row.Artifact.ArtifactId),
+                Guid.Parse(row.Version.VersionId),
+                accountScope!,
+                accountGeneration);
             _loadingCloudResult = true;
             _cloudUi.ClearDraft();
             CloudResultBox.Text = version.ContentMarkdown;
@@ -1278,14 +1296,50 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        if (_loadedTaskSourceFence is not { } loadedSource
+            || !Guid.TryParse(_selectedArtifact.ArtifactId, out var loadedArtifactId)
+            || !Guid.TryParse(_selectedDerivedVersion.VersionId, out var loadedVersionId)
+            || !CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+                loadedSource,
+                Interlocked.Read(ref _taskSourceSelectionGeneration),
+                _cloudUi.NoteGeneration,
+                _current.NoteId,
+                loadedArtifactId,
+                loadedVersionId,
+                _cloud.CurrentAccountScope,
+                _cloud.AccountGeneration))
+        {
+            CloudResultStateText.Text = "固定来源回执已过期或与当前账号/笔记/版本不匹配；请刷新并重新读取后再打开。";
+            return;
+        }
+
         try
         {
+            var operationFence = App.Services
+                .GetRequiredService<NoteTaskSuggestionService>()
+                .CaptureFence();
+            if (operationFence.Account != loadedSource.Account
+                || operationFence.AccountGeneration != loadedSource.AccountGeneration
+                || !CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+                    loadedSource,
+                    Interlocked.Read(ref _taskSourceSelectionGeneration),
+                    _cloudUi.NoteGeneration,
+                    _current.NoteId,
+                    loadedArtifactId,
+                    loadedVersionId,
+                    _cloud.CurrentAccountScope,
+                    _cloud.AccountGeneration))
+            {
+                CloudResultStateText.Text = "账号或固定来源在打开前已变化；请刷新并重新读取来源。";
+                return;
+            }
+
             var window = new NoteTaskSuggestionsWindow(
                 _current.NoteId,
                 _selectedArtifact,
                 _selectedDerivedVersionSummary,
                 _selectedDerivedVersion,
-                App.Services.GetRequiredService<NoteTaskSuggestionService>().CaptureFence())
+                operationFence)
             {
                 Owner = this,
             };
