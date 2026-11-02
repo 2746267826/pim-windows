@@ -24,6 +24,8 @@
     <Compile Include="../ClientWindows/Pim.Client.App.Tests.AssemblyInfo.cs" />
     <Compile Include="../ClientWindows/BootstrapLogTests.cs" />
     <Compile Include="../ClientWindows/CloudNotesUiStateTests.cs" />
+    <Compile Include="../ClientWindows/HandwritingStrokeMapperTests.cs" />
+    <Compile Include="../ClientWindows/HandwritingWindowLayoutTests.cs" />
     <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/DaemonLoggerShutdownTests.cs" />
     <Compile Include="../ClientWindows/ScheduledTaskServiceTests.cs" />

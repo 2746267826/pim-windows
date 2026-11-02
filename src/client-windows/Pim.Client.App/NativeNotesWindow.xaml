@@ -59,6 +59,9 @@
                          FontFamily="Consolas" FontSize="15" Padding="16" BorderBrush="{StaticResource PimBorderBrush}"
                          TextChanged="OnEditorChanged" />
                 <DockPanel Grid.Row="3" Margin="0,10,0,0">
+                    <Button DockPanel.Dock="Right" Content="编辑所选笔迹"
+                            Style="{StaticResource PimSecondaryButton}" Margin="6,0,0,4"
+                            Click="OnEditHandwriting" />
                     <TextBlock DockPanel.Dock="Top" Text="当前固定版本中的材料（双击照片预览或音频回放）" FontSize="12"
                                Foreground="{StaticResource PimMutedTextBrush}" Margin="0,0,0,4" />
                     <ListBox x:Name="MaterialsList" BorderBrush="{StaticResource PimBorderBrush}"

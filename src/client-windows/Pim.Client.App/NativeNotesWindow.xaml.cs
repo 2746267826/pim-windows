@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -282,6 +284,10 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        var noteId = _current.NoteId;
+        var noteGeneration = _cloudUi.NoteGeneration;
+        var account = _cloud.CurrentAccountScope;
+        var accountGeneration = _cloud.AccountGeneration;
         try
         {
             if (!await SavePendingAsync())
@@ -289,28 +295,274 @@ public partial class NativeNotesWindow : Window
                 return;
             }
 
+            if (!IsHandwritingSourceCurrent(noteId, noteGeneration, account, accountGeneration))
+            {
+                return;
+            }
+
+            var note = _current!;
+            var fence = new HandwritingEditFence(note.NoteId, note.CurrentVersionId, noteGeneration, account, accountGeneration);
+
             var dialog = new HandwritingWindow { Owner = this };
             if (dialog.ShowDialog() != true || dialog.Capture is null)
             {
                 return;
             }
 
+            if (!IsHandwritingFenceCurrent(fence))
+            {
+                return;
+            }
+
             using var png = new MemoryStream(dialog.Capture.PngBytes, writable: false);
-            _current = await _store.AddHandwritingAsync(
-                _current.NoteId,
+            var saved = await _store.AddHandwritingAsync(
+                note.NoteId,
                 png,
                 dialog.Capture.VectorJson,
                 $"手写 {DateTime.Now:MM-dd HHmmss}",
                 dialog.Capture.Width,
-                dialog.Capture.Height);
+                dialog.Capture.Height,
+                expectedCurrentVersionId: fence.VersionId);
+            if (!IsHandwritingFenceCurrent(fence))
+            {
+                return;
+            }
+
+            _current = saved;
+            var savedFence = fence with { VersionId = saved.CurrentVersionId };
             UpdateMaterials();
-            await RefreshNotesAsync(SearchBox.Text);
-            await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
+            await RefreshNotesAsync(SearchBox.Text, () => IsHandwritingFenceCurrent(savedFence));
+            if (!IsHandwritingFenceCurrent(savedFence))
+            {
+                return;
+            }
+
+            await RefreshVersionsAsync(saved.NoteId, saved.CurrentVersionId, () => IsHandwritingFenceCurrent(savedFence));
+            if (!IsHandwritingFenceCurrent(savedFence))
+            {
+                return;
+            }
+
             SaveStateText.Text = "手写墨迹与 PNG 已保存为新的固定版本";
         }
         catch (Exception ex)
         {
-            ShowFailure("手写材料未能保存", ex);
+            if (IsHandwritingSourceCurrent(noteId, noteGeneration, account, accountGeneration))
+            {
+                ShowFailure("手写材料未能保存", ex);
+            }
+        }
+    }
+
+    private async void OnEditHandwriting(object sender, RoutedEventArgs e)
+    {
+        if (_current is null || MaterialsList.SelectedItem is not LocalNoteMaterial selected
+            || selected.Kind != LocalNoteMaterialKind.Handwriting)
+        {
+            MessageBox.Show(this, "请先选择一项手写材料。", "编辑手写", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (_current.IsServerSourceReadOnly)
+        {
+            MessageBox.Show(this, "服务器混排原件当前为只读，不能在本机编辑笔迹。", "编辑手写", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var noteId = _current.NoteId;
+        var selectionGeneration = _cloudUi.NoteGeneration;
+        var account = _cloud.CurrentAccountScope;
+        var accountGeneration = _cloud.AccountGeneration;
+        try
+        {
+            if (!await SavePendingAsync()
+                || !IsHandwritingSourceCurrent(noteId, selectionGeneration, account, accountGeneration)
+                || MaterialsList.SelectedItem is not LocalNoteMaterial currentSelection
+                || currentSelection.MaterialId != selected.MaterialId)
+            {
+                return;
+            }
+
+            var note = _current!;
+            var fence = new HandwritingEditFence(note.NoteId, note.CurrentVersionId, selectionGeneration, account, accountGeneration);
+            var versionFiles = await _store.ResolveVersionMaterialsAsync(note.NoteId, note.CurrentVersionId);
+            if (!IsHandwritingFenceCurrent(fence))
+            {
+                return;
+            }
+
+            var previewFile = versionFiles.SingleOrDefault(file => file.Material.MaterialId == selected.MaterialId);
+            if (previewFile is null || previewFile.Material.Kind != LocalNoteMaterialKind.Handwriting)
+            {
+                throw new InvalidDataException("所选手写预览不属于当前固定版本。");
+            }
+
+            var sourceMaterial = LocalInkMaterialPairing.ResolveSource(
+                previewFile.Material.MaterialId,
+                versionFiles.Select(file => file.Material).ToArray());
+            var sourceFile = versionFiles.Single(file => file.Material.MaterialId == sourceMaterial.MaterialId);
+            var previewStem = RemoveMaterialExtension(previewFile.Material.DisplayName, ".png");
+
+            await VerifyMaterialAsync(previewFile, 64L * 1024 * 1024);
+            if (!IsHandwritingFenceCurrent(fence)
+                || MaterialsList.SelectedItem is not LocalNoteMaterial verifiedSelection
+                || verifiedSelection.MaterialId != selected.MaterialId)
+            {
+                return;
+            }
+
+            var vectorBytes = await ReadVerifiedMaterialAsync(sourceFile, LocalInkDocumentCodec.MaxDocumentBytes);
+            var ink = LocalInkDocumentCodec.Parse(new UTF8Encoding(false, true).GetString(vectorBytes));
+            if (sourceMaterial.Width != ink.Width || sourceMaterial.Height != ink.Height
+                || previewFile.Material.Width != ink.Width || previewFile.Material.Height != ink.Height)
+            {
+                throw new InvalidDataException("手写源尺寸与材料清单不一致。");
+            }
+
+            if (!IsHandwritingFenceCurrent(fence)
+                || MaterialsList.SelectedItem is not LocalNoteMaterial currentSourceSelection
+                || currentSourceSelection.MaterialId != selected.MaterialId)
+            {
+                return;
+            }
+
+            var dialog = new HandwritingWindow(ink) { Owner = this, Title = "编辑手写材料" };
+            if (dialog.ShowDialog() != true || dialog.Capture is null)
+            {
+                return;
+            }
+
+            if (!IsHandwritingFenceCurrent(fence)
+                || MaterialsList.SelectedItem is not LocalNoteMaterial stillSelected
+                || stillSelected.MaterialId != selected.MaterialId)
+            {
+                return;
+            }
+
+            using var png = new MemoryStream(dialog.Capture.PngBytes, writable: false);
+            var saved = await _store.AddHandwritingAsync(
+                note.NoteId, png, dialog.Capture.VectorJson, previewStem,
+                dialog.Capture.Width, dialog.Capture.Height, expectedCurrentVersionId: fence.VersionId);
+            if (!IsHandwritingFenceCurrent(fence))
+            {
+                return;
+            }
+
+            _current = saved;
+            var savedFence = fence with { VersionId = saved.CurrentVersionId };
+            UpdateMaterials();
+            await RefreshNotesAsync(SearchBox.Text, () => IsHandwritingFenceCurrent(savedFence));
+            if (!IsHandwritingFenceCurrent(savedFence))
+            {
+                return;
+            }
+
+            await RefreshVersionsAsync(saved.NoteId, saved.CurrentVersionId, () => IsHandwritingFenceCurrent(savedFence));
+            if (!IsHandwritingFenceCurrent(savedFence))
+            {
+                return;
+            }
+
+            SaveStateText.Text = "已将编辑后的笔迹追加为新固定版本；原材料仍保留";
+        }
+        catch (Exception ex)
+        {
+            if (IsHandwritingSourceCurrent(noteId, selectionGeneration, account, accountGeneration))
+            {
+                ShowFailure("手写材料未能重新打开或保存；原固定版本未修改", ex);
+            }
+        }
+    }
+
+    private bool IsHandwritingSourceCurrent(
+        Guid noteId,
+        long selectionGeneration,
+        CloudNoteAccountScope? account,
+        long accountGeneration)
+        => _current?.NoteId == noteId
+           && selectionGeneration == _cloudUi.NoteGeneration
+           && account == _cloud.CurrentAccountScope
+           && accountGeneration == _cloud.AccountGeneration;
+
+    private bool IsHandwritingFenceCurrent(HandwritingEditFence fence)
+        => fence.IsCurrent(
+            _current?.NoteId,
+            _current?.CurrentVersionId,
+            _cloudUi.NoteGeneration,
+            _cloud.CurrentAccountScope,
+            _cloud.AccountGeneration);
+
+    private static string RemoveMaterialExtension(string value, string extension)
+        => value.EndsWith(extension, StringComparison.OrdinalIgnoreCase)
+            ? value[..^extension.Length]
+            : value;
+
+    private static async Task<byte[]> ReadVerifiedMaterialAsync(LocalNoteMaterialFile file, long maxBytes)
+    {
+        var material = file.Material;
+        if (material.Length is <= 0 || material.Length > maxBytes || material.Length > int.MaxValue)
+        {
+            throw new InvalidDataException($"材料超过安全读取上限：{material.DisplayName}");
+        }
+
+        await using var stream = new FileStream(
+            file.AbsolutePath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (stream.Length != material.Length)
+        {
+            throw new InvalidDataException($"材料长度与固定清单不一致：{material.DisplayName}");
+        }
+
+        var bytes = new byte[(int)material.Length];
+        await stream.ReadExactlyAsync(bytes);
+        if (stream.ReadByte() != -1
+            || !string.Equals(
+                Convert.ToHexString(SHA256.HashData(bytes)),
+                material.ContentSha256,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException($"材料摘要校验失败：{material.DisplayName}");
+        }
+
+        return bytes;
+    }
+
+    private static async Task VerifyMaterialAsync(LocalNoteMaterialFile file, long maxBytes)
+    {
+        var material = file.Material;
+        if (material.Length is <= 0 || material.Length > maxBytes)
+        {
+            throw new InvalidDataException($"预览材料超过安全校验上限：{material.DisplayName}");
+        }
+
+        await using var stream = new FileStream(
+            file.AbsolutePath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (stream.Length != material.Length)
+        {
+            throw new InvalidDataException($"预览长度与固定清单不一致：{material.DisplayName}");
+        }
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[64 * 1024];
+        long total = 0;
+        int read;
+        while ((read = await stream.ReadAsync(buffer)) != 0)
+        {
+            total += read;
+            if (total > maxBytes)
+            {
+                throw new InvalidDataException($"预览材料超过安全校验上限：{material.DisplayName}");
+            }
+
+            hash.AppendData(buffer, 0, read);
+        }
+
+        var digest = Convert.ToHexString(hash.GetHashAndReset());
+        if (total != material.Length
+            || !string.Equals(digest, material.ContentSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException($"预览摘要校验失败：{material.DisplayName}");
         }
     }
 
@@ -535,10 +787,15 @@ public partial class NativeNotesWindow : Window
         }
     }
 
-    private async Task RefreshNotesAsync(string? query = null)
+    private async Task RefreshNotesAsync(string? query = null, Func<bool>? applyGuard = null)
     {
         var selectedId = _current?.NoteId;
         var rows = await _store.ListAsync(query);
+        if (applyGuard is not null && !applyGuard())
+        {
+            return;
+        }
+
         _notes.Clear();
         foreach (var row in rows)
         {
@@ -737,9 +994,14 @@ public partial class NativeNotesWindow : Window
         }
     }
 
-    private async Task RefreshVersionsAsync(Guid noteId, Guid currentVersionId)
+    private async Task RefreshVersionsAsync(Guid noteId, Guid currentVersionId, Func<bool>? applyGuard = null)
     {
         var versions = await _store.ListVersionsAsync(noteId);
+        if (applyGuard is not null && !applyGuard())
+        {
+            return;
+        }
+
         var rows = versions
             .Select(version => new LocalNoteVersionRow(
                 version.VersionId,
