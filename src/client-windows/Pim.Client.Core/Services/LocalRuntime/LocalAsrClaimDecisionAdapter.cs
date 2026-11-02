@@ -53,6 +53,7 @@ public sealed class LocalAsrClaimDecisionAdapter(
                 string.Join(",", frozen.Decision.Reasons));
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         LocalAsrClaimResult result;
         if (transport is ILocalAsrResourceDecisionTransport decisionTransport)
         {
