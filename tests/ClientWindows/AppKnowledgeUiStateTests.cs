@@ -1,4 +1,5 @@
 using Pim.Client.App;
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Services;
 using Xunit;
 
@@ -69,6 +70,26 @@ public sealed class AppKnowledgeUiStateTests
         Assert.True(AppKnowledgeUiState.WouldCreateCategoryCycle(editedId, edited));
         Assert.True(AppKnowledgeUiState.WouldCreateCategoryCycle(descendantId, edited));
         Assert.False(AppKnowledgeUiState.WouldCreateCategoryCycle(null, edited));
+    }
+
+    [Fact]
+    public void CreatingChildKeepsSelectedCategoryAsParentButEditingExcludesSelfAndDescendants()
+    {
+        var ancestor = Category(Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+        var selected = Category(Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
+        var descendant = Category(Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc"));
+        var sibling = Category(Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd"));
+        selected.Children = [descendant];
+        var loaded = new[] { ancestor, selected, descendant, sibling };
+
+        var createParents = AppKnowledgeWindow.FilterCategoryParentCandidates(loaded, editingCategory: null);
+        Assert.Contains(selected, createParents);
+
+        var editParents = AppKnowledgeWindow.FilterCategoryParentCandidates(loaded, selected);
+        Assert.Contains(ancestor, editParents);
+        Assert.Contains(sibling, editParents);
+        Assert.DoesNotContain(selected, editParents);
+        Assert.DoesNotContain(descendant, editParents);
     }
 
     private static CategoryTreeNode Category(Guid id, List<CategoryTreeNode>? children = null)

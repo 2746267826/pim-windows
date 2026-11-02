@@ -135,10 +135,12 @@ public partial class AppKnowledgeWindow : Window
         CategoryNameBox.Clear();
         CategoryColorBox.Text = "#64748b";
         ProductivityBox.SelectedValue = "neutral";
-        ParentCategoryBox.ItemsSource = Flatten(_selectedCategory is null
-            ? GetLoadedCategories()
-            : GetLoadedCategories().Where(node => node.Id != _selectedCategory.Id));
-        ParentCategoryBox.SelectedItem = FindRow((Guid.TryParse(_selectedCategory?.Id, out var id) ? id : (Guid?)null));
+        var parentRows = FilterCategoryParentCandidates(GetLoadedCategories(), editingCategory: null)
+            .Select(node => FindRow(node.Id))
+            .OfType<CategoryRow>()
+            .ToArray();
+        ParentCategoryBox.ItemsSource = parentRows;
+        ParentCategoryBox.SelectedItem = parentRows.FirstOrDefault(row => row.Node.Id == _selectedCategory?.Id);
         BuiltinCategoryNotice.Text = "正在新建自定义分类。";
         SaveCategoryButton.IsEnabled = true;
         DeleteCategoryButton.IsEnabled = false;
@@ -624,11 +626,12 @@ public partial class AppKnowledgeWindow : Window
         CategoryNameBox.Text = category.Name;
         CategoryColorBox.Text = category.Color;
         ProductivityBox.SelectedValue = category.Productivity;
-        var rows = Flatten(GetLoadedCategories().Where(node =>
-            Guid.TryParse(node.Id, out var parentId)
-            && !AppKnowledgeUiState.WouldCreateCategoryCycle(parentId, category))).ToArray();
+        var rows = FilterCategoryParentCandidates(GetLoadedCategories(), category)
+            .Select(node => FindRow(node.Id))
+            .OfType<CategoryRow>()
+            .ToArray();
         ParentCategoryBox.ItemsSource = rows;
-        ParentCategoryBox.SelectedItem = FindRow(category.ParentId);
+        ParentCategoryBox.SelectedItem = rows.FirstOrDefault(row => row.Node.Id == category.ParentId);
         BuiltinCategoryNotice.Text = category.IsBuiltin
             ? "内置分类：只读，不允许编辑或删除。"
             : $"自定义分类 · {category.Id}";
@@ -986,6 +989,22 @@ public partial class AppKnowledgeWindow : Window
 
     private List<CategoryTreeNode> GetLoadedCategories()
         => FlattenNodes(CategoryTree.ItemsSource as IEnumerable<CategoryRow>).ToList();
+
+    internal static IReadOnlyList<CategoryTreeNode> FilterCategoryParentCandidates(
+        IEnumerable<CategoryTreeNode> categories,
+        CategoryTreeNode? editingCategory)
+    {
+        var loaded = categories.ToArray();
+        if (editingCategory is null)
+        {
+            return loaded;
+        }
+
+        return loaded.Where(node =>
+                Guid.TryParse(node.Id, out var parentId)
+                && !AppKnowledgeUiState.WouldCreateCategoryCycle(parentId, editingCategory))
+            .ToArray();
+    }
 
     private static IReadOnlyList<CategoryRow> Flatten(IEnumerable<CategoryTreeNode> nodes)
         => nodes.Select(CategoryRow.From).ToArray();
