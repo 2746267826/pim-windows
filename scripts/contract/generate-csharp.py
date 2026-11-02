@@ -249,8 +249,9 @@ def query_enum_reference(parameter: dict, op_path: str, name: str,
     if not isinstance(ref, str) or not ref.startswith("#/components/schemas/"):
         raise GenerationError(
             f"operation {op_path} 的参数 {name} 的 schema $ref 不是本地具名 schema：拒绝产出。")
-    enum_name = ref.rsplit("/", 1)[-1]
-    if not enum_name or "/" in enum_name or contract is None:
+    prefix = "#/components/schemas/"
+    enum_name = ref[len(prefix):]
+    if not enum_name or "/" in enum_name or "~" in enum_name or contract is None:
         raise GenerationError(
             f"operation {op_path} 的参数 {name} 无法解析 schema $ref：拒绝产出。")
     if (op_path, name, enum_name) != (

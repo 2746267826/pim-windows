@@ -584,6 +584,12 @@ reject_case "query_parameter_ref" "query 参数用 \$ref 引用（生成器尚�
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"$" "ref": "#/components/parameters/Page"}]'
 reject_case "query_enum_schema_ref_missing" "query 枚举引用不存在的具名 schema" \
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "status", "in": "query", "schema": {"$" "ref": "#/components/schemas/MissingStatus"}}]'
+reject_case "task_query_enum_schema_ref_extra_segment" "真实 TASK status 引用含多余 JSON Pointer 段" \
+  'parameter = next(p for p in doc["paths"]["/api/v1/native-notes/task-suggestions"]["get"]["parameters"] if p.get("name") == "status"); parameter["schema"]["$ref"] = "#/components/schemas/extra/NoteTaskSuggestionStatusDto"'
+reject_case "task_query_enum_schema_ref_pointer_escape" "真实 TASK status 引用含未支持 JSON Pointer escape" \
+  'parameter = next(p for p in doc["paths"]["/api/v1/native-notes/task-suggestions"]["get"]["parameters"] if p.get("name") == "status"); parameter["schema"]["$ref"] = "#/components/schemas/NoteTaskSuggestionStatusDto~1extra"'
+reject_case "task_query_enum_schema_missing_target" "真实 TASK status 引用目标 schema 不存在" \
+  'del schemas["NoteTaskSuggestionStatusDto"]'
 reject_case "query_enum_schema_with_constraints" "query 枚举引用带未建模约束的 schema" \
   'schemas["TestQueryStatus"] = {"type": "string", "enum": ["Draft"], "pattern": "^D"}; doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "status", "in": "query", "schema": {"$" "ref": "#/components/schemas/TestQueryStatus"}}]'
 reject_case "query_enum_on_unmodelled_operation" "除 TASK-01 外的 operation 使用 query 枚举引用" \
