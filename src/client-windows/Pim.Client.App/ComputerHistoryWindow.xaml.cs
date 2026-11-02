@@ -18,6 +18,7 @@ public partial class ComputerHistoryWindow : Window
     private long _remoteQueryGeneration;
     private bool _updatingRemoteSelectors;
     private bool _remoteQueryInProgress;
+    private bool _componentsInitialized;
     private int _remotePage = 1;
     private int _remoteAvailablePage;
 
@@ -35,6 +36,7 @@ public partial class ComputerHistoryWindow : Window
         ApiClient api)
     {
         InitializeComponent();
+        _componentsInitialized = true;
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _remoteHistory = remoteHistory ?? throw new ArgumentNullException(nameof(remoteHistory));
         _api = api ?? throw new ArgumentNullException(nameof(api));
@@ -324,6 +326,9 @@ public partial class ComputerHistoryWindow : Window
 
     private void ShowSelectedHistoryDetail()
     {
+        if (!_componentsInitialized)
+            return;
+
         if (HistoryModeTabs.SelectedIndex == 0)
             ShowLocalHistoryDetail();
         else if (HistoryModeTabs.SelectedIndex == 1)
@@ -334,7 +339,7 @@ public partial class ComputerHistoryWindow : Window
 
     private void ShowRemoteHistoryDetail()
     {
-        if (HistoryModeTabs.SelectedIndex != 1)
+        if (!_componentsInitialized || HistoryModeTabs.SelectedIndex != 1)
             return;
 
         if (RemoteHistoryList.SelectedItem is not RemoteComputerHistoryRow row)
@@ -431,7 +436,7 @@ public partial class ComputerHistoryWindow : Window
 
     private void ShowLocalHistoryDetail()
     {
-        if (HistoryModeTabs.SelectedIndex != 0)
+        if (!_componentsInitialized || HistoryModeTabs.SelectedIndex != 0)
             return;
 
         if (HistoryList.SelectedItem is not ComputerHistoryRow row)
