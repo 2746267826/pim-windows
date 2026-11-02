@@ -633,6 +633,74 @@ public class ApiClient
             clientLease).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// <c>GET /api/v1/native-notes/versions/{versionId}/files/{fileIndex}</c>.
+    /// The returned response owns a bounded, response-header-read stream and must be disposed.
+    /// </summary>
+    public async Task<NoteMaterialFileDownload?> DownloadNoteMaterialFileAsync(
+        Guid versionId,
+        int fileIndex,
+        long maxContentBytes,
+        CancellationToken ct = default)
+    {
+        RequireGuid(versionId, nameof(versionId));
+        if (fileIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(fileIndex));
+        }
+        if (maxContentBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxContentBytes));
+        }
+
+        var relativePath = ContractOperation.DownloadNoteMaterialFile.Resolve(
+            ("versionId", versionId.ToString("D")),
+            ("fileIndex", fileIndex.ToString(CultureInfo.InvariantCulture)));
+        var clientLease = CaptureClientLease();
+        var response = await SendResponseWithAuthRetryAsync(
+            () => clientLease.Client.SendAsync(
+                new HttpRequestMessage(HttpMethod.Get, relativePath),
+                HttpCompletionOption.ResponseHeadersRead,
+                ct),
+            ct,
+            allowTokenRenewal: true,
+            clientLease: clientLease).ConfigureAwait(false);
+
+        try
+        {
+            response.EnsureSuccessStatusCode();
+
+            var mediaType = response.Content.Headers.ContentType?.MediaType;
+            if (!string.Equals(mediaType, "application/octet-stream", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    "note material response must use application/octet-stream content type");
+            }
+
+            var declaredLength = response.Content.Headers.ContentLength;
+            if (declaredLength is > 0 && declaredLength.Value > maxContentBytes)
+            {
+                throw new InvalidDataException(
+                    "note material declared content length exceeds the configured limit");
+            }
+
+            var headers = ParseNoteMaterialFileHeaders(response);
+            var content = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            var bounded = new BoundedHttpResponseStream(
+                content,
+                response,
+                maxContentBytes,
+                ownsResponse: true,
+                scope: "note material");
+            return new NoteMaterialFileDownload(headers, bounded);
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
+    }
+
     /// <summary><c>DELETE /api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}</c>。</summary>
     public Task<StringApiResponse?> DeleteNoteMaterialPartAsync(
         Guid versionId,
@@ -865,6 +933,95 @@ public class ApiClient
             ContractOperation.SelectNoteDerivedArtifactVersion,
             [("artifactId", RequireGuid(artifactId, nameof(artifactId)).ToString("D"))],
             request,
+            ct);
+
+    /// <summary>列出契约批准的笔记派生任务目标目录。</summary>
+    public Task<NoteDerivedDestinationsDtoApiResponse?> GetNoteDerivedDestinationsAsync(
+        CancellationToken ct = default)
+        => SendAsync<NoteDerivedDestinationsDtoApiResponse>(
+            ContractOperation.GetNoteDerivedDestinations,
+            null,
+            null,
+            ct);
+
+    /// <summary>读取当前账号任务建议提取记录。</summary>
+    public Task<NoteTaskSuggestionExtractionDtoApiResponse?> StartNoteTaskSuggestionExtractionAsync(
+        StartNoteTaskSuggestionExtractionRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<NoteTaskSuggestionExtractionDtoApiResponse>(
+            ContractOperation.StartNoteTaskSuggestionExtraction,
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
+    /// <summary>读取任务建议提取状态。</summary>
+    public Task<NoteTaskSuggestionExtractionDtoApiResponse?> GetNoteTaskSuggestionExtractionAsync(
+        Guid id,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionExtractionDtoApiResponse>(
+            ContractOperation.GetNoteTaskSuggestionExtraction,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary>按笔记和可选状态读取任务建议。</summary>
+    public Task<NoteTaskSuggestionListDtoApiResponse?> GetNoteTaskSuggestionsAsync(
+        Guid? noteId = null,
+        NoteTaskSuggestionStatusDto? status = null,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionListDtoApiResponse>(
+            ContractOperation.GetNoteTaskSuggestions,
+            null,
+            null,
+            ct,
+            queryValues:
+            [
+                ("noteId", noteId is { } value
+                    ? RequireGuid(value, nameof(noteId)).ToString("D")
+                    : null),
+                ("status", status?.ToString()),
+            ]);
+
+    /// <summary>读取单条任务建议。</summary>
+    public Task<NoteTaskSuggestionDtoApiResponse?> GetNoteTaskSuggestionAsync(
+        Guid id,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionDtoApiResponse>(
+            ContractOperation.GetNoteTaskSuggestion,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary>以 revision CAS 更新任务建议草稿。</summary>
+    public Task<NoteTaskSuggestionDtoApiResponse?> UpdateNoteTaskSuggestionAsync(
+        Guid id,
+        UpdateNoteTaskSuggestionRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionDtoApiResponse>(
+            ContractOperation.UpdateNoteTaskSuggestion,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
+    /// <summary>以稳定 requestId 幂等确认任务建议。</summary>
+    public Task<NoteTaskSuggestionDtoApiResponse?> ConfirmNoteTaskSuggestionAsync(
+        Guid id,
+        ConfirmNoteTaskSuggestionRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionDtoApiResponse>(
+            ContractOperation.ConfirmNoteTaskSuggestion,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
+    /// <summary>按 revision CAS 放弃任务建议。</summary>
+    public Task<NoteTaskSuggestionDtoApiResponse?> DismissNoteTaskSuggestionAsync(
+        Guid id,
+        DismissNoteTaskSuggestionRequest request,
+        CancellationToken ct = default)
+        => SendAsync<NoteTaskSuggestionDtoApiResponse>(
+            ContractOperation.DismissNoteTaskSuggestion,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            request ?? throw new ArgumentNullException(nameof(request)),
             ct);
 
     // -----------------------------------------------------------------------
@@ -1285,7 +1442,7 @@ public class ApiClient
         }
 
         var sourceSha256 = ParseSha256Header(response, "X-Pim-Source-SHA256");
-        var contentSha256 = ParseSha256Header(response, "X-Content-SHA256");
+        var contentSha256 = ParseLowercaseSha256Header(response, "X-Content-SHA256");
 
         return new NativeAsrSegmentHeaders(
             attemptId,
@@ -1302,21 +1459,85 @@ public class ApiClient
             contentSha256);
     }
 
-    private static string RequireSingleHeader(HttpResponseMessage response, string name)
+    private static NoteMaterialFileHeaders ParseNoteMaterialFileHeaders(
+        HttpResponseMessage response)
     {
-        if (!response.Headers.TryGetValues(name, out var values))
+        var cacheControl = RequireSingleHeader(response, "Cache-Control");
+        var cacheDirectives = cacheControl
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(directive => directive.Split('=', 2)[0].Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!cacheDirectives.Contains("private") || !cacheDirectives.Contains("no-store"))
         {
-            throw new InvalidDataException($"native ASR segment response is missing {name}");
+            throw new InvalidDataException(
+                "note material response Cache-Control must be private, no-store");
         }
 
-        var materialized = values.Select(value => value.Trim()).ToArray();
+        var dispositionValue = RequireSingleHeader(response, "Content-Disposition");
+        if (!ContentDispositionHeaderValue.TryParse(dispositionValue, out var disposition)
+            || !string.Equals(disposition.DispositionType, "attachment", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                "note material response Content-Disposition must be an attachment");
+        }
+
+        var rawFileName = (disposition.FileNameStar ?? disposition.FileName)?.Trim().Trim('"');
+        var fileName = RequireSafeDownloadFileName(rawFileName);
+        var contentSha256 = ParseLowercaseSha256Header(response, "X-Content-SHA256");
+        var contentTypeOptions = RequireSingleHeader(response, "X-Content-Type-Options");
+        if (!string.Equals(contentTypeOptions, "nosniff", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                "note material response X-Content-Type-Options must be nosniff");
+        }
+
+        return new NoteMaterialFileHeaders(
+            cacheControl,
+            dispositionValue,
+            fileName,
+            contentSha256);
+    }
+
+    private static string RequireSafeDownloadFileName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || value.Length > 255
+            || value is "." or ".."
+            || value.Contains('/')
+            || value.Contains('\\')
+            || value.Any(char.IsControl))
+        {
+            throw new InvalidDataException(
+                "note material response Content-Disposition has an unsafe filename");
+        }
+
+        return value;
+    }
+
+    private static string RequireSingleHeader(HttpResponseMessage response, string name)
+    {
+        // NonValidated preserves the wire value. Typed parsing may split a
+        // syntactically single Cache-Control field into multiple elements.
+        var materialized = RawHeaderValues(response.Headers, name)
+            .Concat(RawHeaderValues(response.Content.Headers, name))
+            .ToArray();
         if (materialized.Length != 1 || string.IsNullOrWhiteSpace(materialized[0]))
         {
             throw new InvalidDataException(
-                $"native ASR segment response must contain exactly one {name}");
+                $"response must contain exactly one {name}");
         }
 
-        return materialized[0];
+        return materialized[0].Trim();
+    }
+
+    private static IEnumerable<string> RawHeaderValues(HttpHeaders headers, string name)
+    {
+        if (!headers.NonValidated.TryGetValues(name, out var values))
+        {
+            return [];
+        }
+
+        return values.ToArray();
     }
 
     private static Guid ParseGuidHeader(HttpResponseMessage response, string name)
@@ -1370,6 +1591,19 @@ public class ApiClient
         }
 
         return value.ToLowerInvariant();
+    }
+
+    private static string ParseLowercaseSha256Header(HttpResponseMessage response, string name)
+    {
+        var value = RequireSingleHeader(response, name);
+        if (value.Length != 64
+            || value.Any(character => character is not (>= '0' and <= '9')
+                and not (>= 'a' and <= 'f')))
+        {
+            throw new InvalidDataException($"{name} is not a lowercase SHA-256 digest");
+        }
+
+        return value;
     }
 
     private static Guid RequireGuid(Guid value, string parameterName)
@@ -1502,11 +1736,57 @@ public sealed class NativeAsrSegmentDownload : IAsyncDisposable, IDisposable
     }
 }
 
+public sealed record NoteMaterialFileHeaders(
+    string CacheControl,
+    string ContentDisposition,
+    string FileName,
+    string Sha256);
+
+/// <summary>
+/// Owned note material response. Disposing the stream also disposes the
+/// underlying HTTP response; callers must not keep the stream after disposal.
+/// </summary>
+public sealed class NoteMaterialFileDownload : IAsyncDisposable, IDisposable
+{
+    private int _disposed;
+
+    internal NoteMaterialFileDownload(NoteMaterialFileHeaders headers, Stream content)
+    {
+        Headers = headers;
+        Content = content;
+    }
+
+    public NoteMaterialFileHeaders Headers { get; }
+
+    public Stream Content { get; }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        Content.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        await Content.DisposeAsync().ConfigureAwait(false);
+    }
+}
+
 internal sealed class BoundedHttpResponseStream : Stream
 {
     private readonly Stream _inner;
     private HttpResponseMessage? _response;
     private readonly long _maxBytes;
+    private readonly string _scope;
     private long _bytesRead;
     private int _disposed;
 
@@ -1514,11 +1794,13 @@ internal sealed class BoundedHttpResponseStream : Stream
         Stream inner,
         HttpResponseMessage response,
         long maxBytes,
-        bool ownsResponse)
+        bool ownsResponse,
+        string scope = "native ASR segment")
     {
         _inner = inner;
         _response = ownsResponse ? response : null;
         _maxBytes = maxBytes;
+        _scope = scope;
     }
 
     public override bool CanRead => !IsDisposed && _inner.CanRead;
@@ -1614,7 +1896,7 @@ internal sealed class BoundedHttpResponseStream : Stream
         if (_bytesRead > _maxBytes)
         {
             throw new InvalidDataException(
-                "native ASR segment response exceeded the configured content limit");
+                $"{_scope} response exceeded the configured content limit");
         }
     }
 

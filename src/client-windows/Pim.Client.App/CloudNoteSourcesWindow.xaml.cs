@@ -10,6 +10,9 @@ namespace Pim.Client.App;
 public partial class CloudNoteSourcesWindow : Window
 {
     private readonly CloudNoteMaterialService _cloud;
+    private CloudNoteAccountScope? _loadedScope;
+    private long? _loadedAccountGeneration;
+    private long _refreshGeneration;
 
     public CloudNoteSourcesWindow()
     {
@@ -27,10 +30,29 @@ public partial class CloudNoteSourcesWindow : Window
 
     private async Task RefreshAsync()
     {
+        var requestGeneration = ++_refreshGeneration;
+        var accountScope = _cloud.CurrentAccountScope;
+        var accountGeneration = _cloud.AccountGeneration;
+        _loadedScope = null;
+        _loadedAccountGeneration = null;
         StatusText.Text = "正在读取服务器目录…";
+        if (accountScope is null)
+        {
+            _loadedScope = null;
+            _loadedAccountGeneration = null;
+            SourcesList.ItemsSource = null;
+            StatusText.Text = "请先登录以读取服务器笔记目录。";
+            return;
+        }
+
         try
         {
             var sources = await _cloud.GetMaterialSourcesAsync();
+            if (!IsCurrentRequest(requestGeneration, accountScope, accountGeneration))
+            {
+                return;
+            }
+
             var rows = sources
                 .GroupBy(source => source.NoteId, StringComparer.Ordinal)
                 .Select(group =>
@@ -45,6 +67,8 @@ public partial class CloudNoteSourcesWindow : Window
                 })
                 .OrderByDescending(row => row.Source.CreatedAt)
                 .ToArray();
+            _loadedScope = accountScope;
+            _loadedAccountGeneration = accountGeneration;
             SourcesList.ItemsSource = rows;
             SourcesList.SelectedItem = rows.FirstOrDefault();
             StatusText.Text = rows.Length == 0
@@ -53,6 +77,13 @@ public partial class CloudNoteSourcesWindow : Window
         }
         catch (Exception ex)
         {
+            if (!IsCurrentRequest(requestGeneration, accountScope, accountGeneration))
+            {
+                return;
+            }
+
+            _loadedScope = null;
+            _loadedAccountGeneration = null;
             SourcesList.ItemsSource = null;
             StatusText.Text = "服务器目录暂不可用；没有修改本机笔记。";
             MessageBox.Show(
@@ -70,8 +101,70 @@ public partial class CloudNoteSourcesWindow : Window
     private void OnSelect(object sender, RoutedEventArgs e)
         => SelectCurrent();
 
+    private async void OnRestore(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoadedScopeCurrent())
+        {
+            StatusText.Text = "账号或服务器已切换；请刷新目录后再恢复。";
+            return;
+        }
+
+        if (SourcesList.SelectedItem is not CloudSourceRow row
+            || !Guid.TryParse(row.Source.VersionId, out var versionId))
+        {
+            StatusText.Text = "请先选择一个有效的服务器材料版本。";
+            return;
+        }
+
+        var answer = MessageBox.Show(
+            this,
+            $"下载并恢复“{row.Source.Title}”的服务器固定版本到本机？\n\n"
+            + "服务器材料会先下载到临时目录、校验 SHA-256，再创建新的本机笔记；不会覆盖现有笔记。",
+            "恢复服务器笔记",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            StatusText.Text = "正在下载并校验固定材料…";
+            IsEnabled = false;
+            var result = await _cloud.RestoreVersionAsync(
+                versionId,
+                userConfirmedLocalCopy: true,
+                expectedAccountScope: _loadedScope,
+                expectedAccountGeneration: _loadedAccountGeneration);
+            SelectedNoteId = result.Import.NoteId;
+            StatusText.Text = "恢复完成；本机副本已创建。";
+            DialogResult = true;
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = "恢复未完成；本机笔记库保持不变。";
+            MessageBox.Show(
+                this,
+                ex.Message,
+                "恢复服务器笔记失败",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        finally
+        {
+            IsEnabled = true;
+        }
+    }
+
     private void SelectCurrent()
     {
+        if (!IsLoadedScopeCurrent())
+        {
+            StatusText.Text = "账号或服务器已切换；请刷新目录后再选择。";
+            return;
+        }
+
         if (SourcesList.SelectedItem is not CloudSourceRow row)
         {
             return;
@@ -91,6 +184,19 @@ public partial class CloudNoteSourcesWindow : Window
         SelectedNoteId = noteId;
         DialogResult = true;
     }
+
+    private bool IsLoadedScopeCurrent()
+        => _loadedScope is { } loadedScope
+            && _loadedAccountGeneration == _cloud.AccountGeneration
+            && Equals(loadedScope, _cloud.CurrentAccountScope);
+
+    private bool IsCurrentRequest(
+        long requestGeneration,
+        CloudNoteAccountScope accountScope,
+        long accountGeneration)
+        => requestGeneration == _refreshGeneration
+            && accountGeneration == _cloud.AccountGeneration
+            && Equals(accountScope, _cloud.CurrentAccountScope);
 
     private static string Label(NoteAsrSourceDto source, int versions, int conflicts)
     {

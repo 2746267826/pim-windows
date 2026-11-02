@@ -9,6 +9,7 @@ public enum LocalNoteMaterialKind
     Handwriting,
     HandwritingSource,
     Recording,
+    RecordingSegment,
     Other,
 }
 
@@ -35,6 +36,10 @@ public sealed record LocalNoteMaterial
     public int? Width { get; init; }
     public int? Height { get; init; }
     public long? DurationMilliseconds { get; init; }
+    public Guid? RecordingId { get; init; }
+    public int? RecordingSegment { get; init; }
+    public int? RecordingChunkIndex { get; init; }
+    public long? RecordingSamples { get; init; }
 }
 
 public sealed record LocalNoteDocument
@@ -47,6 +52,10 @@ public sealed record LocalNoteDocument
     public required string Title { get; init; }
     public required string Markdown { get; init; }
     public required List<LocalNoteMaterial> Materials { get; init; }
+    public LocalNoteServerSource? ServerSource { get; init; }
+
+    [JsonIgnore]
+    public bool IsServerSourceReadOnly => ServerSource is not null;
 }
 
 public sealed record LocalNoteVersion
@@ -62,7 +71,37 @@ public sealed record LocalNoteVersion
     public required string DocumentSha256 { get; init; }
     public required List<Guid> MaterialIds { get; init; }
     public IReadOnlyList<LocalNoteMaterial> Materials { get; init; } = [];
+    public LocalNoteServerSource? ServerSource { get; init; }
 }
+
+public sealed record LocalNoteServerSource(
+    Guid SourceNoteId,
+    Guid SourceVersionId,
+    string InputJson,
+    string ManifestJson,
+    string NoteJson,
+    string DocumentMarkdown,
+    IReadOnlyList<LocalNoteServerSourceBlock> Blocks,
+    IReadOnlyList<LocalNoteServerSourceFile> Files);
+
+public sealed record LocalNoteServerSourceBlock(
+    string Id,
+    string Kind,
+    string RawJson,
+    IReadOnlyList<Guid> MaterialIds);
+
+public sealed record LocalNoteServerSourceFile(
+    string Path,
+    string Kind,
+    string Sha256,
+    long SizeBytes,
+    string? BlockId,
+    string? RecordingId,
+    int? Segment,
+    int? ChunkIndex,
+    long? Samples,
+    Guid? MaterialId,
+    string? InlineJson);
 
 public sealed record LocalNoteSummary(
     Guid NoteId,
@@ -98,6 +137,38 @@ public sealed record LocalNotePackageImport(
     string Title,
     string PackageSha256,
     long PackageLength,
+    IReadOnlyList<LocalNoteMaterial> Materials);
+
+public sealed record LocalNoteServerMaterialInput(
+    Guid MaterialId,
+    LocalNoteMaterialKind Kind,
+    string DisplayName,
+    string ContentSha256,
+    string MediaType,
+    long Length,
+    string SourcePath,
+    int? Width = null,
+    int? Height = null,
+    long? DurationMilliseconds = null,
+    long? ExpectedSamples = null,
+    Guid? RecordingId = null,
+    int? RecordingSegment = null,
+    int? RecordingChunkIndex = null);
+
+public sealed record LocalNoteServerRestorePackage(
+    Guid SourceNoteId,
+    Guid SourceVersionId,
+    string Title,
+    string Markdown,
+    IReadOnlyList<LocalNoteServerMaterialInput> Materials,
+    LocalNoteServerSource ServerSource);
+
+public sealed record LocalNoteServerImport(
+    Guid NoteId,
+    Guid VersionId,
+    Guid SourceNoteId,
+    Guid SourceVersionId,
+    string Title,
     IReadOnlyList<LocalNoteMaterial> Materials);
 
 public sealed record LocalNoteMaterialFile(

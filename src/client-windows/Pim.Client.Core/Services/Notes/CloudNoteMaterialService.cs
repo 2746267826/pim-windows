@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using Pim.Client.Core.Contract;
 
 namespace Pim.Client.Core.Services.Notes;
@@ -8,6 +9,10 @@ public sealed record CloudNoteMaterialSyncResult(
     NoteMaterialUploadDto Upload,
     LocalNoteCloudBinding Binding,
     IReadOnlyList<NoteMaterialUploadDto> Versions);
+
+public sealed record CloudNoteMaterialRestoreResult(
+    NoteMaterialVersionDto ServerVersion,
+    LocalNoteServerImport Import);
 
 public sealed record CloudNoteAccountScope(string ServerUrl, string AccountId);
 
@@ -18,6 +23,7 @@ public sealed class CloudNoteMaterialService
     private readonly LocalNoteStore _store;
     private readonly ServerNoteMaterialBundleBuilder _builder;
     private readonly Func<CloudNoteAccountScope?> _accountProvider;
+    private readonly LocalNoteImportLimits _restoreLimits;
     private long _accountGeneration;
 
     public CloudNoteMaterialService(ApiClient api, AuthService auth, LocalNoteStore store)
@@ -40,12 +46,15 @@ public sealed class CloudNoteMaterialService
     public CloudNoteMaterialService(
         ApiClient api,
         LocalNoteStore store,
-        Func<CloudNoteAccountScope?> accountProvider)
+        Func<CloudNoteAccountScope?> accountProvider,
+        LocalNoteImportLimits? restoreLimits = null)
     {
         _api = api ?? throw new ArgumentNullException(nameof(api));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _accountProvider = accountProvider ?? throw new ArgumentNullException(nameof(accountProvider));
         _builder = new ServerNoteMaterialBundleBuilder(store);
+        _restoreLimits = restoreLimits ?? LocalNoteImportLimits.Default;
+        _restoreLimits.Validate();
         _api.ExternalScopeChanged += OnExternalScopeChanged;
     }
 
@@ -256,6 +265,226 @@ public sealed class CloudNoteMaterialService
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Downloads one immutable owner/server version using the typed binary
+    /// operation and imports it as a new local note. Account/deployment changes
+    /// cancel pending I/O and are fenced again immediately before local commit.
+    /// </summary>
+    public async Task<CloudNoteMaterialRestoreResult> RestoreVersionAsync(
+        Guid versionId,
+        bool userConfirmedLocalCopy,
+        CancellationToken cancellationToken = default,
+        CloudNoteAccountScope? expectedAccountScope = null,
+        long? expectedAccountGeneration = null)
+    {
+        if (!userConfirmedLocalCopy)
+        {
+            throw new InvalidOperationException("恢复云端材料前必须由用户明确确认生成本机副本。");
+        }
+        if (versionId == Guid.Empty)
+        {
+            throw new ArgumentException("版本身份不能为空。", nameof(versionId));
+        }
+
+        using var operation = BeginOperation();
+        if (expectedAccountScope is not null
+            && (!string.Equals(
+                    expectedAccountScope.ServerUrl,
+                    operation.Account.ServerUrl,
+                    StringComparison.Ordinal)
+                || !string.Equals(
+                    expectedAccountScope.AccountId,
+                    operation.Account.AccountId,
+                    StringComparison.Ordinal)
+                || expectedAccountGeneration != AccountGeneration))
+        {
+            throw new InvalidOperationException(
+                "所选服务器笔记来自已切换的账号或服务器；请刷新目录后重试。");
+        }
+
+        using var linkedCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        void OnScopeChanged() => linkedCancellation.Cancel();
+        _api.ExternalScopeChanged += OnScopeChanged;
+        string? stagingDirectory = null;
+        try
+        {
+            RequireOperationCurrent(operation);
+            var response = await _api.GetNoteMaterialVersionAsync(
+                    versionId,
+                    linkedCancellation.Token)
+                .ConfigureAwait(false)
+                ?? throw new InvalidDataException("服务器没有返回固定版本详情。");
+            RequireOperationCurrent(operation);
+            var serverVersion = RequireResponse(response.Code, response.Message, response.Data);
+            ValidateServerVersion(serverVersion, versionId);
+
+            var inputBytes = Encoding.UTF8.GetByteCount(serverVersion.InputJson);
+            var manifestBytes = Encoding.UTF8.GetByteCount(serverVersion.ManifestJson);
+            if (inputBytes > _restoreLimits.MaxMetadataEntryBytes
+                || manifestBytes > _restoreLimits.MaxMetadataEntryBytes)
+            {
+                throw new InvalidDataException("服务器材料元数据超过客户端单项容量上限。");
+            }
+
+            var metadata = ServerNoteMaterialRestoreParser.Parse(
+                serverVersion.InputJson,
+                serverVersion.ManifestJson);
+            if (metadata.NoteId != Guid.Parse(serverVersion.Upload.NoteId)
+                || metadata.VersionId != versionId)
+            {
+                throw new InvalidDataException("服务器版本详情与材料 input 的身份不一致。");
+            }
+
+            if (metadata.Files.Count > _restoreLimits.MaxArchiveEntries)
+            {
+                throw new InvalidDataException("服务器恢复材料文件项超过客户端上限。");
+            }
+
+            var totalBytes = metadata.Files.Aggregate(
+                checked((long)inputBytes + manifestBytes),
+                (total, file) => checked(total + file.SizeBytes));
+            if (totalBytes > _restoreLimits.MaxTotalUncompressedBytes)
+            {
+                throw new InvalidDataException("服务器恢复材料总量超过客户端上限。");
+            }
+
+            stagingDirectory = Path.Combine(
+                Path.GetTempPath(),
+                "pim-server-restore-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(stagingDirectory);
+            var stagedFiles = new Dictionary<string, string>(StringComparer.Ordinal);
+            var uploadFiles = ValidateUploadFiles(serverVersion.Upload, metadata.Files);
+            var remainingBytes = _restoreLimits.MaxTotalUncompressedBytes - inputBytes - manifestBytes;
+            foreach (var uploadFile in uploadFiles)
+            {
+                RequireOperationCurrent(operation);
+                var manifestFile = metadata.Files.Single(file =>
+                    string.Equals(file.Path, uploadFile.Path, StringComparison.Ordinal));
+                var perFileLimit = manifestFile.Kind switch
+                {
+                    "Document" => _restoreLimits.MaxMetadataEntryBytes,
+                    "Markdown" => _restoreLimits.MaxDocumentEntryBytes,
+                    "RecordingManifest" => _restoreLimits.MaxMetadataEntryBytes,
+                    _ => _restoreLimits.MaxMaterialEntryBytes,
+                };
+                if (manifestFile.SizeBytes > perFileLimit
+                    || manifestFile.SizeBytes > remainingBytes)
+                {
+                    throw new InvalidDataException(
+                        $"服务器材料文件超过客户端预算：{manifestFile.Path}");
+                }
+
+                var maxBytes = Math.Max(1, manifestFile.SizeBytes);
+                await using var download = await _api.DownloadNoteMaterialFileAsync(
+                        versionId,
+                        uploadFile.Index,
+                        maxBytes,
+                        linkedCancellation.Token)
+                    .ConfigureAwait(false)
+                    ?? throw new InvalidDataException(
+                        $"服务器没有返回材料文件：{manifestFile.Path}");
+                RequireOperationCurrent(operation);
+                if (!string.Equals(
+                        download.Headers.Sha256,
+                        manifestFile.Sha256,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        $"服务器材料响应摘要与固定清单不一致：{manifestFile.Path}");
+                }
+                if (!string.Equals(
+                        download.Headers.FileName,
+                        Path.GetFileName(manifestFile.Path),
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        $"服务器材料响应文件名与固定清单不一致：{manifestFile.Path}");
+                }
+
+                var stagedPath = Path.Combine(
+                    stagingDirectory,
+                    stagedFiles.Count.ToString("D6", CultureInfo.InvariantCulture) + ".bin");
+                var copied = await CopyDownloadToFileAsync(
+                        download,
+                        stagedPath,
+                        manifestFile.SizeBytes,
+                        maxBytes,
+                        linkedCancellation.Token)
+                    .ConfigureAwait(false);
+                RequireOperationCurrent(operation);
+                if (copied.Length != manifestFile.SizeBytes
+                    || !string.Equals(copied.Sha256, manifestFile.Sha256, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        $"服务器材料实际字节与固定清单不一致：{manifestFile.Path}");
+                }
+
+                stagedFiles.Add(manifestFile.Path, stagedPath);
+                remainingBytes = checked(remainingBytes - copied.Length);
+            }
+
+            var noteJson = await ReadBoundedUtf8Async(
+                    stagedFiles["note.json"],
+                    _restoreLimits.MaxMetadataEntryBytes,
+                    linkedCancellation.Token)
+                .ConfigureAwait(false);
+            var markdown = await ReadBoundedUtf8Async(
+                    stagedFiles["document.md"],
+                    _restoreLimits.MaxDocumentEntryBytes,
+                    linkedCancellation.Token)
+                .ConfigureAwait(false);
+            RequireOperationCurrent(operation);
+            var parsed = ServerNoteMaterialRestoreParser.Parse(
+                serverVersion.InputJson,
+                serverVersion.ManifestJson,
+                markdown);
+            var restorePackage = await BuildRestorePackageAsync(
+                    parsed,
+                    noteJson,
+                    serverVersion.InputJson,
+                    serverVersion.ManifestJson,
+                    stagedFiles,
+                    stagingDirectory,
+                    _restoreLimits,
+                    linkedCancellation.Token)
+                .ConfigureAwait(false);
+            RequireOperationCurrent(operation);
+            var import = await _store.ImportServerRestoreAsync(
+                    restorePackage,
+                    beforeCommit: () =>
+                    {
+                        RequireOperationCurrent(operation);
+                        return Task.CompletedTask;
+                    },
+                    linkedCancellation.Token)
+                .ConfigureAwait(false);
+            RequireOperationCurrent(operation);
+            return new CloudNoteMaterialRestoreResult(serverVersion, import);
+        }
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested
+            && linkedCancellation.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                "云端笔记账号或服务器在恢复期间已切换；本次恢复已中止，未提交旧账号副本。");
+        }
+        finally
+        {
+            _api.ExternalScopeChanged -= OnScopeChanged;
+            if (stagingDirectory is not null)
+            {
+                try
+                {
+                    Directory.Delete(stagingDirectory, recursive: true);
+                }
+                catch
+                {
+                }
+            }
+        }
+    }
+
     public async Task<NoteMaterialUploadDto> PromoteVersionAsync(
         Guid noteId,
         Guid versionId,
@@ -454,6 +683,512 @@ public sealed class CloudNoteMaterialService
         RequireOperationCurrent(operation);
         return RequireResponse(response.Code, response.Message, response.Data);
     }
+
+    private static void ValidateServerVersion(NoteMaterialVersionDto version, Guid versionId)
+    {
+        if (version.Upload is null
+            || version.Upload.Files is null
+            || !Guid.TryParse(version.Upload.NoteId, out var noteId)
+            || noteId == Guid.Empty
+            || !Guid.TryParse(version.Upload.VersionId, out var actualVersionId)
+            || actualVersionId != versionId
+            || string.Equals(version.Upload.Phase, "Uploading", StringComparison.OrdinalIgnoreCase)
+            || version.Upload.Files.Count == 0)
+        {
+            throw new InvalidDataException("服务器固定版本尚未完成或身份无效。");
+        }
+    }
+
+    private static IReadOnlyList<NoteMaterialUploadFileDto> ValidateUploadFiles(
+        NoteMaterialUploadDto upload,
+        IReadOnlyList<ServerNoteMaterialRestoreFile> manifestFiles)
+    {
+        if (upload.Files.Count != manifestFiles.Count
+            || upload.Files.Select(file => file.Index).Distinct().Count() != manifestFiles.Count)
+        {
+            throw new InvalidDataException("服务器固定版本文件索引与 manifest 数量不一致。");
+        }
+
+        var byPath = manifestFiles.ToDictionary(file => file.Path, StringComparer.Ordinal);
+        var ordered = upload.Files.OrderBy(file => file.Index).ToArray();
+        for (var index = 0; index < ordered.Length; index++)
+        {
+            var file = ordered[index];
+            if (file.Index != index
+                || !byPath.TryGetValue(file.Path, out var manifest)
+                || !string.Equals(file.Kind, manifest.Kind, StringComparison.Ordinal)
+                || !string.Equals(file.Sha256, manifest.Sha256, StringComparison.Ordinal)
+                || file.SizeBytes != manifest.SizeBytes)
+            {
+                throw new InvalidDataException(
+                    $"服务器固定版本文件索引与 manifest 不一致：{file.Path}");
+            }
+        }
+
+        return ordered;
+    }
+
+    private static async Task<(string Sha256, long Length)> CopyDownloadToFileAsync(
+        NoteMaterialFileDownload download,
+        string path,
+        long expectedLength,
+        long maxBytes,
+        CancellationToken cancellationToken)
+    {
+        await using var target = new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[64 * 1024];
+        long length = 0;
+        while (true)
+        {
+            var read = await download.Content.ReadAsync(buffer, cancellationToken)
+                .ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            length = checked(length + read);
+            if (length > expectedLength || length > maxBytes)
+            {
+                throw new InvalidDataException("服务器材料响应超过固定版本声明长度。");
+            }
+
+            await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken)
+                .ConfigureAwait(false);
+            hash.AppendData(buffer, 0, read);
+        }
+
+        await target.FlushAsync(cancellationToken).ConfigureAwait(false);
+        return (Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), length);
+    }
+
+    private static async Task<string> ReadBoundedUtf8Async(
+        string path,
+        long maxBytes,
+        CancellationToken cancellationToken)
+    {
+        var length = new FileInfo(path).Length;
+        if (length > maxBytes)
+        {
+            throw new InvalidDataException("服务器文本材料超过客户端上限。");
+        }
+
+        await using var source = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var output = new MemoryStream((int)Math.Min(length, 64 * 1024));
+        var buffer = new byte[64 * 1024];
+        long total = 0;
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            total = checked(total + read);
+            if (total > maxBytes)
+            {
+                throw new InvalidDataException("服务器文本材料读取超过客户端上限。");
+            }
+
+            output.Write(buffer, 0, read);
+        }
+
+        try
+        {
+            return new UTF8Encoding(false, true).GetString(output.ToArray());
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new InvalidDataException("服务器文本材料不是有效 UTF-8。", ex);
+        }
+    }
+
+    private static async Task<LocalNoteServerRestorePackage> BuildRestorePackageAsync(
+        ServerNoteMaterialRestorePackage parsed,
+        string noteJson,
+        string inputJson,
+        string manifestJson,
+        IReadOnlyDictionary<string, string> stagedFiles,
+        string stagingDirectory,
+        LocalNoteImportLimits restoreLimits,
+        CancellationToken cancellationToken)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(noteJson);
+        using var input = System.Text.Json.JsonDocument.Parse(inputJson);
+        var note = document.RootElement;
+        if (!System.Text.Json.Nodes.JsonNode.DeepEquals(
+                System.Text.Json.Nodes.JsonNode.Parse(note.GetRawText()),
+                System.Text.Json.Nodes.JsonNode.Parse(
+                    input.RootElement.GetProperty("note").GetRawText())))
+        {
+            throw new InvalidDataException("服务器 note.json 与 input.note 内容不一致。");
+        }
+        if (!note.TryGetProperty("blocks", out var _))
+        {
+            throw new InvalidDataException("服务器 note.json 缺少 blocks。");
+        }
+
+        var fileByBlock = parsed.Files
+            .Where(file => !string.IsNullOrWhiteSpace(file.BlockId))
+            .ToDictionary(file => file.BlockId!, StringComparer.Ordinal);
+        var consumed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "note.json",
+            "document.md",
+        };
+        var materials = new List<LocalNoteServerMaterialInput>();
+        var ids = new HashSet<Guid>();
+        var materialIdsByPath = new Dictionary<string, Guid>(StringComparer.Ordinal);
+        var blockMaterials = new Dictionary<string, IReadOnlyList<Guid>>(StringComparer.Ordinal);
+        var recordingManifestJsonByPath = new Dictionary<string, string>(StringComparer.Ordinal);
+        var photoIndex = 0;
+        var inkIndex = 0;
+        foreach (var block in parsed.Blocks)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (block.Kind == "markdown")
+            {
+                blockMaterials.Add(block.Id, []);
+                continue;
+            }
+
+            var materialFile = fileByBlock[block.Id];
+            consumed.Add(materialFile.Path);
+            if (block.Kind == "photo")
+            {
+                var extension = block.MimeType switch
+                {
+                    "image/png" => "png",
+                    "image/jpeg" => "jpg",
+                    "image/webp" => "webp",
+                    _ => throw new InvalidDataException("服务器照片媒体类型无效。"),
+                };
+                var materialId = Guid.Parse(block.AssetId!);
+                if (!ids.Add(materialId))
+                {
+                    throw new InvalidDataException("服务器照片块重复引用同一材料标识。");
+                }
+
+                photoIndex++;
+                materials.Add(new LocalNoteServerMaterialInput(
+                    materialId,
+                    LocalNoteMaterialKind.Photo,
+                    $"照片-{photoIndex:D3}.{extension}",
+                    block.Sha256!,
+                    block.MimeType!,
+                    materialFile.SizeBytes,
+                    stagedFiles[materialFile.Path],
+                    ToPixel(block.Width),
+                    ToPixel(block.Height)));
+                materialIdsByPath.Add(materialFile.Path, materialId);
+                blockMaterials.Add(block.Id, [materialId]);
+                continue;
+            }
+
+            inkIndex++;
+            var ink = block.InkJson
+                ?? throw new InvalidDataException("服务器手写块缺少笔迹 JSON。");
+            var localInk = ConvertServerInkToLocalSource(ink, block.Width, block.Height);
+            var inkPath = Path.Combine(stagingDirectory, $"ink-{inkIndex:D3}.json");
+            await File.WriteAllTextAsync(
+                    inkPath,
+                    localInk,
+                    new UTF8Encoding(false),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var inkBytes = Encoding.UTF8.GetBytes(localInk);
+            var inkSha = Convert.ToHexString(SHA256.HashData(inkBytes)).ToLowerInvariant();
+            var sourceMaterialId = Guid.NewGuid();
+            var previewMaterialId = Guid.NewGuid();
+            materials.Add(new LocalNoteServerMaterialInput(
+                sourceMaterialId,
+                LocalNoteMaterialKind.HandwritingSource,
+                $"手写-{inkIndex:D3}.ink.json",
+                inkSha,
+                "application/vnd.pim.ink+json",
+                inkBytes.Length,
+                inkPath,
+                ToPixel(block.Width),
+                ToPixel(block.Height)));
+            materials.Add(new LocalNoteServerMaterialInput(
+                previewMaterialId,
+                LocalNoteMaterialKind.Handwriting,
+                $"手写-{inkIndex:D3}.png",
+                materialFile.Sha256,
+                "image/png",
+                materialFile.SizeBytes,
+                stagedFiles[materialFile.Path],
+                ToPixel(block.Width),
+                ToPixel(block.Height)));
+            materialIdsByPath.Add(materialFile.Path, previewMaterialId);
+            blockMaterials.Add(block.Id, [sourceMaterialId, previewMaterialId]);
+        }
+
+        var recordingManifests = parsed.Files
+            .Where(file => file.Kind == "RecordingManifest")
+            .ToArray();
+        if (!input.RootElement.TryGetProperty("recordings", out var rawRecordings)
+            || rawRecordings.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            throw new InvalidDataException("服务器 input 缺少 recordings 数组。");
+        }
+        var inputRecordings = new Dictionary<Guid, System.Text.Json.JsonElement>();
+        foreach (var recording in rawRecordings.EnumerateArray())
+        {
+            var recordingId = Guid.Parse(recording.GetProperty("id").GetString()!);
+            if (!inputRecordings.TryAdd(recordingId, recording))
+            {
+                throw new InvalidDataException("服务器录音 input 包含重复 recordingId。");
+            }
+        }
+        foreach (var recordingManifest in recordingManifests)
+        {
+            consumed.Add(recordingManifest.Path);
+            var recordingId = Guid.Parse(recordingManifest.RecordingId!);
+            if (!inputRecordings.TryGetValue(recordingId, out var recordingJson))
+            {
+                throw new InvalidDataException("服务器录音 input 缺少对应 manifest 身份。");
+            }
+            var recordingManifestText = await ReadBoundedUtf8Async(
+                    stagedFiles[recordingManifest.Path],
+                    restoreLimits.MaxMetadataEntryBytes,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            using var downloadedRecording = System.Text.Json.JsonDocument.Parse(recordingManifestText);
+            if (!System.Text.Json.Nodes.JsonNode.DeepEquals(
+                    System.Text.Json.Nodes.JsonNode.Parse(downloadedRecording.RootElement.GetRawText()),
+                    System.Text.Json.Nodes.JsonNode.Parse(recordingJson.GetRawText())))
+            {
+                throw new InvalidDataException("服务器 recording manifest 与 input 记录不一致。");
+            }
+
+            if (Guid.Parse(recordingJson.GetProperty("id").GetString()!) != recordingId
+                || Guid.Parse(recordingJson.GetProperty("noteId").GetString()!) != parsed.NoteId
+                || recordingJson.GetProperty("schemaVersion").GetInt32() != 1
+                || !string.Equals(
+                    recordingJson.GetProperty("phase").GetString(),
+                    "Completed",
+                    StringComparison.Ordinal)
+                || !recordingJson.TryGetProperty("currentSegment", out var currentSegmentValue)
+                || !currentSegmentValue.TryGetInt32(out var currentSegment)
+                || currentSegment <= 0
+                || !recordingJson.TryGetProperty("chunks", out var recordingChunks)
+                || recordingChunks.ValueKind != System.Text.Json.JsonValueKind.Array
+                || recordingChunks.GetArrayLength() == 0)
+            {
+                throw new InvalidDataException("服务器录音 input 与 manifest 身份或状态无效。");
+            }
+
+            var audioFiles = parsed.Files
+                .Where(file => file.Kind == "AudioChunk"
+                    && string.Equals(file.RecordingId, recordingId.ToString("D"), StringComparison.Ordinal))
+                .ToArray();
+            var previousSegment = 0;
+            var expectedChunkIndex = 0;
+            var chunkNumber = 0;
+            foreach (var chunk in recordingChunks.EnumerateArray())
+            {
+                var segment = chunk.GetProperty("segment").GetInt32();
+                var chunkIndex = chunk.GetProperty("index").GetInt32();
+                var samples = chunk.GetProperty("samples").GetInt64();
+                if (segment < 1 || segment > currentSegment || chunkIndex < 1 || samples <= 0
+                    || previousSegment == 0 && (segment != 1 || chunkIndex != 1)
+                    || segment < previousSegment
+                    || (segment == previousSegment && chunkIndex != expectedChunkIndex + 1)
+                    || (segment > previousSegment && chunkIndex != 1)
+                    || (previousSegment > 0 && segment > previousSegment + 1))
+                {
+                    throw new InvalidDataException("服务器录音 chunks 顺序、segment 或采样数无效。");
+                }
+
+                var matches = audioFiles.Where(file => file.Segment == segment
+                    && file.ChunkIndex == chunkIndex
+                    && file.Samples == samples).ToArray();
+                if (matches.Length != 1 || !consumed.Add(matches[0].Path))
+                {
+                    throw new InvalidDataException("服务器录音 manifest 与材料文件缺失、重复或不匹配。");
+                }
+
+                var materialFile = matches[0];
+                var materialId = Guid.NewGuid();
+                if (!ids.Add(materialId))
+                {
+                    throw new InvalidDataException("服务器录音分片材料标识重复。");
+                }
+
+                chunkNumber++;
+                materials.Add(new LocalNoteServerMaterialInput(
+                    materialId,
+                    LocalNoteMaterialKind.RecordingSegment,
+                    $"录音-{materials.Count + 1:D3}-s{segment:D4}-c{chunkIndex:D6}.wav",
+                    materialFile.Sha256,
+                    "audio/wav",
+                    materialFile.SizeBytes,
+                    stagedFiles[materialFile.Path],
+                    ExpectedSamples: samples,
+                    RecordingId: recordingId,
+                    RecordingSegment: segment,
+                    RecordingChunkIndex: chunkIndex));
+                materialIdsByPath.Add(materialFile.Path, materialId);
+                previousSegment = segment;
+                expectedChunkIndex = chunkIndex;
+            }
+
+            if (chunkNumber != audioFiles.Length || previousSegment != currentSegment)
+            {
+                throw new InvalidDataException("服务器录音材料包含 manifest 未引用的分片。");
+            }
+
+            recordingManifestJsonByPath.Add(recordingManifest.Path, recordingManifestText);
+            inputRecordings.Remove(recordingId);
+        }
+
+        if (inputRecordings.Count != 0
+            || parsed.Files.Any(file => file.Kind == "AudioChunk" && !consumed.Contains(file.Path)))
+        {
+            throw new InvalidDataException("服务器录音 input、manifest 与所有分片文件不一致。");
+        }
+
+        if (consumed.Count != parsed.Files.Count)
+        {
+            throw new InvalidDataException("服务器材料清单包含客户端无法映射的文件。");
+        }
+
+        var serverSource = new LocalNoteServerSource(
+            parsed.NoteId,
+            parsed.VersionId,
+            inputJson,
+            manifestJson,
+            noteJson,
+            parsed.Markdown,
+            parsed.Blocks.Select(block => new LocalNoteServerSourceBlock(
+                block.Id,
+                block.Kind,
+                block.RawJson,
+                blockMaterials[block.Id])).ToArray(),
+            parsed.Files.Select(file => new LocalNoteServerSourceFile(
+                file.Path,
+                file.Kind,
+                file.Sha256,
+                file.SizeBytes,
+                file.BlockId,
+                file.RecordingId,
+                file.Segment,
+                file.ChunkIndex,
+                file.Samples,
+                materialIdsByPath.GetValueOrDefault(file.Path),
+                file.Kind switch
+                {
+                    "Document" => noteJson,
+                    "Markdown" => parsed.Markdown,
+                    "RecordingManifest" => recordingManifestJsonByPath[file.Path],
+                    _ => null,
+                })).ToArray());
+        ServerNoteSourceIntegrity.Validate(
+            serverSource,
+            parsed.Title,
+            parsed.Markdown,
+            materials.Select(material => new LocalNoteMaterial
+            {
+                MaterialId = material.MaterialId,
+                Kind = material.Kind,
+                DisplayName = material.DisplayName,
+                ContentSha256 = material.ContentSha256,
+                RelativePath = string.Empty,
+                MediaType = material.MediaType,
+                Length = material.Length,
+                AddedAt = DateTimeOffset.UnixEpoch,
+                Width = material.Width,
+                Height = material.Height,
+                DurationMilliseconds = material.DurationMilliseconds,
+                RecordingId = material.RecordingId,
+                RecordingSegment = material.RecordingSegment,
+                RecordingChunkIndex = material.RecordingChunkIndex,
+                RecordingSamples = material.ExpectedSamples,
+            }).ToArray());
+
+        return new LocalNoteServerRestorePackage(
+            parsed.NoteId,
+            parsed.VersionId,
+            parsed.Title,
+            parsed.Markdown,
+            materials,
+            serverSource);
+    }
+
+    internal static string ConvertServerInkToLocalSource(
+        string inkJson,
+        double? blockWidth,
+        double? blockHeight)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(inkJson);
+        var root = document.RootElement;
+        var width = root.GetProperty("width").GetDouble();
+        var height = root.GetProperty("height").GetDouble();
+        if (blockWidth is { } expectedWidth && Math.Abs(width - expectedWidth) > 1
+            || blockHeight is { } expectedHeight && Math.Abs(height - expectedHeight) > 1
+            || !root.TryGetProperty("strokes", out var strokes)
+            || strokes.ValueKind != System.Text.Json.JsonValueKind.Array
+            || strokes.GetArrayLength() == 0)
+        {
+            throw new InvalidDataException("服务器手写块尺寸或笔迹无效。");
+        }
+
+        var localStrokes = new List<List<object>>();
+        foreach (var stroke in strokes.EnumerateArray())
+        {
+            if (!stroke.TryGetProperty("points", out var points)
+                || points.ValueKind != System.Text.Json.JsonValueKind.Array
+                || points.GetArrayLength() == 0)
+            {
+                throw new InvalidDataException("服务器手写块包含空笔画。");
+            }
+
+            var localPoints = new List<object>();
+            foreach (var point in points.EnumerateArray())
+            {
+                var x = point.GetProperty("x").GetDouble();
+                var y = point.GetProperty("y").GetDouble();
+                var pressure = point.GetProperty("pressure").GetDouble();
+                if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(pressure)
+                    || x < 0 || x > width || y < 0 || y > height || pressure is < 0 or > 1)
+                {
+                    throw new InvalidDataException("服务器手写笔迹点超出画布或压力范围。");
+                }
+
+                localPoints.Add(new { x, y, pressure });
+            }
+
+            localStrokes.Add(localPoints);
+        }
+
+        return System.Text.Json.JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            width,
+            height,
+            strokes = localStrokes,
+        }, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+    }
+
+    private static int? ToPixel(double? value)
+        => value is null
+            ? null
+            : checked((int)Math.Round(value.Value, MidpointRounding.AwayFromZero));
 
     private CloudOperation BeginOperation()
     {

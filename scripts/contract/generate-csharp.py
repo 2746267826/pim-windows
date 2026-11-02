@@ -203,6 +203,7 @@ ALLOWED_REQUEST_HEADERS = {
 }
 
 SEGMENT_CONTENT_PATH = "/api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content"
+NOTE_MATERIAL_FILE_PATH = "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"
 NOTE_MATERIAL_PART_PATH = "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}"
 
 RESPONSE_HEADER_KINDS = {
@@ -222,12 +223,68 @@ RESPONSE_HEADER_KINDS = {
     "X-Pim-Version-Id": "plain-string",
 }
 
+NOTE_MATERIAL_FILE_HEADER_KINDS = {
+    "Cache-Control": "plain-string",
+    "Content-Disposition": "plain-string",
+    "X-Content-SHA256": "sha256",
+    "X-Content-Type-Options": "plain-string",
+}
 
-def validate_parameter_schema(parameter: dict, op_path: str, name: str) -> tuple[str, str]:
+BINARY_RESPONSE_BOUNDARIES = {
+    SEGMENT_CONTENT_PATH: ("audio/wav", RESPONSE_HEADER_KINDS),
+    NOTE_MATERIAL_FILE_PATH: ("application/octet-stream", NOTE_MATERIAL_FILE_HEADER_KINDS),
+}
+
+
+def query_enum_reference(parameter: dict, op_path: str, name: str,
+                         contract: dict | None) -> tuple[str, list[str]]:
+    """Resolve the one TASK-01 query enum whose values are enforced at runtime."""
+    schema = parameter.get("schema") or {}
+    ref = schema.get("$ref")
+    unsupported_siblings = sorted(key for key in schema if key != "$ref" and not key.startswith("x-"))
+    if unsupported_siblings:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 的 schema $ref 带未建模兄弟约束 "
+            f"（{', '.join(unsupported_siblings)}）：拒绝产出。")
+    if not isinstance(ref, str) or not ref.startswith("#/components/schemas/"):
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 的 schema $ref 不是本地具名 schema：拒绝产出。")
+    prefix = "#/components/schemas/"
+    enum_name = ref[len(prefix):]
+    if not enum_name or "/" in enum_name or "~" in enum_name or contract is None:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 无法解析 schema $ref：拒绝产出。")
+    if (op_path, name, enum_name) != (
+            "/api/v1/native-notes/task-suggestions", "status", "NoteTaskSuggestionStatusDto"):
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 不在唯一已建模的 TASK-01 query enum 边界内：拒绝产出。")
+    enum_schema = contract.get("components", {}).get("schemas", {}).get(enum_name)
+    if not isinstance(enum_schema, dict):
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 引用了不存在的 schema {enum_name}：拒绝产出。")
+    allowed_keys = {"type", "enum", "description", "title", "deprecated"}
+    unknown = sorted(key for key in enum_schema if key not in allowed_keys and not key.startswith("x-"))
+    values = enum_schema.get("enum")
+    if unknown or enum_schema.get("type") != "string" or not isinstance(values, list) \
+            or not values or any(not isinstance(value, str) or not value for value in values) \
+            or len(values) != len(set(values)):
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 引用的 schema {enum_name} 不是受支持的唯一值字符串枚举：拒绝产出。")
+    for value in values:
+        member, custom = wire_enum_member_name(value, enum_name)
+        if custom or member != value:
+            raise GenerationError(
+                f"query 枚举 {enum_name} 的 wire 值 {value!r} 不能安全映射为 C# enum：拒绝产出。")
+    return enum_name, values
+
+
+def validate_parameter_schema(parameter: dict, op_path: str, name: str,
+                              contract: dict | None = None,
+                              allow_query_enum_ref: bool = False) -> tuple[str, str]:
     """返回 (C# 类型, 形状校验名)。只接受实际契约里出现的参数类型，
     且只有一小撮 format 能映射成可执行校验；其它形状一律拒绝。"""
     schema = parameter.get("schema") or {}
-    allowed_keys = {"type", "format", "description", "example", "title", "deprecated", "default", "nullable"}
+    allowed_keys = {"$ref", "type", "format", "description", "example", "title", "deprecated", "default", "nullable"}
     unknown = sorted(key for key in schema if key not in allowed_keys and not key.startswith("x-"))
     if unknown:
         raise GenerationError(
@@ -235,9 +292,11 @@ def validate_parameter_schema(parameter: dict, op_path: str, name: str) -> tuple
             f"（{', '.join(unknown)}）：拒绝静默丢掉契约约束。"
         )
     if schema.get("$ref") is not None:
+        if allow_query_enum_ref:
+            enum_name, _ = query_enum_reference(parameter, op_path, name, contract)
+            return enum_name, "enum"
         raise GenerationError(
-            f"operation {op_path} 的参数 {name} 的 schema 用了 $ref：拒绝产出。"
-        )
+            f"operation {op_path} 的参数 {name} 的 schema 用了 $ref：拒绝产出。")
     if schema.get("nullable") is True:
         raise GenerationError(
             f"operation {op_path} 的参数 {name} 声明为 nullable：拒绝产出。"
@@ -293,7 +352,7 @@ def effective_parameters(op: dict, op_path: str, path_item: dict | None = None) 
 
 
 def validate_parameters(op: dict, op_path: str, path_item: dict | None = None,
-                        method: str = "") -> None:
+                        method: str = "", contract: dict | None = None) -> None:
     """支持标量 path/query 与已建模 header；cookie 和未建模形状一律 fail-closed。"""
     parameters = effective_parameters(op, op_path, path_item)
     for parameter in parameters:
@@ -322,11 +381,15 @@ def validate_parameters(op: dict, op_path: str, path_item: dict | None = None,
                 raise GenerationError(
                     f"operation {op_path} 的 path 参数 {name} 不是 required=true：拒绝产出。"
                 )
-            validate_parameter_schema(parameter, op_path, name)
+            validate_parameter_schema(parameter, op_path, name, contract)
             continue
 
         if location == "query":
-            validate_parameter_schema(parameter, op_path, name)
+            validate_parameter_schema(
+                parameter, op_path, name, contract,
+                allow_query_enum_ref=(method == "GET" and
+                                      op_path == "/api/v1/native-notes/task-suggestions" and
+                                      name == "status"))
             continue
 
         if location == "header":
@@ -339,7 +402,7 @@ def validate_parameters(op: dict, op_path: str, path_item: dict | None = None,
                 raise GenerationError(
                     f"operation {op_path} 的 header 参数（{name}）不在已建模的 required header 集合里。"
                 )
-            _, shape = validate_parameter_schema(parameter, op_path, name)
+            _, shape = validate_parameter_schema(parameter, op_path, name, contract)
             if shape != ALLOWED_REQUEST_HEADERS[name]:
                 raise GenerationError(
                     f"operation {op_path} 的 header {name} 形状 {shape} 与已建模形状不一致。"
@@ -350,6 +413,84 @@ def validate_parameters(op: dict, op_path: str, path_item: dict | None = None,
             f"operation {op_path} 带 {location} 参数（{name}），"
             "生成器只支持 path/query 参数和两个已建模的 segment content header —— 需要先扩展显式方法签名。"
         )
+
+
+def validate_response_header_schema(
+        header_name: str,
+        schema: dict,
+        expected_kind: str,
+        op_path: str) -> str:
+    """Validate one modeled response header without dropping wire constraints."""
+    allowed_keys = {
+        "type", "format", "description", "example", "title", "deprecated",
+        "default", "nullable", "pattern",
+    }
+    unknown = sorted(key for key in schema if key not in allowed_keys and not key.startswith("x-"))
+    if unknown:
+        raise GenerationError(
+            f"operation {op_path} 的响应头 {header_name} 带生成器无法表达的键"
+            f"（{', '.join(unknown)}）：拒绝静默丢掉契约约束。"
+        )
+    if schema.get("type") != "string":
+        return validate_parameter_schema(
+            {"name": header_name, "in": "header", "schema": schema},
+            op_path,
+            f"response header {header_name}")[1]
+    if schema.get("format") is not None or schema.get("nullable") is True:
+        raise GenerationError(
+            f"operation {op_path} 的响应头 {header_name} 使用了未建模的 format/nullable。"
+        )
+
+    pattern = schema.get("pattern")
+    if expected_kind == "sha256":
+        if pattern != "^[0-9a-f]{64}$":
+            raise GenerationError(
+                f"operation {op_path} 的响应头 {header_name} 必须是 lowercase SHA-256 pattern。"
+            )
+        return "sha256"
+
+    if pattern is not None:
+        raise GenerationError(
+            f"operation {op_path} 的响应头 {header_name} 带 pattern，但未建模为 sha256。"
+        )
+    return "plain-string"
+
+
+def validate_binary_response(
+        op_path: str,
+        response: dict,
+        media_type: str,
+        header_kinds: dict[str, str]) -> None:
+    """Require the exact binary media type and exact modeled response headers."""
+    content = response.get("content") or {}
+    if set(content.keys()) != {media_type}:
+        raise GenerationError(
+            f"operation {op_path} 的 200 响应必须恰好使用 {media_type}："
+            f"{sorted(content.keys())}"
+        )
+    schema = content[media_type].get("schema") or {}
+    if schema != {"type": "string", "format": "binary"}:
+        raise GenerationError(
+            f"operation {op_path} 的 200 {media_type} 必须是 string/binary 根 schema。"
+        )
+
+    headers = response.get("headers") or {}
+    if set(headers.keys()) != set(header_kinds):
+        raise GenerationError(
+            f"operation {op_path} 的 200 响应头必须恰好是已建模的 "
+            f"{len(header_kinds)} 个：{sorted(headers.keys())}"
+        )
+    for header_name, expected_kind in header_kinds.items():
+        actual = validate_response_header_schema(
+            header_name,
+            headers[header_name].get("schema") or {},
+            expected_kind,
+            op_path)
+        if actual != expected_kind:
+            raise GenerationError(
+                f"operation {op_path} 的 200 响应头 {header_name} 形状是 {actual}，"
+                f"与已建模的 {expected_kind} 不一致。"
+            )
 
 
 def lift_inline_enums(contract: dict, operations: list[dict]) -> None:
@@ -479,29 +620,10 @@ def success_response_schemas(op: dict, op_path: str = "") -> list[dict]:
         has_responses = True
         media = (response.get("content") or {}).get("application/json")
         if media is None or media.get("schema") is None:
-            if (op_path == SEGMENT_CONTENT_PATH and str(status) == "200"
-                    and set((response.get("content") or {}).keys()) == {"audio/wav"}):
-                schema = response["content"]["audio/wav"].get("schema") or {}
-                if schema != {"type": "string", "format": "binary"}:
-                    raise GenerationError(
-                        f"operation {op_path} 的 200 audio/wav 必须是 string/binary 根 schema。"
-                    )
-                headers = response.get("headers") or {}
-                if set(headers.keys()) != set(RESPONSE_HEADER_KINDS):
-                    raise GenerationError(
-                        f"operation {op_path} 的 200 响应头必须恰好是已建模的 12 个："
-                        f"{sorted(headers.keys())}"
-                    )
-                for header_name, shape in RESPONSE_HEADER_KINDS.items():
-                    parameter = dict(headers[header_name])
-                    parameter["schema"] = headers[header_name].get("schema") or {}
-                    _, actual = validate_parameter_schema(
-                        parameter, op_path, f"response header {header_name}")
-                    if actual != shape:
-                        raise GenerationError(
-                            f"operation {op_path} 的 200 响应头 {header_name} 形状是 {actual}，"
-                            f"与已建模的 {shape} 不一致。"
-                        )
+            boundary = BINARY_RESPONSE_BOUNDARIES.get(op_path)
+            if boundary is not None and str(status) == "200":
+                media_type, header_kinds = boundary
+                validate_binary_response(op_path, response, media_type, header_kinds)
                 continue
             raise GenerationError(f"operation 的 {status} 响应不是 application/json（生成器只支持 JSON 边界）")
         if (response.get("headers") or {}):
@@ -543,7 +665,16 @@ def schema_directions(contract: dict, operations: list[dict]) -> tuple[dict[str,
         op_path = str(entry["path"])
         op = operation_schema(contract, method, op_path)
         validate_parameters(
-            op, op_path, contract.get("paths", {}).get(op_path), method)
+            op, op_path, contract.get("paths", {}).get(op_path), method, contract)
+
+        for parameter in effective_parameters(op, op_path, contract.get("paths", {}).get(op_path)):
+            if parameter.get("in") == "query" and (parameter.get("schema") or {}).get("$ref"):
+                if method != "GET":
+                    raise GenerationError(
+                        f"operation {method} {op_path} 的 query enum 尚未建模：拒绝产出。")
+                enum_name, _ = query_enum_reference(
+                    parameter, op_path, str(parameter.get("name") or ""), contract)
+                request_roots.add(enum_name)
 
         request_media_type = request_body_media_type(op, op_path)
         request_schema = json_request_schema(op)
@@ -1006,30 +1137,46 @@ def operation_metadata(entry: dict, contract: dict) -> dict:
     request_headers = []
     for parameter in parameters:
         name = str(parameter.get("name") or "")
-        _, shape = validate_parameter_schema(parameter, full_path, name)
+        location = parameter.get("in")
+        _, shape = validate_parameter_schema(
+            parameter, full_path, name, contract,
+            allow_query_enum_ref=(
+                method == "GET" and location == "query" and
+                full_path == "/api/v1/native-notes/task-suggestions" and
+                name == "status"))
         if parameter.get("in") == "path":
             route_kinds.append((name, shape))
         elif parameter.get("in") == "query":
-            query_parameters.append((name, shape, parameter.get("required") is True))
+            allowed_values = (
+                query_enum_reference(parameter, full_path, name, contract)[1]
+                if shape == "enum" else None)
+            query_parameters.append((name, shape, parameter.get("required") is True, allowed_values))
         elif parameter.get("in") == "header":
             request_headers.append((name, shape))
     response_media = "application/json"
     response_headers = []
+    binary_boundary = BINARY_RESPONSE_BOUNDARIES.get(full_path)
     for status, response in (op.get("responses") or {}).items():
         if str(status) != "200":
             continue
         media_types = sorted((response.get("content") or {}).keys())
-        if media_types:
-            if media_types != ["application/json"] and full_path != SEGMENT_CONTENT_PATH:
+        if binary_boundary is not None:
+            media_type, header_kinds = binary_boundary
+            validate_binary_response(full_path, response, media_type, header_kinds)
+            response_media = media_type
+        elif media_types:
+            if media_types != ["application/json"]:
                 raise GenerationError(f"operation {full_path} 的 200 媒体类型未建模：{media_types}")
             response_media = media_types[0]
         for header_name, header_schema in (response.get("headers") or {}).items():
-            parameter = {
-                "name": header_name,
-                "in": "header",
-                "schema": header_schema.get("schema") or {},
-            }
-            _, shape = validate_parameter_schema(parameter, full_path, header_name)
+            if binary_boundary is None:
+                raise GenerationError(
+                    f"operation {full_path} 的 200 响应头 {header_name} 未建模，拒绝静默丢掉。")
+            shape = validate_response_header_schema(
+                header_name,
+                header_schema.get("schema") or {},
+                binary_boundary[1][header_name],
+                full_path)
             response_headers.append((header_name, shape))
     return {
         "routeKinds": route_kinds,
@@ -1055,8 +1202,11 @@ def render_operation_entry(entry: dict, contract: dict) -> list[str]:
     route_kinds = ", ".join(
         f'new("{name}", "{kind}")' for name, kind in metadata["routeKinds"])
     query_parameters = ", ".join(
-        f'new("{name}", "{kind}", {str(required).lower()})'
-        for name, kind, required in metadata["queryParameters"])
+        f'new("{name}", "{kind}", {str(required).lower()}'
+        + (f', new string[] {{ {", ".join(json.dumps(value) for value in allowed_values)} }}'
+           if allowed_values is not None else "")
+        + ")"
+        for name, kind, required, allowed_values in metadata["queryParameters"])
     request_headers = ", ".join(
         f'new("{name}", "{kind}")' for name, kind in metadata["requestHeaders"])
     response_headers = ", ".join(
@@ -1092,7 +1242,7 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "/// 需要契约里没有的接口时：不要在这里加，按 AGENTS.md「接口契约与门禁」把需求交给后端。",
         "/// </summary>",
         "public sealed record ContractHeader(string Name, string Kind);",
-        "public sealed record ContractQueryParameter(string Name, string Kind, bool Required);",
+        "public sealed record ContractQueryParameter(string Name, string Kind, bool Required, System.Collections.Generic.IReadOnlyList<string>? AllowedValues = null);",
         "",
         "public sealed class ContractOperation",
         "{",
@@ -1315,6 +1465,13 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "                    if (!bool.TryParse(value, out _))",
         "                    {",
         "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 boolean\", nameof(queryValues));",
+        "                    }",
+        "",
+        "                    break;",
+        "                case \"enum\":",
+        "                    if (parameter.AllowedValues is null || !parameter.AllowedValues.Contains(value, System.StringComparer.Ordinal))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是契约声明的枚举值\", nameof(queryValues));",
         "                    }",
         "",
         "                    break;",

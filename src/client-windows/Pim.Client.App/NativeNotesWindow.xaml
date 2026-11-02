@@ -43,9 +43,9 @@
                 <DockPanel Grid.Row="0" LastChildFill="True">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                         <Button x:Name="RecordButton" Content="● 开始录音" Style="{StaticResource PimPrimaryButton}" Margin="4,0" Click="OnToggleRecording" />
-                        <Button Content="添加照片" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnAddPhoto" />
-                        <Button Content="手写" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnAddHandwriting" />
-                        <Button Content="添加音频" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnAddRecording" />
+                        <Button x:Name="AddPhotoButton" Content="添加照片" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnAddPhoto" />
+                        <Button x:Name="AddHandwritingButton" Content="手写" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnAddHandwriting" />
+                        <Button x:Name="AddRecordingButton" Content="添加音频" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnAddRecording" />
                         <Button Content="导入笔记包" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnImportPackage" />
                         <Button Content="导出固定版本" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnExport" />
                     </StackPanel>
@@ -136,6 +136,8 @@
                                     Margin="0,0,6,6" Click="OnSaveCloudRevision" />
                             <Button Content="设为结果当前版本" Style="{StaticResource PimSecondaryButton}"
                                     Margin="0,0,6,6" Click="OnSelectCloudResultVersion" />
+                            <Button Content="从此版本提取任务建议" Style="{StaticResource PimPrimaryButton}"
+                                    Margin="0,0,6,6" Click="OnOpenTaskSuggestions" />
                         </WrapPanel>
                         <TextBox x:Name="CloudResultBox" Grid.Row="8" AcceptsReturn="True"
                                  TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"

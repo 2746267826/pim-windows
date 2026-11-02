@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 e5c555e2864e182f98242b0bbe50b156f755e9ea18dd5c57724518edd6bd8d76)
+//   契约快照      : contract/openapi.json (sha256 e7741cf3a69a30eb178d3a77fa329c71bc657dd2ede186c125816e63b6d2bfb2)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -224,6 +224,17 @@ public sealed class ClientShellLatestResponse
     /// <summary>契约字段 <c>windowsVersion</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("windowsVersion")]
     public string? WindowsVersion { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.ConfirmNoteTaskSuggestionRequest</c>（request）。</summary>
+public sealed class ConfirmNoteTaskSuggestionRequest
+{
+    /// <summary>契约字段 <c>expectedRevision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("expectedRevision")]
+    public required string ExpectedRevision { get; set; }
+    /// <summary>契约字段 <c>requestId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("requestId")]
+    public required string RequestId { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.CreateEventRequest</c>（request）。</summary>
@@ -520,6 +531,14 @@ public enum DaemonSourceState
     Available,
     Unavailable,
     Paused,
+}
+
+/// <summary>契约 <c>components.schemas.DismissNoteTaskSuggestionRequest</c>（request）。</summary>
+public sealed class DismissNoteTaskSuggestionRequest
+{
+    /// <summary>契约字段 <c>expectedRevision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("expectedRevision")]
+    public required string ExpectedRevision { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.EndpointCollectionQualityDto</c>（response）。</summary>
@@ -1860,6 +1879,60 @@ public sealed class NoteDerivedCoverageDto
     public required int VisionBatches { get; set; }
 }
 
+/// <summary>契约 <c>components.schemas.NoteDerivedDestinationDto</c>（response）。</summary>
+public sealed class NoteDerivedDestinationDto
+{
+    /// <summary>契约字段 <c>backgroundProcessingAvailable</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("backgroundProcessingAvailable")]
+    public required bool BackgroundProcessingAvailable { get; set; }
+    /// <summary>契约字段 <c>capabilities</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("capabilities")]
+    public required System.Collections.Generic.List<string> Capabilities { get; set; }
+    /// <summary>契约字段 <c>displayName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("displayName")]
+    public required string DisplayName { get; set; }
+    /// <summary>契约字段 <c>endpoint</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("endpoint")]
+    public required string Endpoint { get; set; }
+    /// <summary>契约字段 <c>model</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("model")]
+    public required string Model { get; set; }
+    /// <summary>契约字段 <c>modelId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelId")]
+    public required string ModelId { get; set; }
+    /// <summary>契约字段 <c>modelRevision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelRevision")]
+    public required string ModelRevision { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteDerivedDestinationsDto</c>（response）。</summary>
+public sealed class NoteDerivedDestinationsDto
+{
+    /// <summary>契约字段 <c>items</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("items")]
+    public required System.Collections.Generic.List<NoteDerivedDestinationDto> Items { get; set; }
+    /// <summary>契约字段 <c>total</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("total")]
+    public required int Total { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteDerivedDestinationsDtoApiResponse</c>（response）。</summary>
+public sealed class NoteDerivedDestinationsDtoApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public NoteDerivedDestinationsDto? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
 /// <summary>契约 <c>components.schemas.NoteDerivedGenerationConsent</c>（request+response）。</summary>
 public sealed class NoteDerivedGenerationConsent
 {
@@ -2382,6 +2455,244 @@ public sealed class NoteMaterialVersionDtoApiResponse
     public required System.DateTimeOffset Timestamp { get; set; }
 }
 
+/// <summary>契约 <c>components.schemas.NoteTaskSuggestionDto</c>（response）。</summary>
+public sealed class NoteTaskSuggestionDto
+{
+    /// <summary>契约字段 <c>artifactId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("artifactId")]
+    public required string ArtifactId { get; set; }
+    /// <summary>契约字段 <c>calendarId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("calendarId")]
+    public string? CalendarId { get; set; }
+    /// <summary>契约字段 <c>confirmedAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("confirmedAt")]
+    public System.DateTimeOffset? ConfirmedAt { get; set; }
+    /// <summary>契约字段 <c>createdAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("createdAt")]
+    public required System.DateTimeOffset CreatedAt { get; set; }
+    /// <summary>契约字段 <c>description</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("description")]
+    public string? Description { get; set; }
+    /// <summary>契约字段 <c>dismissedAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("dismissedAt")]
+    public System.DateTimeOffset? DismissedAt { get; set; }
+    /// <summary>契约字段 <c>due</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("due")]
+    public System.DateTimeOffset? Due { get; set; }
+    /// <summary>契约字段 <c>extractionId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("extractionId")]
+    public required string ExtractionId { get; set; }
+    /// <summary>契约字段 <c>id</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public required string Id { get; set; }
+    /// <summary>契约字段 <c>noteId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("noteId")]
+    public required string NoteId { get; set; }
+    /// <summary>契约字段 <c>ordinal</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("ordinal")]
+    public required int Ordinal { get; set; }
+    /// <summary>契约字段 <c>priority</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("priority")]
+    public required int Priority { get; set; }
+    /// <summary>契约字段 <c>revision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("revision")]
+    public required string Revision { get; set; }
+    /// <summary>契约字段 <c>sourceContentSha256</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceContentSha256")]
+    public required string SourceContentSha256 { get; set; }
+    /// <summary>契约字段 <c>sourceGenerationTaskId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceGenerationTaskId")]
+    public string? SourceGenerationTaskId { get; set; }
+    /// <summary>契约字段 <c>sourceInputSha256</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceInputSha256")]
+    public required string SourceInputSha256 { get; set; }
+    /// <summary>契约字段 <c>sourceManifestSha256</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceManifestSha256")]
+    public required string SourceManifestSha256 { get; set; }
+    /// <summary>契约字段 <c>status</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("status")]
+    public required NoteTaskSuggestionStatusDto Status { get; set; }
+    /// <summary>契约字段 <c>taskBookId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("taskBookId")]
+    public string? TaskBookId { get; set; }
+    /// <summary>契约字段 <c>taskId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("taskId")]
+    public string? TaskId { get; set; }
+    /// <summary>契约字段 <c>title</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("title")]
+    public required string Title { get; set; }
+    /// <summary>契约字段 <c>updatedAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("updatedAt")]
+    public required System.DateTimeOffset UpdatedAt { get; set; }
+    /// <summary>契约字段 <c>versionId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("versionId")]
+    public required string VersionId { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteTaskSuggestionDtoApiResponse</c>（response）。</summary>
+public sealed class NoteTaskSuggestionDtoApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public NoteTaskSuggestionDto? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteTaskSuggestionExtractionDto</c>（response）。</summary>
+public sealed class NoteTaskSuggestionExtractionDto
+{
+    /// <summary>契约字段 <c>aiCallLogId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("aiCallLogId")]
+    public string? AiCallLogId { get; set; }
+    /// <summary>契约字段 <c>artifactId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("artifactId")]
+    public required string ArtifactId { get; set; }
+    /// <summary>契约字段 <c>attemptCount</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("attemptCount")]
+    public required int AttemptCount { get; set; }
+    /// <summary>契约字段 <c>createdAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("createdAt")]
+    public required System.DateTimeOffset CreatedAt { get; set; }
+    /// <summary>契约字段 <c>errorCode</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("errorCode")]
+    public string? ErrorCode { get; set; }
+    /// <summary>契约字段 <c>errorMessage</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("errorMessage")]
+    public string? ErrorMessage { get; set; }
+    /// <summary>契约字段 <c>finishedAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("finishedAt")]
+    public System.DateTimeOffset? FinishedAt { get; set; }
+    /// <summary>契约字段 <c>id</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public required string Id { get; set; }
+    /// <summary>契约字段 <c>modelEndpoint</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelEndpoint")]
+    public required string ModelEndpoint { get; set; }
+    /// <summary>契约字段 <c>modelProfileId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelProfileId")]
+    public required string ModelProfileId { get; set; }
+    /// <summary>契约字段 <c>modelRevision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modelRevision")]
+    public required string ModelRevision { get; set; }
+    /// <summary>契约字段 <c>noteId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("noteId")]
+    public required string NoteId { get; set; }
+    /// <summary>契约字段 <c>promptVersion</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("promptVersion")]
+    public required string PromptVersion { get; set; }
+    /// <summary>契约字段 <c>requestId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("requestId")]
+    public required string RequestId { get; set; }
+    /// <summary>契约字段 <c>revision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("revision")]
+    public required string Revision { get; set; }
+    /// <summary>契约字段 <c>sourceContentSha256</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceContentSha256")]
+    public required string SourceContentSha256 { get; set; }
+    /// <summary>契约字段 <c>sourceGenerationTaskId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceGenerationTaskId")]
+    public string? SourceGenerationTaskId { get; set; }
+    /// <summary>契约字段 <c>sourceInputSha256</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceInputSha256")]
+    public required string SourceInputSha256 { get; set; }
+    /// <summary>契约字段 <c>sourceManifestSha256</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceManifestSha256")]
+    public required string SourceManifestSha256 { get; set; }
+    /// <summary>契约字段 <c>startedAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("startedAt")]
+    public System.DateTimeOffset? StartedAt { get; set; }
+    /// <summary>契约字段 <c>status</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("status")]
+    public required NoteTaskSuggestionExtractionStatusDto Status { get; set; }
+    /// <summary>契约字段 <c>suggestionCount</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("suggestionCount")]
+    public required int SuggestionCount { get; set; }
+    /// <summary>契约字段 <c>updatedAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("updatedAt")]
+    public required System.DateTimeOffset UpdatedAt { get; set; }
+    /// <summary>契约字段 <c>versionId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("versionId")]
+    public required string VersionId { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteTaskSuggestionExtractionDtoApiResponse</c>（response）。</summary>
+public sealed class NoteTaskSuggestionExtractionDtoApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public NoteTaskSuggestionExtractionDto? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteTaskSuggestionExtractionStatusDto</c>（response）。</summary>
+/// <summary>
+/// 契约枚举 <c>NoteTaskSuggestionExtractionStatusDto</c>：wire 值由生成 converter 精确往返。
+/// </summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter))]
+public enum NoteTaskSuggestionExtractionStatusDto
+{
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+/// <summary>契约 <c>components.schemas.NoteTaskSuggestionListDto</c>（response）。</summary>
+public sealed class NoteTaskSuggestionListDto
+{
+    /// <summary>契约字段 <c>items</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("items")]
+    public required System.Collections.Generic.List<NoteTaskSuggestionDto> Items { get; set; }
+    /// <summary>契约字段 <c>total</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("total")]
+    public required int Total { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteTaskSuggestionListDtoApiResponse</c>（response）。</summary>
+public sealed class NoteTaskSuggestionListDtoApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public NoteTaskSuggestionListDto? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteTaskSuggestionStatusDto</c>（request+response）。</summary>
+/// <summary>
+/// 契约枚举 <c>NoteTaskSuggestionStatusDto</c>：wire 值由生成 converter 精确往返。
+/// </summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter))]
+public enum NoteTaskSuggestionStatusDto
+{
+    Draft,
+    Confirmed,
+    Dismissed,
+}
+
 /// <summary>契约 <c>components.schemas.OutlookAdditionalInfoDto</c>（response）。</summary>
 public sealed class OutlookAdditionalInfoDto
 {
@@ -2638,6 +2949,35 @@ public sealed class StartNoteDerivedTaskRequest
     /// <summary>契约字段 <c>taskId</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("taskId")]
     public required string TaskId { get; set; }
+    /// <summary>契约字段 <c>versionId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("versionId")]
+    public required string VersionId { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.StartNoteTaskSuggestionExtractionRequest</c>（request）。</summary>
+public sealed class StartNoteTaskSuggestionExtractionRequest
+{
+    /// <summary>契约字段 <c>acknowledgePossibleCharge</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("acknowledgePossibleCharge")]
+    public required bool AcknowledgePossibleCharge { get; set; }
+    /// <summary>契约字段 <c>artifactId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("artifactId")]
+    public required string ArtifactId { get; set; }
+    /// <summary>契约字段 <c>consent</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("consent")]
+    public required NoteDerivedGenerationConsent Consent { get; set; }
+    /// <summary>契约字段 <c>expectedContentSha256</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("expectedContentSha256")]
+    public required string ExpectedContentSha256 { get; set; }
+    /// <summary>契约字段 <c>expectedUserId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("expectedUserId")]
+    public required string ExpectedUserId { get; set; }
+    /// <summary>契约字段 <c>noteId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("noteId")]
+    public required string NoteId { get; set; }
+    /// <summary>契约字段 <c>requestId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("requestId")]
+    public required string RequestId { get; set; }
     /// <summary>契约字段 <c>versionId</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("versionId")]
     public required string VersionId { get; set; }
@@ -2940,6 +3280,32 @@ public sealed class TrackerHealthRequest
     /// <summary>契约字段 <c>uptimeSeconds</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("uptimeSeconds")]
     public required double UptimeSeconds { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.UpdateNoteTaskSuggestionRequest</c>（request）。</summary>
+public sealed class UpdateNoteTaskSuggestionRequest
+{
+    /// <summary>契约字段 <c>calendarId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("calendarId")]
+    public string? CalendarId { get; set; }
+    /// <summary>契约字段 <c>description</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("description")]
+    public string? Description { get; set; }
+    /// <summary>契约字段 <c>due</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("due")]
+    public System.DateTimeOffset? Due { get; set; }
+    /// <summary>契约字段 <c>expectedRevision</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("expectedRevision")]
+    public required string ExpectedRevision { get; set; }
+    /// <summary>契约字段 <c>priority</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("priority")]
+    public required int Priority { get; set; }
+    /// <summary>契约字段 <c>taskBookId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("taskBookId")]
+    public string? TaskBookId { get; set; }
+    /// <summary>契约字段 <c>title</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("title")]
+    public required string Title { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.UpdateTaskRequest</c>（request）。</summary>

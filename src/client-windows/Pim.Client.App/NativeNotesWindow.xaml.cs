@@ -28,6 +28,8 @@ public partial class NativeNotesWindow : Window
     private NoteDerivedArtifactDto? _selectedArtifact;
     private NoteDerivedVersionDto? _selectedDerivedVersion;
     private NoteDerivedVersionSummaryDto? _selectedDerivedVersionSummary;
+    private LoadedCloudArtifactFence? _loadedTaskSourceFence;
+    private long _taskSourceSelectionGeneration;
 
     public NativeNotesWindow()
     {
@@ -360,6 +362,17 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        if (_current.IsServerSourceReadOnly && !_recording.IsRecording)
+        {
+            MessageBox.Show(
+                this,
+                "该云端混排版本在当前编辑器中只读。请导出完整原件后，在本机笔记中开始录音。",
+                "笔记版本只读",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
         try
         {
             if (_recording.IsRecording)
@@ -431,6 +444,7 @@ public partial class NativeNotesWindow : Window
             if (state.IsRecording)
             {
                 RecordingStatusText.Text = $"录音中 {state.Elapsed:mm\\:ss} · 实际输入峰值 {state.PeakLevel:P0}";
+                RecordButton.IsEnabled = true;
                 return;
             }
 
@@ -442,6 +456,11 @@ public partial class NativeNotesWindow : Window
             if (state.Error is not null)
             {
                 RecordingStatusText.Text = state.Error;
+            }
+
+            if (RecordButton is not null)
+            {
+                RecordButton.IsEnabled = _current is null || !_current.IsServerSourceReadOnly;
             }
         });
     }
@@ -542,22 +561,44 @@ public partial class NativeNotesWindow : Window
         }
 
         MaterialsList.ItemsSource = _current.Materials;
-        var recordings = _current.Materials.Count(item => item.Kind == LocalNoteMaterialKind.Recording);
+        var recordings = _current.Materials
+            .Where(item => item.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
+            .Select(item => item.RecordingId ?? item.MaterialId)
+            .Distinct()
+            .Count();
         var photos = _current.Materials.Count(item => item.Kind == LocalNoteMaterialKind.Photo);
         var handwriting = _current.Materials.Count(item => item.Kind == LocalNoteMaterialKind.Handwriting);
         MaterialsText.Text = $"固定版本 {_current.CurrentVersionId.ToString("N")[..8]} · 照片 {photos} · 手写 {handwriting} · 音频 {recordings}";
+        TitleBox.IsReadOnly = _current.IsServerSourceReadOnly;
+        MarkdownBox.IsReadOnly = _current.IsServerSourceReadOnly;
+        AddPhotoButton.IsEnabled = !_current.IsServerSourceReadOnly;
+        AddHandwritingButton.IsEnabled = !_current.IsServerSourceReadOnly;
+        AddRecordingButton.IsEnabled = !_current.IsServerSourceReadOnly;
+        RecordButton.IsEnabled = _recording.IsRecording || !_current.IsServerSourceReadOnly;
+        if (_current.IsServerSourceReadOnly)
+        {
+            MaterialsText.Text += " · 云端混排原件只读，导出保留完整块序";
+        }
     }
 
     private void ShowEmptyEditor()
     {
         _cloudUi.BeginNoteSelection();
         _cloudUi.BeginArtifactSelection();
+        Interlocked.Increment(ref _taskSourceSelectionGeneration);
+        _loadedTaskSourceFence = null;
         _loading = true;
         _current = null;
         TitleBox.Text = string.Empty;
         MarkdownBox.Text = string.Empty;
         TitleBox.IsEnabled = false;
         MarkdownBox.IsEnabled = false;
+        TitleBox.IsReadOnly = false;
+        MarkdownBox.IsReadOnly = false;
+        AddPhotoButton.IsEnabled = false;
+        AddHandwritingButton.IsEnabled = false;
+        AddRecordingButton.IsEnabled = false;
+        RecordButton.IsEnabled = _recording.IsRecording;
         _loading = false;
         MaterialsText.Text = "选择或新建笔记以开始";
         MaterialsList.ItemsSource = null;
@@ -763,18 +804,6 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        var note = (await _store.ListAsync()).FirstOrDefault(item => item.NoteId == noteId);
-        if (note is null)
-        {
-            MessageBox.Show(
-                this,
-                "服务器目录包含该笔记，但本机没有同 noteId 的笔记内容。当前契约缺少可生成的二进制文件下载响应，不能把仅元数据回读称为跨端往返。",
-                "本机没有对应笔记",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-            return;
-        }
-
         SearchBox.Text = string.Empty;
         await RefreshNotesAsync();
         NotesList.SelectedItem = _notes.FirstOrDefault(item => item.NoteId == noteId);
@@ -947,6 +976,8 @@ public partial class NativeNotesWindow : Window
 
             if (rows.Length == 0)
             {
+                Interlocked.Increment(ref _taskSourceSelectionGeneration);
+                _loadedTaskSourceFence = null;
                 _selectedArtifact = null;
                 _selectedDerivedVersion = null;
                 _selectedDerivedVersionSummary = null;
@@ -992,6 +1023,8 @@ public partial class NativeNotesWindow : Window
         var selectionGeneration = _cloudUi.NoteGeneration;
         if (CloudArtifactsList.SelectedItem is not CloudArtifactRow row)
         {
+            Interlocked.Increment(ref _taskSourceSelectionGeneration);
+            _loadedTaskSourceFence = null;
             _selectedArtifact = null;
             _selectedDerivedVersion = null;
             _selectedDerivedVersionSummary = null;
@@ -1010,6 +1043,8 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        var sourceSelectionGeneration = Interlocked.Increment(ref _taskSourceSelectionGeneration);
+        _loadedTaskSourceFence = null;
         var previousSelection = (CloudArtifactsList.ItemsSource as IEnumerable<CloudArtifactRow>)?
             .FirstOrDefault(candidate =>
                 candidate.Artifact.ArtifactId == _selectedArtifact?.ArtifactId
@@ -1040,6 +1075,14 @@ public partial class NativeNotesWindow : Window
             _selectedArtifact = row.Artifact;
             _selectedDerivedVersion = version;
             _selectedDerivedVersionSummary = row.Version;
+            _loadedTaskSourceFence = new LoadedCloudArtifactFence(
+                sourceSelectionGeneration,
+                selectionGeneration,
+                noteId!.Value,
+                Guid.Parse(row.Artifact.ArtifactId),
+                Guid.Parse(row.Version.VersionId),
+                accountScope!,
+                accountGeneration);
             _loadingCloudResult = true;
             _cloudUi.ClearDraft();
             CloudResultBox.Text = version.ContentMarkdown;
@@ -1218,6 +1261,93 @@ public partial class NativeNotesWindow : Window
             {
                 ShowFailure("切换结果当前版本失败；旧版本未删除", ex);
             }
+        }
+    }
+
+    private void OnOpenTaskSuggestions(object sender, RoutedEventArgs e)
+    {
+        if (_current is null
+            || _selectedArtifact is null
+            || _selectedDerivedVersion is null
+            || _selectedDerivedVersionSummary is null)
+        {
+            MessageBox.Show(
+                this,
+                "请先选择一个已加载的云端结果固定版本。",
+                "从笔记提取任务",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        if (!Guid.TryParse(_selectedArtifact.ArtifactId, out _)
+            || !Guid.TryParse(_selectedDerivedVersion.VersionId, out var versionId)
+            || !Guid.TryParse(_selectedDerivedVersionSummary.VersionId, out var summaryVersionId)
+            || versionId != summaryVersionId
+            || _selectedDerivedVersion.Kind != _selectedArtifact.Kind)
+        {
+            CloudResultStateText.Text = "所选结果身份不完整或不匹配；未打开任务提取。";
+            return;
+        }
+
+        if (_cloud.CurrentAccountScope is null)
+        {
+            CloudResultStateText.Text = "请先登录云端账号，再从固定结果提取任务。";
+            return;
+        }
+
+        if (_loadedTaskSourceFence is not { } loadedSource
+            || !Guid.TryParse(_selectedArtifact.ArtifactId, out var loadedArtifactId)
+            || !Guid.TryParse(_selectedDerivedVersion.VersionId, out var loadedVersionId)
+            || !CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+                loadedSource,
+                Interlocked.Read(ref _taskSourceSelectionGeneration),
+                _cloudUi.NoteGeneration,
+                _current.NoteId,
+                loadedArtifactId,
+                loadedVersionId,
+                _cloud.CurrentAccountScope,
+                _cloud.AccountGeneration))
+        {
+            CloudResultStateText.Text = "固定来源回执已过期或与当前账号/笔记/版本不匹配；请刷新并重新读取后再打开。";
+            return;
+        }
+
+        try
+        {
+            var operationFence = App.Services
+                .GetRequiredService<NoteTaskSuggestionService>()
+                .CaptureFence();
+            if (operationFence.Account != loadedSource.Account
+                || operationFence.AccountGeneration != loadedSource.AccountGeneration
+                || !CloudNotesUiState.IsLoadedCloudArtifactCurrent(
+                    loadedSource,
+                    Interlocked.Read(ref _taskSourceSelectionGeneration),
+                    _cloudUi.NoteGeneration,
+                    _current.NoteId,
+                    loadedArtifactId,
+                    loadedVersionId,
+                    _cloud.CurrentAccountScope,
+                    _cloud.AccountGeneration))
+            {
+                CloudResultStateText.Text = "账号或固定来源在打开前已变化；请刷新并重新读取来源。";
+                return;
+            }
+
+            var window = new NoteTaskSuggestionsWindow(
+                _current.NoteId,
+                _selectedArtifact,
+                _selectedDerivedVersionSummary,
+                _selectedDerivedVersion,
+                operationFence)
+            {
+                Owner = this,
+            };
+            window.ShowDialog();
+        }
+        catch (InvalidOperationException)
+        {
+            CloudResultStateText.Text = "账号或服务器刚刚切换；请刷新登录状态后重新打开任务提取。";
         }
     }
 

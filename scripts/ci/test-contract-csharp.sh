@@ -560,10 +560,40 @@ grep -q 'new("page", "int64", true)' "$SB/$OPS_REL"
 record "query_parameter_override_keeps_operation_shape" $([ $? -eq 0 ] && echo 0 || echo 1) \
   "operation-level required/type wins without emitting a duplicate"
 
+# TASK-01 uses a real local string enum for its optional status query. Keep the
+# method/path unique and ensure the exact wire values survive generation.
+SB="$WORK/sb-query-enum"; mksb "$SB"
+"$PY" - "$SB/scripts/contract/client-operations.json" <<'PY'
+import json, sys
+ops = json.load(open(sys.argv[1], encoding="utf-8"))
+assert any(entry["apiClient"] == "GetNoteTaskSuggestionsAsync" and
+           entry["method"] == "GET" and
+           entry["path"] == "/api/v1/native-notes/task-suggestions"
+           for entry in ops["operations"]), "real TASK-01 list operation missing"
+PY
+run_generator "$SB"
+record "generator_accepts_query_string_enum_reference" $([ "$GEN_RC" -eq 0 ] && echo 0 || echo 1) \
+  "rc=$GEN_RC for the real TASK-01 status schema reference"
+grep -q 'new("status", "enum", false, new string\[\] { "Draft", "Confirmed", "Dismissed" })' "$SB/$OPS_REL"
+record "query_enum_allowed_values_are_generated" $([ $? -eq 0 ] && echo 0 || echo 1) \
+  "generated TASK-01 query carries every exact enum wire value"
+
 reject_case "query_parameter_unknown_format" "query 参数带未知 format" \
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "string", "format": "custom-page"}}]'
 reject_case "query_parameter_ref" "query 参数用 \$ref 引用（生成器尚未解析 components.parameters）" \
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"$" "ref": "#/components/parameters/Page"}]'
+reject_case "query_enum_schema_ref_missing" "query 枚举引用不存在的具名 schema" \
+  'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "status", "in": "query", "schema": {"$" "ref": "#/components/schemas/MissingStatus"}}]'
+reject_case "task_query_enum_schema_ref_extra_segment" "真实 TASK status 引用含多余 JSON Pointer 段" \
+  'parameter = next(p for p in doc["paths"]["/api/v1/native-notes/task-suggestions"]["get"]["parameters"] if p.get("name") == "status"); parameter["schema"]["$ref"] = "#/components/schemas/extra/NoteTaskSuggestionStatusDto"'
+reject_case "task_query_enum_schema_ref_pointer_escape" "真实 TASK status 引用含未支持 JSON Pointer escape" \
+  'parameter = next(p for p in doc["paths"]["/api/v1/native-notes/task-suggestions"]["get"]["parameters"] if p.get("name") == "status"); parameter["schema"]["$ref"] = "#/components/schemas/NoteTaskSuggestionStatusDto~1extra"'
+reject_case "task_query_enum_schema_missing_target" "真实 TASK status 引用目标 schema 不存在" \
+  'del schemas["NoteTaskSuggestionStatusDto"]'
+reject_case "query_enum_schema_with_constraints" "query 枚举引用带未建模约束的 schema" \
+  'schemas["TestQueryStatus"] = {"type": "string", "enum": ["Draft"], "pattern": "^D"}; doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "status", "in": "query", "schema": {"$" "ref": "#/components/schemas/TestQueryStatus"}}]'
+reject_case "query_enum_on_unmodelled_operation" "除 TASK-01 外的 operation 使用 query 枚举引用" \
+  'schemas["TestQueryStatus"] = {"type": "string", "enum": ["Draft", "Confirmed"]}; doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "status", "in": "query", "schema": {"$" "ref": "#/components/schemas/TestQueryStatus"}}]'
 reject_case "query_parameter_required_not_boolean" "query 参数的 required 不是布尔值" \
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "required": "yes", "schema": {"type": "integer"}}]'
 reject_case "query_parameter_duplicate" "同一层重复声明同名 query 参数" \
@@ -572,6 +602,48 @@ reject_case "cookie_parameter" "带 cookie 参数（生成器未建模 cookie）
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "session", "in": "cookie", "schema": {"type": "string"}}]'
 reject_case "unsupported_binary_request_body" "非笔记材料分片 operation 使用二进制请求体" \
   'doc["paths"]["/api/v1/auth/login"]["post"]["requestBody"]["content"] = {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}'
+
+section "⑰ 真实笔记材料文件下载：octet-stream + 精确响应头 + SHA pattern"
+SB="$WORK/sb-note-material-download"; mksb "$SB"
+"$PY" - "$SB/scripts/contract/client-operations.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+doc = json.load(open(path, encoding="utf-8"))
+required = {
+    ("DownloadNoteMaterialFileAsync", "GET",
+     "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"),
+}
+declared = {
+    (entry["apiClient"], entry["method"], entry["path"])
+    for entry in doc["operations"]
+}
+assert required <= declared, required - declared
+PY
+run_generator "$SB"
+record "generator_accepts_note_material_binary_download" $([ "$GEN_RC" -eq 0 ] && echo 0 || echo 1) \
+  "rc=$GEN_RC for the development contract shape"
+grep -q 'DownloadNoteMaterialFile =' "$SB/$OPS_REL" \
+  && grep -q '"application/octet-stream"' "$SB/$OPS_REL" \
+  && grep -q 'new("X-Content-SHA256", "sha256")' "$SB/$OPS_REL" \
+  && grep -q 'new("Content-Disposition", "plain-string")' "$SB/$OPS_REL" \
+  && grep -q 'new("X-Content-Type-Options", "plain-string")' "$SB/$OPS_REL"
+record "note_material_binary_metadata_is_typed" $([ $? -eq 0 ] && echo 0 || echo 1) \
+  "generated operation carries the binary media type and exact header kinds"
+
+reject_case "note_material_binary_header_missing" "笔记材料下载缺少 nosniff 响应头" \
+  'download = doc["paths"]["/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"]["get"]
+headers = download["responses"]["200"]["headers"]
+headers.pop("X-Content-Type-Options")'
+reject_case "note_material_binary_header_extra" "笔记材料下载出现未建模响应头" \
+  'download = doc["paths"]["/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"]["get"]
+download["responses"]["200"]["headers"]["X-Unmodelled"] = {"schema": {"type": "string"}}'
+reject_case "note_material_binary_sha_pattern" "笔记材料下载 SHA 响应头绕过契约 pattern" \
+  'download = doc["paths"]["/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"]["get"]
+download["responses"]["200"]["headers"]["X-Content-SHA256"]["schema"].pop("pattern")'
+reject_case "note_material_binary_media_type" "笔记材料下载媒体类型变化" \
+  'download = doc["paths"]["/api/v1/native-notes/versions/{versionId}/files/{fileIndex}"]["get"]
+response = download["responses"]["200"]
+response["content"]["text/plain"] = response["content"].pop("application/octet-stream")'
 
 section "⑭ 生成物固定 UTF-8 + LF（Windows 刷新与 Linux CI 复跑必须逐字节相同）"
 CR_CHECK="$("$PY" - "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractModels.cs" "$ROOT/src/client-windows/Pim.Client.Core/Contract/ContractOperations.cs" <<'PYEOF'
