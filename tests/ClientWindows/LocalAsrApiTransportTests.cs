@@ -291,6 +291,104 @@ public sealed class LocalAsrApiTransportTests
     }
 
     [Fact]
+    public async Task Transport_ReportsFrozenResourceGateThroughGeneratedClaimRequest()
+    {
+        var sampledAt = DateTimeOffset.Parse("2026-11-02T06:00:00Z");
+        var failedDecision = new LocalAsrFrozenResourceDecision(
+            IsAutomatic: true,
+            Passed: false,
+            Reasons: [LocalRuntimeReasonCodes.ResourceCpuUnknown],
+            SampledAtUtc: sampledAt);
+        var blockedHandler = new RecordingHandler(_ => JsonResponse(
+            ResourceClaimResponseJson(
+                "resource_blocked",
+                [LocalRuntimeReasonCodes.ResourceCpuUnknown])));
+        var blocked = await Transport(blockedHandler, new ScopeState(Scope))
+            .ClaimWithResourceDecisionAsync(ClaimRequest(), failedDecision);
+
+        Assert.Equal(LocalAsrClaimStatus.ResourceBlocked, blocked.Status);
+        Assert.Null(blocked.Task);
+        Assert.True(blocked.ResourceDecisionAccepted);
+        Assert.Equal(LocalRuntimeReasonCodes.ResourceCpuUnknown, blocked.ReasonCode);
+        var blockedRequest = Assert.Single(blockedHandler.Requests);
+        Assert.Equal("/api/v1/native-notes/asr-routing/leases/claim", blockedRequest.Path);
+        var failedBody = JsonDocument.Parse(blockedRequest.Body!).RootElement;
+        Assert.Equal("claim-key", failedBody.GetProperty("idempotencyKey").GetString());
+        var reportedFailure = failedBody.GetProperty("resourceGate");
+        Assert.False(reportedFailure.GetProperty("passed").GetBoolean());
+        Assert.True(reportedFailure.GetProperty("isAutomatic").GetBoolean());
+        Assert.Equal(sampledAt, reportedFailure.GetProperty("sampledAt").GetDateTimeOffset());
+        Assert.Equal(
+            LocalRuntimeReasonCodes.ResourceCpuUnknown,
+            reportedFailure.GetProperty("reasons")[0].GetString());
+
+        var manualRequiredHandler = new RecordingHandler(_ => JsonResponse(
+            ResourceClaimResponseJson(
+                "manual_required",
+                [LocalRuntimeReasonCodes.ResourceMemoryInsufficient])));
+        var manualRequired = await Transport(manualRequiredHandler, new ScopeState(Scope))
+            .ClaimWithResourceDecisionAsync(
+                ClaimRequest(),
+                failedDecision with
+                {
+                    IsAutomatic = false,
+                    Reasons = [LocalRuntimeReasonCodes.ResourceMemoryInsufficient],
+                });
+        Assert.Equal(LocalAsrClaimStatus.ResourceBlocked, manualRequired.Status);
+        Assert.Null(manualRequired.Task);
+        Assert.True(manualRequired.ResourceDecisionAccepted);
+        Assert.Equal(
+            LocalRuntimeReasonCodes.ResourceMemoryInsufficient,
+            manualRequired.ReasonCode);
+
+        var passedDecision = failedDecision with { Passed = true, Reasons = [] };
+        var passedHandler = new RecordingHandler(_ => JsonResponse(
+            ClaimResponseJson([SegmentDto(index: 0, expectedSegments: 1)])));
+        var passed = await Transport(passedHandler, new ScopeState(Scope))
+            .ClaimWithResourceDecisionAsync(ClaimRequest(), passedDecision);
+
+        Assert.Equal(LocalAsrClaimStatus.Claimed, passed.Status);
+        Assert.True(passed.ResourceDecisionAccepted);
+        Assert.NotNull(passed.Task);
+        var passedBody = JsonDocument.Parse(Assert.Single(passedHandler.Requests).Body!).RootElement;
+        Assert.Equal("claim-key", passedBody.GetProperty("idempotencyKey").GetString());
+        var reportedPass = passedBody.GetProperty("resourceGate");
+        Assert.True(reportedPass.GetProperty("passed").GetBoolean());
+        Assert.Empty(reportedPass.GetProperty("reasons").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task Transport_AccountSwitchDuringResourceReportDiscardsResponse()
+    {
+        var responseGate = new TaskCompletionSource<HttpResponseMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new RecordingHandler(_ => responseGate.Task);
+        using var scopeState = new ScopeState(Scope);
+        var transport = Transport(handler, scopeState);
+        var pending = transport.ClaimWithResourceDecisionAsync(
+            ClaimRequest(),
+            new LocalAsrFrozenResourceDecision(
+                IsAutomatic: false,
+                Passed: false,
+                Reasons: [LocalRuntimeReasonCodes.ResourceMemoryInsufficient],
+                SampledAtUtc: DateTimeOffset.UtcNow));
+
+        await handler.FirstRequest.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        scopeState.Current = new LocalAccountScope(
+            "https://api-2.example.test",
+            "99999999-9999-9999-9999-999999999999");
+        responseGate.SetResult(JsonResponse(ResourceClaimResponseJson(
+            "manual_required",
+            [LocalRuntimeReasonCodes.ResourceMemoryInsufficient])));
+
+        var result = await pending;
+        Assert.Equal(LocalAsrClaimStatus.Deferred, result.Status);
+        Assert.Contains("scope_changed", result.ReasonCode, StringComparison.Ordinal);
+        Assert.Single(handler.Requests);
+        Assert.Contains("\"resourceGate\"", handler.Requests[0].Body!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Transport_RejectsWrongOwnerCrossServerAndContentEndpointMismatch()
     {
         using var scopeState = new ScopeState(Scope);
@@ -728,6 +826,23 @@ public sealed class LocalAsrApiTransportTests
             },
         });
     }
+
+    private static string ResourceClaimResponseJson(
+        string status,
+        IReadOnlyList<string> reasons) =>
+        JsonSerializer.Serialize(new
+        {
+            code = 0,
+            message = "ok",
+            timestamp = DateTimeOffset.UtcNow,
+            data = new
+            {
+                status,
+                resourceFailureReasons = reasons,
+                manualTriggerRequired = status == "manual_required",
+                consecutiveAutomaticResourceFailures = 1,
+            },
+        });
 
     private static string ContentRoute(int segmentIndex) =>
         ContractOperation.GetNativeAsrSegmentContent.PathTemplate
