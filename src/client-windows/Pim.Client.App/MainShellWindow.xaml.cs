@@ -101,6 +101,18 @@ public partial class MainShellWindow : Window
         App.ShowNotesWindow();
     }
 
+    private void OnOpenAppKnowledge(object sender, RoutedEventArgs e)
+    {
+        var existing = Application.Current.Windows.OfType<AppKnowledgeWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            existing.Activate();
+            return;
+        }
+
+        new AppKnowledgeWindow { Owner = this }.Show();
+    }
+
     private void OnOpenComputerHistory(object sender, RoutedEventArgs e)
     {
         var existing = Application.Current.Windows.OfType<ComputerHistoryWindow>().FirstOrDefault();

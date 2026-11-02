@@ -36,6 +36,151 @@ public sealed class AiAsrDestinationConsent
     public required string PresetVersion { get; set; }
 }
 
+/// <summary>契约 <c>components.schemas.AppKnowledgeAppDto</c>（response）。</summary>
+public sealed class AppKnowledgeAppDto
+{
+    /// <summary>契约字段 <c>categoryPath</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("categoryPath")]
+    public string? CategoryPath { get; set; }
+    /// <summary>契约字段 <c>confidence</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("confidence")]
+    public required double Confidence { get; set; }
+    /// <summary>契约字段 <c>contextCount</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("contextCount")]
+    public required int ContextCount { get; set; }
+    /// <summary>契约字段 <c>createdAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("createdAt")]
+    public required System.DateTimeOffset CreatedAt { get; set; }
+    /// <summary>契约字段 <c>description</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("description")]
+    public string? Description { get; set; }
+    /// <summary>契约字段 <c>displayName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("displayName")]
+    public required string DisplayName { get; set; }
+    /// <summary>契约字段 <c>icon</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("icon")]
+    public string? Icon { get; set; }
+    /// <summary>契约字段 <c>id</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public required string Id { get; set; }
+    /// <summary>契约字段 <c>lastSeenAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("lastSeenAt")]
+    public System.DateTimeOffset? LastSeenAt { get; set; }
+    /// <summary>契约字段 <c>pendingContextCount</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("pendingContextCount")]
+    public required int PendingContextCount { get; set; }
+    /// <summary>契约字段 <c>processName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("processName")]
+    public required string ProcessName { get; set; }
+    /// <summary>契约字段 <c>productivity</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("productivity")]
+    public string? Productivity { get; set; }
+    /// <summary>契约字段 <c>recentAffectedDurationSeconds</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("recentAffectedDurationSeconds")]
+    public required double RecentAffectedDurationSeconds { get; set; }
+    /// <summary>契约字段 <c>source</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("source")]
+    public required string Source { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.AppKnowledgeAppDtoListApiResponse</c>（response）。</summary>
+public sealed class AppKnowledgeAppDtoListApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public System.Collections.Generic.List<AppKnowledgeAppDto>? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.AppKnowledgeContextDto</c>（response）。</summary>
+public sealed class AppKnowledgeContextDto
+{
+    /// <summary>契约字段 <c>affectedDurationSeconds</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("affectedDurationSeconds")]
+    public required double AffectedDurationSeconds { get; set; }
+    /// <summary>契约字段 <c>affectedRecordCount</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("affectedRecordCount")]
+    public required int AffectedRecordCount { get; set; }
+    /// <summary>契约字段 <c>appId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("appId")]
+    public string? AppId { get; set; }
+    /// <summary>契约字段 <c>confidence</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("confidence")]
+    public required double Confidence { get; set; }
+    /// <summary>契约字段 <c>enabled</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("enabled")]
+    public required bool Enabled { get; set; }
+    /// <summary>契约字段 <c>id</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public required string Id { get; set; }
+    /// <summary>契约字段 <c>lastMatchedAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("lastMatchedAt")]
+    public System.DateTimeOffset? LastMatchedAt { get; set; }
+    /// <summary>契约字段 <c>patternType</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("patternType")]
+    public required string PatternType { get; set; }
+    /// <summary>契约字段 <c>patternValue</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("patternValue")]
+    public required string PatternValue { get; set; }
+    /// <summary>契约字段 <c>processName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("processName")]
+    public required string ProcessName { get; set; }
+    /// <summary>契约字段 <c>projectTag</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("projectTag")]
+    public string? ProjectTag { get; set; }
+    /// <summary>契约字段 <c>scopeSummary</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("scopeSummary")]
+    public required string ScopeSummary { get; set; }
+    /// <summary>契约字段 <c>source</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("source")]
+    public required string Source { get; set; }
+    /// <summary>契约字段 <c>targetCategoryName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("targetCategoryName")]
+    public string? TargetCategoryName { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.AppKnowledgeContextDtoApiResponse</c>（response）。</summary>
+public sealed class AppKnowledgeContextDtoApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public AppKnowledgeContextDto? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.AppKnowledgeContextDtoListApiResponse</c>（response）。</summary>
+public sealed class AppKnowledgeContextDtoListApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public System.Collections.Generic.List<AppKnowledgeContextDto>? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
 /// <summary>契约 <c>components.schemas.AppStatEntry</c>（request）。</summary>
 public sealed class AppStatEntry
 {
@@ -169,6 +314,98 @@ public sealed class CalendarResponseListApiResponse
     /// <summary>契约字段 <c>data</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("data")]
     public System.Collections.Generic.List<CalendarResponse>? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.CategorySaveRequest</c>（request）。</summary>
+public sealed class CategorySaveRequest
+{
+    /// <summary>契约字段 <c>color</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("color")]
+    public required string Color { get; set; }
+    /// <summary>契约字段 <c>icon</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("icon")]
+    public string? Icon { get; set; }
+    /// <summary>契约字段 <c>id</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public string? Id { get; set; }
+    /// <summary>契约字段 <c>name</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public required string Name { get; set; }
+    /// <summary>契约字段 <c>parentId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("parentId")]
+    public string? ParentId { get; set; }
+    /// <summary>契约字段 <c>productivity</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("productivity")]
+    public required string Productivity { get; set; }
+    /// <summary>契约字段 <c>sortOrder</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sortOrder")]
+    public required int SortOrder { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.CategoryTreeNode</c>（response）。</summary>
+public sealed class CategoryTreeNode
+{
+    /// <summary>契约字段 <c>children</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("children")]
+    public required System.Collections.Generic.List<CategoryTreeNode> Children { get; set; }
+    /// <summary>契约字段 <c>color</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("color")]
+    public required string Color { get; set; }
+    /// <summary>契约字段 <c>icon</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("icon")]
+    public string? Icon { get; set; }
+    /// <summary>契约字段 <c>id</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("id")]
+    public required string Id { get; set; }
+    /// <summary>契约字段 <c>isBuiltin</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isBuiltin")]
+    public required bool IsBuiltin { get; set; }
+    /// <summary>契约字段 <c>name</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public required string Name { get; set; }
+    /// <summary>契约字段 <c>parentId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("parentId")]
+    public string? ParentId { get; set; }
+    /// <summary>契约字段 <c>productivity</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("productivity")]
+    public required string Productivity { get; set; }
+    /// <summary>契约字段 <c>sortOrder</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sortOrder")]
+    public required int SortOrder { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.CategoryTreeNodeApiResponse</c>（response）。</summary>
+public sealed class CategoryTreeNodeApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public CategoryTreeNode? Data { get; set; }
+    /// <summary>契约字段 <c>message</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("message")]
+    public required string Message { get; set; }
+    /// <summary>契约字段 <c>timestamp</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timestamp")]
+    public required System.DateTimeOffset Timestamp { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.CategoryTreeNodeListApiResponse</c>（response）。</summary>
+public sealed class CategoryTreeNodeListApiResponse
+{
+    /// <summary>契约字段 <c>code</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("code")]
+    public required int Code { get; set; }
+    /// <summary>契约字段 <c>data</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("data")]
+    public System.Collections.Generic.List<CategoryTreeNode>? Data { get; set; }
     /// <summary>契约字段 <c>message</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("message")]
     public required string Message { get; set; }
@@ -3010,6 +3247,35 @@ public sealed class RetryNoteDerivedTaskRequest
     /// <summary>契约字段 <c>stepKeys</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("stepKeys")]
     public required System.Collections.Generic.List<string> StepKeys { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.SaveAppKnowledgeContextRequest</c>（request）。</summary>
+public sealed class SaveAppKnowledgeContextRequest
+{
+    /// <summary>契约字段 <c>appId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("appId")]
+    public string? AppId { get; set; }
+    /// <summary>契约字段 <c>confidence</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("confidence")]
+    public double? Confidence { get; set; }
+    /// <summary>契约字段 <c>enabled</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("enabled")]
+    public bool? Enabled { get; set; }
+    /// <summary>契约字段 <c>patternType</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("patternType")]
+    public required string PatternType { get; set; }
+    /// <summary>契约字段 <c>patternValue</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("patternValue")]
+    public required string PatternValue { get; set; }
+    /// <summary>契约字段 <c>processName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("processName")]
+    public required string ProcessName { get; set; }
+    /// <summary>契约字段 <c>projectTag</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("projectTag")]
+    public string? ProjectTag { get; set; }
+    /// <summary>契约字段 <c>targetCategoryName</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("targetCategoryName")]
+    public string? TargetCategoryName { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.SaveNoteDerivedManualRevisionRequest</c>（request）。</summary>

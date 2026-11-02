@@ -475,6 +475,62 @@ public sealed class ContractOperation
             null,
             "application/json",
             new ContractHeader[] {  });
+    public static readonly ContractOperation GetPcCategoryTree =
+        new("GET", "/api/v1/pc/categories/tree", "pc/categories/tree",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation SavePcCategory =
+        new("POST", "/api/v1/pc/categories", "pc/categories",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation DeletePcCategory =
+        new("DELETE", "/api/v1/pc/categories/{id}", "pc/categories/{id}",
+            new ContractHeader[] { new("id", "uuid") },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation SearchAppKnowledgeApps =
+        new("GET", "/api/v1/pc/app-knowledge/apps", "pc/app-knowledge/apps",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] { new("search", "plain-string", false) },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetAppKnowledgeContexts =
+        new("GET", "/api/v1/pc/app-knowledge/apps/{appId}/contexts", "pc/app-knowledge/apps/{appId}/contexts",
+            new ContractHeader[] { new("appId", "uuid") },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation SaveAppKnowledgeContext =
+        new("POST", "/api/v1/pc/app-knowledge/contexts", "pc/app-knowledge/contexts",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            "application/json",
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation DeleteAppKnowledgeContext =
+        new("DELETE", "/api/v1/pc/app-knowledge/contexts/{id}", "pc/app-knowledge/contexts/{id}",
+            new ContractHeader[] { new("id", "uuid") },
+            new ContractQueryParameter[] {  },
+            new ContractHeader[] {  },
+            null,
+            "application/json",
+            new ContractHeader[] {  });
     public static readonly ContractOperation RegisterNativeAsrNode =
         new("POST", "/api/v1/native-notes/asr-routing/nodes/register", "native-notes/asr-routing/nodes/register",
             new ContractHeader[] {  },

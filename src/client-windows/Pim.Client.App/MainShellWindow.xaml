@@ -60,6 +60,7 @@
 
                     <Button Content="今日" Tag="/today" Click="OnNavigateRoute" Style="{StaticResource PimSecondaryButton}" Margin="0,0,0,6"/>
                     <Button Content="原生笔记" Click="OnOpenNativeNotes" Style="{StaticResource PimPrimaryButton}" Margin="0,0,0,6"/>
+                    <Button Content="应用知识与分类" Click="OnOpenAppKnowledge" Style="{StaticResource PimSecondaryButton}" Margin="0,0,0,6"/>
                     <Button Content="原生电脑记录" Click="OnOpenComputerHistory" Style="{StaticResource PimSecondaryButton}" Margin="0,0,0,6"/>
                     <Button Content="原生设备中心" Click="OnOpenDeviceCenter" Style="{StaticResource PimSecondaryButton}" Margin="0,0,0,6"/>
                     <Button Content="原生日历与任务" Click="OnOpenNativePlanner" Style="{StaticResource PimSecondaryButton}" Margin="0,0,0,6"/>
