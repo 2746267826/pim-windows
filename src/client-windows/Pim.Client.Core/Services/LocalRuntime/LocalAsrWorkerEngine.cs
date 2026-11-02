@@ -26,6 +26,7 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
     private readonly IResourceSnapshotProvider _resourceProvider;
     private readonly RuntimeBackoffStore _backoffStore;
     private readonly LocalAsrWorkerStateStore _stateStore;
+    private readonly LocalAsrClaimDecisionAdapter _claimDecisionAdapter;
     private readonly LocalAsrWorkerOptions _options;
     private readonly Func<DateTimeOffset> _now;
     private readonly SemaphoreSlim _runGate = new(1, 1);
@@ -38,7 +39,8 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
         RuntimeBackoffStore backoffStore,
         LocalAsrWorkerStateStore stateStore,
         LocalAsrWorkerOptions options,
-        Func<DateTimeOffset>? now = null)
+        Func<DateTimeOffset>? now = null,
+        LocalAsrClaimDecisionAdapter? claimDecisionAdapter = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _runtimeAdapter = runtimeAdapter ?? throw new ArgumentNullException(nameof(runtimeAdapter));
@@ -48,6 +50,10 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _now = now ?? (() => DateTimeOffset.UtcNow);
+        _claimDecisionAdapter = claimDecisionAdapter ?? new LocalAsrClaimDecisionAdapter(
+            _transport,
+            new LocalAsrResourceDecisionOutbox(Path.Combine(_options.StagingRoot, "..", "resource-decisions")),
+            _now);
     }
 
     public async Task<LocalAsrWorkerRunResult> ProcessOnceAsync(
@@ -112,61 +118,28 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
                 accountToken);
             var token = linked.Token;
             var backoffKey = BackoffKey(scope);
-
-            if (trigger == LocalAsrWorkTrigger.Automatic)
+            var requestedIdempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey)
+                ? null
+                : idempotencyKey.Trim();
+            LocalAsrPendingResourceDecision? activePending = null;
+            if (requestedIdempotencyKey is null)
             {
-                var backoff = await _backoffStore
-                    .EvaluateAsync(backoffKey, _options.ModelManifest.ModelId, _now())
+                var pending = await _claimDecisionAdapter.ListPendingAsync(scope, _options.NodeId, token)
                     .ConfigureAwait(false);
-                if (!backoff.ShouldAutoAttempt)
+                activePending = pending.FirstOrDefault();
+                if (activePending is not null && !MatchesCurrentPayload(activePending))
                 {
                     return LocalAsrWorkerRunResult.WithoutTask(
-                        LocalAsrWorkerRunStatus.BackoffDeferred,
-                        backoff.ManualRequired ? "manual-required" : "backoff-active",
-                        backoff.NextAttemptAtUtc?.ToString("O"));
-                }
-            }
-
-            ResourceDecision resourceDecision;
-            try
-            {
-                var snapshot = await _resourceProvider
-                    .GetSnapshotAsync(token)
-                    .ConfigureAwait(false);
-                resourceDecision = ResourceRequirementEvaluator.Evaluate(
-                    _options.ModelManifest.Resources,
-                    snapshot);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                return ClassifyPreClaimCancellation(accountToken, cancellationToken);
-            }
-
-            if (!resourceDecision.Satisfied)
-            {
-                try
-                {
-                    await _backoffStore.RecordResourceFailureAsync(
-                            backoffKey,
-                            _options.ModelManifest.ModelId,
-                            resourceDecision.Reasons,
-                            token)
-                        .ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (token.IsCancellationRequested)
-                {
-                    return ClassifyPreClaimCancellation(accountToken, cancellationToken);
+                        LocalAsrWorkerRunStatus.Deferred,
+                        "pending-resource-decision-requires-original-model",
+                        activePending.IdempotencyKey);
                 }
 
-                return LocalAsrWorkerRunResult.WithoutTask(
-                    LocalAsrWorkerRunStatus.ResourceBlocked,
-                    string.Join(",", resourceDecision.Reasons));
+                requestedIdempotencyKey = activePending?.IdempotencyKey
+                    ?? "asr-worker-" + Guid.NewGuid().ToString("N");
             }
 
-            var requestedIdempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey)
-                ? "asr-worker-" + Guid.NewGuid().ToString("N")
-                : idempotencyKey.Trim();
-            if (requestedIdempotencyKey.Length > MaximumIdLength)
+            if (requestedIdempotencyKey!.Length > MaximumIdLength)
             {
                 return LocalAsrWorkerRunResult.WithoutTask(
                     LocalAsrWorkerRunStatus.InvalidConfiguration,
@@ -174,18 +147,95 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
                     "idempotency key is too long");
             }
 
+            LocalAsrClaimRequest claimRequest;
+            LocalAsrFrozenDecisionResult frozen;
+            ResourceDecision resourceDecision;
+            try
+            {
+                claimRequest = new LocalAsrClaimRequest(
+                    scope,
+                    _options.NodeId,
+                    requestedIdempotencyKey,
+                    _options.RuntimeManifest.RuntimeId,
+                    _options.ModelManifest.ModelId,
+                    _options.ModelManifest.Revision,
+                    _options.ModelManifest.Sha256);
+
+                var existing = await _claimDecisionAdapter.FindPendingAsync(
+                        scope,
+                        _options.NodeId,
+                        requestedIdempotencyKey,
+                        token)
+                    .ConfigureAwait(false);
+                existing ??= activePending;
+                if (existing is not null)
+                {
+                    frozen = new LocalAsrFrozenDecisionResult(existing, IsReplay: true);
+                }
+                else
+                {
+                    if (trigger == LocalAsrWorkTrigger.Automatic)
+                    {
+                        var backoff = await _backoffStore
+                            .EvaluateAsync(backoffKey, _options.ModelManifest.ModelId, _now())
+                            .ConfigureAwait(false);
+                        if (!backoff.ShouldAutoAttempt)
+                        {
+                            return LocalAsrWorkerRunResult.WithoutTask(
+                                LocalAsrWorkerRunStatus.BackoffDeferred,
+                                backoff.ManualRequired ? "manual-required" : "backoff-active",
+                                backoff.NextAttemptAtUtc?.ToString("O"));
+                        }
+                    }
+
+                    var resourceSnapshot = await _resourceProvider
+                        .GetSnapshotAsync(token)
+                        .ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    var freshDecision = ResourceRequirementEvaluator.Evaluate(
+                        _options.ModelManifest.Resources,
+                        resourceSnapshot);
+                    frozen = await _claimDecisionAdapter.FreezeAsync(
+                            claimRequest,
+                            trigger,
+                            freshDecision,
+                            resourceSnapshot.MeasuredAtUtc,
+                            token)
+                        .ConfigureAwait(false);
+                }
+
+                resourceDecision = new ResourceDecision(
+                    frozen.Pending.Decision.Passed,
+                    frozen.Pending.Decision.Reasons);
+                claimRequest = claimRequest with { ResourceDecision = frozen.Pending.Decision };
+
+                if (!resourceDecision.Satisfied && !frozen.IsReplay)
+                    await _backoffStore.RecordResourceFailureAsync(
+                            backoffKey,
+                            _options.ModelManifest.ModelId,
+                            resourceDecision.Reasons,
+                            token)
+                        .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return ClassifyPreClaimCancellation(accountToken, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return LocalAsrWorkerRunResult.WithoutTask(
+                    LocalAsrWorkerRunStatus.TransportFailed,
+                    LocalRuntimeReasonCodes.TransportFailed,
+                    ex.Message);
+            }
+
             LocalAsrClaimResult claim;
             try
             {
-                claim = await _transport.ClaimAsync(
-                        new LocalAsrClaimRequest(
-                            scope,
-                            _options.NodeId,
-                            requestedIdempotencyKey,
-                            _options.RuntimeManifest.RuntimeId,
-                            _options.ModelManifest.ModelId,
-                            _options.ModelManifest.Revision,
-                            _options.ModelManifest.Sha256),
+                token.ThrowIfCancellationRequested();
+                claim = await _claimDecisionAdapter.ClaimAsync(
+                        claimRequest,
+                        frozen.Pending,
                         token)
                     .ConfigureAwait(false);
             }
@@ -212,6 +262,10 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
                         LocalAsrWorkerRunStatus.Deferred,
                         claim.ReasonCode,
                         claim.RetryAfterUtc?.ToString("O"));
+                case LocalAsrClaimStatus.ResourceBlocked:
+                    return LocalAsrWorkerRunResult.WithoutTask(
+                        LocalAsrWorkerRunStatus.ResourceBlocked,
+                        claim.ReasonCode ?? string.Join(",", resourceDecision.Reasons));
                 case LocalAsrClaimStatus.Rejected:
                     return LocalAsrWorkerRunResult.WithoutTask(
                         LocalAsrWorkerRunStatus.Failed,
@@ -271,6 +325,17 @@ public sealed class LocalAsrWorkerEngine : ILocalAsrWorkerRunner
             _runGate.Release();
         }
     }
+
+    private bool MatchesCurrentPayload(LocalAsrPendingResourceDecision pending) =>
+        pending.RequestPayload is not null
+        && string.Equals(pending.RequestPayload.RuntimeId, _options.RuntimeManifest.RuntimeId,
+            StringComparison.Ordinal)
+        && string.Equals(pending.RequestPayload.ModelId, _options.ModelManifest.ModelId,
+            StringComparison.Ordinal)
+        && string.Equals(pending.RequestPayload.ModelRevision, _options.ModelManifest.Revision,
+            StringComparison.Ordinal)
+        && string.Equals(pending.RequestPayload.ModelSha256, _options.ModelManifest.Sha256,
+            StringComparison.OrdinalIgnoreCase);
 
     public async Task<LocalAsrScopeSwitchResult> SwitchScopeAsync(
         LocalAccountScope? newScope,

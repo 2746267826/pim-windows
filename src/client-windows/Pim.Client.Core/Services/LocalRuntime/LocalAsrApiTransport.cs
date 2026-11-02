@@ -21,7 +21,7 @@ public delegate Task<bool> LocalAsrInstalledArtifactVerifier(
 /// Network routing always comes from the generated operation path; server-supplied
 /// content URLs are treated as untrusted evidence and are never followed.
 /// </summary>
-public sealed class LocalAsrApiTransport : ILocalAsrNodeTransport
+public sealed class LocalAsrApiTransport : ILocalAsrNodeTransport, ILocalAsrResourceDecisionTransport
 {
     public const string LocalAsrCapability = "local-asr";
     public const int DefaultLeaseSeconds = 120;
@@ -226,9 +226,24 @@ public sealed class LocalAsrApiTransport : ILocalAsrNodeTransport
         }
     }
 
-    public async Task<LocalAsrClaimResult> ClaimAsync(
+    public Task<LocalAsrClaimResult> ClaimAsync(
         LocalAsrClaimRequest request,
+        CancellationToken cancellationToken = default) =>
+        ClaimCoreAsync(request, resourceDecision: null, cancellationToken);
+
+    public Task<LocalAsrClaimResult> ClaimWithResourceDecisionAsync(
+        LocalAsrClaimRequest request,
+        LocalAsrFrozenResourceDecision decision,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        return ClaimCoreAsync(request, decision, cancellationToken);
+    }
+
+    private async Task<LocalAsrClaimResult> ClaimCoreAsync(
+        LocalAsrClaimRequest request,
+        LocalAsrFrozenResourceDecision? resourceDecision,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.Scope is null)
@@ -246,6 +261,18 @@ public sealed class LocalAsrApiTransport : ILocalAsrNodeTransport
         {
             return new(LocalAsrClaimStatus.Rejected, null, "invalid_claim_request");
         }
+        if (resourceDecision is not null
+            && (resourceDecision.SampledAtUtc == default
+                || resourceDecision.Reasons is null
+                || resourceDecision.Reasons.Count > 8
+                || resourceDecision.Reasons.Any(reason => !IsBoundedText(reason, 64))
+                || resourceDecision.Reasons.Distinct(StringComparer.Ordinal).Count()
+                    != resourceDecision.Reasons.Count
+                || resourceDecision.Passed && resourceDecision.Reasons.Count != 0
+                || !resourceDecision.Passed && resourceDecision.Reasons.Count == 0))
+        {
+            return new(LocalAsrClaimStatus.Rejected, null, "invalid_resource_gate_decision");
+        }
 
         NoteAsrClaimDtoApiResponse? response;
         try
@@ -258,6 +285,15 @@ public sealed class LocalAsrApiTransport : ILocalAsrNodeTransport
                         NodeId = nodeId.ToString("D"),
                         IdempotencyKey = request.IdempotencyKey,
                         LeaseSeconds = DefaultLeaseSeconds,
+                        ResourceGate = resourceDecision is null
+                            ? null
+                            : new NoteAsrResourceGateDecision
+                            {
+                                IsAutomatic = resourceDecision.IsAutomatic,
+                                Passed = resourceDecision.Passed,
+                                Reasons = resourceDecision.Reasons.ToList(),
+                                SampledAt = resourceDecision.SampledAtUtc,
+                            },
                     },
                     token),
                 cancellationToken).ConfigureAwait(false);
@@ -295,22 +331,32 @@ public sealed class LocalAsrApiTransport : ILocalAsrNodeTransport
         var status = claim.Status?.Trim().ToLowerInvariant();
         switch (status)
         {
+            case "resource_blocked":
+            case "manual_required":
+                return new(
+                    LocalAsrClaimStatus.ResourceBlocked,
+                    null,
+                    string.Join(",", claim.ResourceFailureReasons ?? resourceDecision?.Reasons ?? []),
+                    ResourceDecisionAccepted: resourceDecision is not null);
             case "empty":
             case "contended":
             case "replayed":
-                return new(LocalAsrClaimStatus.NoWork, null, status);
+                return new(LocalAsrClaimStatus.NoWork, null, status,
+                    ResourceDecisionAccepted: resourceDecision is not null);
             case "unavailable":
                 return new(
                     LocalAsrClaimStatus.Deferred,
                     null,
                     status,
-                    DateTimeOffset.UtcNow.AddSeconds(5));
+                    DateTimeOffset.UtcNow.AddSeconds(5),
+                    ResourceDecisionAccepted: resourceDecision is not null);
             case "lease_expired":
                 return new(
                     LocalAsrClaimStatus.Deferred,
                     null,
                     status,
-                    DateTimeOffset.UtcNow.AddSeconds(1));
+                    DateTimeOffset.UtcNow.AddSeconds(1),
+                    ResourceDecisionAccepted: resourceDecision is not null);
             case not "claimed":
                 return new(LocalAsrClaimStatus.Rejected, null, "unknown_claim_status");
         }
@@ -324,7 +370,8 @@ public sealed class LocalAsrApiTransport : ILocalAsrNodeTransport
                 request);
             BindLease(scope, nodeId, task);
             RevalidateScope(scope);
-            return new(LocalAsrClaimStatus.Claimed, task);
+            return new(LocalAsrClaimStatus.Claimed, task,
+                ResourceDecisionAccepted: resourceDecision is not null);
         }
         catch (LocalAsrTransportValidationException error)
         {

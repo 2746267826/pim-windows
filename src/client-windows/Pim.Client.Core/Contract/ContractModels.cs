@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 e7741cf3a69a30eb178d3a77fa329c71bc657dd2ede186c125816e63b6d2bfb2)
+//   契约快照      : contract/openapi.json (sha256 a6ac67bfcebad14e3c5d5e67e09f26883dc54e869786524a31b7bd1422287247)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -189,6 +189,9 @@ public sealed class ClaimNoteAsrTaskRequest
     /// <summary>契约字段 <c>nodeId</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("nodeId")]
     public required string NodeId { get; set; }
+    /// <summary>契约字段 <c>resourceGate</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("resourceGate")]
+    public NoteAsrResourceGateDecision? ResourceGate { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.ClientShellLatestResponse</c>（response）。</summary>
@@ -1174,6 +1177,9 @@ public sealed class NoteAsrAttemptDto
 /// <summary>契约 <c>components.schemas.NoteAsrClaimDto</c>（response）。</summary>
 public sealed class NoteAsrClaimDto
 {
+    /// <summary>契约字段 <c>consecutiveAutomaticResourceFailures</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("consecutiveAutomaticResourceFailures")]
+    public int? ConsecutiveAutomaticResourceFailures { get; set; }
     /// <summary>契约字段 <c>execution</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("execution")]
     public NoteAsrExecutionDto? Execution { get; set; }
@@ -1183,6 +1189,12 @@ public sealed class NoteAsrClaimDto
     /// <summary>契约字段 <c>leaseId</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("leaseId")]
     public string? LeaseId { get; set; }
+    /// <summary>契约字段 <c>manualTriggerRequired</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("manualTriggerRequired")]
+    public bool? ManualTriggerRequired { get; set; }
+    /// <summary>契约字段 <c>resourceFailureReasons</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("resourceFailureReasons")]
+    public System.Collections.Generic.List<string>? ResourceFailureReasons { get; set; }
     /// <summary>契约字段 <c>status</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("status")]
     public required string Status { get; set; }
@@ -1327,12 +1339,18 @@ public sealed class NoteAsrLeaseHeartbeatRequest
 /// <summary>契约 <c>components.schemas.NoteAsrNodeDto</c>（response）。</summary>
 public sealed class NoteAsrNodeDto
 {
+    /// <summary>契约字段 <c>automaticProcessingManualRequired</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("automaticProcessingManualRequired")]
+    public bool AutomaticProcessingManualRequired { get; set; }
     /// <summary>契约字段 <c>capabilities</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("capabilities")]
     public required System.Collections.Generic.List<string> Capabilities { get; set; }
     /// <summary>契约字段 <c>claimable</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("claimable")]
     public required bool Claimable { get; set; }
+    /// <summary>契约字段 <c>consecutiveAutomaticResourceFailures</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("consecutiveAutomaticResourceFailures")]
+    public int ConsecutiveAutomaticResourceFailures { get; set; }
     /// <summary>契约字段 <c>createdAt</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("createdAt")]
     public required System.DateTimeOffset CreatedAt { get; set; }
@@ -1357,6 +1375,15 @@ public sealed class NoteAsrNodeDto
     /// <summary>契约字段 <c>nodeIdExternal</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("nodeIdExternal")]
     public required string NodeIdExternal { get; set; }
+    /// <summary>契约字段 <c>resourceDecisionAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("resourceDecisionAt")]
+    public System.DateTimeOffset? ResourceDecisionAt { get; set; }
+    /// <summary>契约字段 <c>resourceGateFailureReasons</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("resourceGateFailureReasons")]
+    public System.Collections.Generic.List<string>? ResourceGateFailureReasons { get; set; }
+    /// <summary>契约字段 <c>resourceGateStatus</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("resourceGateStatus")]
+    public string? ResourceGateStatus { get; set; }
     /// <summary>契约字段 <c>resourceSnapshotJson</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("resourceSnapshotJson")]
     public string? ResourceSnapshotJson { get; set; }
@@ -1418,6 +1445,23 @@ public sealed class NoteAsrNodeHeartbeatRequest
     /// <summary>契约字段 <c>sampledAt</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("sampledAt")]
     public System.DateTimeOffset? SampledAt { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.NoteAsrResourceGateDecision</c>（request）。</summary>
+public sealed class NoteAsrResourceGateDecision
+{
+    /// <summary>契约字段 <c>isAutomatic</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isAutomatic")]
+    public required bool IsAutomatic { get; set; }
+    /// <summary>契约字段 <c>passed</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("passed")]
+    public required bool Passed { get; set; }
+    /// <summary>契约字段 <c>reasons</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("reasons")]
+    public required System.Collections.Generic.List<string> Reasons { get; set; }
+    /// <summary>契约字段 <c>sampledAt</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sampledAt")]
+    public required System.DateTimeOffset SampledAt { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.NoteAsrRouteConsent</c>（request）。</summary>

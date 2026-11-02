@@ -13,6 +13,7 @@ public enum LocalAsrClaimStatus
     Claimed,
     NoWork,
     Deferred,
+    ResourceBlocked,
     Rejected,
 }
 
@@ -95,7 +96,18 @@ public sealed record LocalAsrClaimRequest(
     string RuntimeId,
     string ModelId,
     string ModelRevision,
-    string ModelSha256);
+    string ModelSha256,
+    LocalAsrFrozenResourceDecision? ResourceDecision = null);
+
+/// <summary>
+/// Immutable local resource result associated with one claim idempotency key.
+/// This is internal worker data; it does not assert that an HTTP transport sent it.
+/// </summary>
+public sealed record LocalAsrFrozenResourceDecision(
+    bool IsAutomatic,
+    bool Passed,
+    IReadOnlyList<string> Reasons,
+    DateTimeOffset SampledAtUtc);
 
 public sealed record LocalAsrInputSegment(
     int SegmentIndex,
@@ -132,7 +144,8 @@ public sealed record LocalAsrClaimResult(
     LocalAsrClaimStatus Status,
     LocalAsrClaimedTask? Task,
     string? ReasonCode = null,
-    DateTimeOffset? RetryAfterUtc = null);
+    DateTimeOffset? RetryAfterUtc = null,
+    bool ResourceDecisionAccepted = false);
 
 public sealed record LocalAsrRenewResult(
     LocalAsrRenewStatus Status,
@@ -205,6 +218,19 @@ public interface ILocalAsrNodeTransport
 
     Task<LocalAsrWithdrawResult> WithdrawAsync(
         LocalAsrWithdrawRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Typed extension seam for a backend contract that reports claim-time resource
+/// decisions atomically. Implementations report failed decisions without obtaining
+/// a lease, and return ordinary claim results only for passing decisions.
+/// </summary>
+public interface ILocalAsrResourceDecisionTransport
+{
+    Task<LocalAsrClaimResult> ClaimWithResourceDecisionAsync(
+        LocalAsrClaimRequest request,
+        LocalAsrFrozenResourceDecision decision,
         CancellationToken cancellationToken = default);
 }
 
