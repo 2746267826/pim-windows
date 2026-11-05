@@ -447,6 +447,69 @@ public class ApiClient
     public Task<StringApiResponse?> UploadKeystatsSnapshotAsync(KeystatsUploadRequest request, CancellationToken ct = default)
         => SendJsonAsync<StringApiResponse>(ContractOperation.UploadKeystatsSnapshot, request, ct);
 
+    /// <summary><c>GET /api/v1/pc/categories/tree</c>。</summary>
+    public Task<CategoryTreeNodeListApiResponse?> GetPcCategoryTreeAsync(CancellationToken ct = default)
+        => SendAsync<CategoryTreeNodeListApiResponse>(
+            ContractOperation.GetPcCategoryTree,
+            null,
+            null,
+            ct);
+
+    /// <summary><c>POST /api/v1/pc/categories</c>：新增或更新分类树节点。</summary>
+    public Task<CategoryTreeNodeApiResponse?> SavePcCategoryAsync(
+        CategorySaveRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<CategoryTreeNodeApiResponse>(
+            ContractOperation.SavePcCategory,
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
+    /// <summary><c>DELETE /api/v1/pc/categories/{id}</c>。</summary>
+    public Task<StringApiResponse?> DeletePcCategoryAsync(Guid id, CancellationToken ct = default)
+        => SendAsync<StringApiResponse>(
+            ContractOperation.DeletePcCategory,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary><c>GET /api/v1/pc/app-knowledge/apps?search=...</c>。</summary>
+    public Task<AppKnowledgeAppDtoListApiResponse?> SearchAppKnowledgeAppsAsync(
+        string? search = null,
+        CancellationToken ct = default)
+        => SendAsync<AppKnowledgeAppDtoListApiResponse>(
+            ContractOperation.SearchAppKnowledgeApps,
+            null,
+            null,
+            ct,
+            queryValues: [("search", search)]);
+
+    /// <summary><c>GET /api/v1/pc/app-knowledge/apps/{appId}/contexts</c>。</summary>
+    public Task<AppKnowledgeContextDtoListApiResponse?> GetAppKnowledgeContextsAsync(
+        Guid appId,
+        CancellationToken ct = default)
+        => SendAsync<AppKnowledgeContextDtoListApiResponse>(
+            ContractOperation.GetAppKnowledgeContexts,
+            [("appId", RequireGuid(appId, nameof(appId)).ToString("D"))],
+            null,
+            ct);
+
+    /// <summary><c>POST /api/v1/pc/app-knowledge/contexts</c>。</summary>
+    public Task<AppKnowledgeContextDtoApiResponse?> SaveAppKnowledgeContextAsync(
+        SaveAppKnowledgeContextRequest request,
+        CancellationToken ct = default)
+        => SendJsonAsync<AppKnowledgeContextDtoApiResponse>(
+            ContractOperation.SaveAppKnowledgeContext,
+            request ?? throw new ArgumentNullException(nameof(request)),
+            ct);
+
+    /// <summary><c>DELETE /api/v1/pc/app-knowledge/contexts/{id}</c>。</summary>
+    public Task<StringApiResponse?> DeleteAppKnowledgeContextAsync(Guid id, CancellationToken ct = default)
+        => SendAsync<StringApiResponse>(
+            ContractOperation.DeleteAppKnowledgeContext,
+            [("id", RequireGuid(id, nameof(id)).ToString("D"))],
+            null,
+            ct);
+
     /// <summary>
     /// <c>GET /api/client/shell/latest</c>（匿名；注意它在 <c>/api/v1</c> 之外，走 host 根路径）。
     /// 守护程序的「检查更新」用它。

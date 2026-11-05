@@ -197,7 +197,8 @@ public sealed class LocalNoteStore
     public async Task<LocalNoteDocument> AddMaterialsAsync(
         Guid noteId,
         IReadOnlyList<LocalNoteMaterialInput> inputs,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? expectedCurrentVersionId = null)
     {
         if (inputs.Count == 0)
         {
@@ -208,6 +209,12 @@ public sealed class LocalNoteStore
         try
         {
             var note = await LoadNoteLockedAsync(noteId, cancellationToken);
+            if (expectedCurrentVersionId is { } expectedVersionId
+                && note.CurrentVersionId != expectedVersionId)
+            {
+                throw new LocalNoteStoreException("笔记固定版本已变化；手写材料未写入，请重新打开后再编辑。");
+            }
+
             var materials = new List<LocalNoteMaterial>(note.Materials);
             if (note.IsServerSourceReadOnly)
             {
@@ -244,11 +251,18 @@ public sealed class LocalNoteStore
         string displayName,
         int width,
         int height,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? expectedCurrentVersionId = null)
     {
         if (string.IsNullOrWhiteSpace(vectorJson))
         {
             throw new ArgumentException("手写源数据不能为空。", nameof(vectorJson));
+        }
+
+        var ink = LocalInkDocumentCodec.Parse(vectorJson);
+        if (ink.Width != width || ink.Height != height)
+        {
+            throw new InvalidDataException("手写源画布尺寸与材料尺寸不一致。");
         }
 
         var vectorBytes = Encoding.UTF8.GetBytes(vectorJson);
@@ -270,7 +284,7 @@ public sealed class LocalNoteStore
                 width,
                 height),
         };
-        return await AddMaterialsAsync(noteId, inputs, cancellationToken);
+        return await AddMaterialsAsync(noteId, inputs, cancellationToken, expectedCurrentVersionId);
     }
 
     public async Task<LocalNoteVersion> LoadVersionAsync(

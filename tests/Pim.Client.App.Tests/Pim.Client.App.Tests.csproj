@@ -24,6 +24,8 @@
     <Compile Include="../ClientWindows/Pim.Client.App.Tests.AssemblyInfo.cs" />
     <Compile Include="../ClientWindows/BootstrapLogTests.cs" />
     <Compile Include="../ClientWindows/CloudNotesUiStateTests.cs" />
+    <Compile Include="../ClientWindows/HandwritingStrokeMapperTests.cs" />
+    <Compile Include="../ClientWindows/HandwritingWindowLayoutTests.cs" />
     <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/DaemonLoggerShutdownTests.cs" />
     <Compile Include="../ClientWindows/ScheduledTaskServiceTests.cs" />
@@ -42,6 +44,8 @@
     <Compile Include="../ClientWindows/NativePlannerUiStateTests.cs" />
     <Compile Include="../ClientWindows/RemoteComputerHistoryWindowTests.cs" />
     <Compile Include="../ClientWindows/NoteTaskSuggestionUiStateTests.cs" />
+    <Compile Include="../ClientWindows/AppKnowledgeUiStateTests.cs" />
+    <Compile Include="../ClientWindows/WpfApplicationFixture.cs" />
     <Compile Include="../ClientWindows/WindowsControlledProcessRunnerTests.cs" />
     <Compile Include="../ClientWindows/WindowsRecordingServiceTests.cs" />
     <Compile Include="../ClientWindows/WindowsResourceSnapshotProviderTests.cs" />

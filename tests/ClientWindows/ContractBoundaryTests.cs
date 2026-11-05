@@ -787,6 +787,48 @@ public class ContractBoundaryBehaviorTests
             },
             (api, req) => api.UploadTrackerEventsAsync((TrackerEventsUploadRequest)req!),
             IntEnvelopeBody),
+        new("GET", "/api/v1/pc/categories/tree", null,
+            (api, _) => api.GetPcCategoryTreeAsync()),
+        new("POST", "/api/v1/pc/categories",
+            new CategorySaveRequest
+            {
+                Color = "#2370c3",
+                Icon = "work",
+                Id = "11111111-1111-1111-1111-111111111111",
+                Name = "工作",
+                ParentId = "33333333-3333-3333-3333-333333333333",
+                Productivity = "neutral",
+                SortOrder = 10,
+            },
+            (api, req) => api.SavePcCategoryAsync((CategorySaveRequest)req!)),
+        new("DELETE", "/api/v1/pc/categories/{id}", null,
+            (api, _) => api.DeletePcCategoryAsync(
+                Guid.Parse("11111111-1111-1111-1111-111111111111")),
+            ExpectedPath: "/api/v1/pc/categories/11111111-1111-1111-1111-111111111111"),
+        new("GET", "/api/v1/pc/app-knowledge/apps", null,
+            (api, _) => api.SearchAppKnowledgeAppsAsync("editor"),
+            ExpectedQuery: "?search=editor"),
+        new("GET", "/api/v1/pc/app-knowledge/apps/{appId}/contexts", null,
+            (api, _) => api.GetAppKnowledgeContextsAsync(
+                Guid.Parse("33333333-3333-3333-3333-333333333333")),
+            ExpectedPath: "/api/v1/pc/app-knowledge/apps/33333333-3333-3333-3333-333333333333/contexts"),
+        new("POST", "/api/v1/pc/app-knowledge/contexts",
+            new SaveAppKnowledgeContextRequest
+            {
+                AppId = "33333333-3333-3333-3333-333333333333",
+                Confidence = 0.9,
+                Enabled = true,
+                PatternType = "contains",
+                PatternValue = "docs.example.test",
+                ProcessName = "editor.exe",
+                ProjectTag = "project-a",
+                TargetCategoryName = "工作",
+            },
+            (api, req) => api.SaveAppKnowledgeContextAsync((SaveAppKnowledgeContextRequest)req!)),
+        new("DELETE", "/api/v1/pc/app-knowledge/contexts/{id}", null,
+            (api, _) => api.DeleteAppKnowledgeContextAsync(
+                Guid.Parse("22222222-2222-2222-2222-222222222222")),
+            ExpectedPath: "/api/v1/pc/app-knowledge/contexts/22222222-2222-2222-2222-222222222222"),
         new("GET", "/api/v1/pc/detail", null,
             (api, _) => api.GetPcDetailAsync(
                 dateFrom: "2026-10-01",

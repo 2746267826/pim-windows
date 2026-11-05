@@ -32,6 +32,9 @@ public static class Startup
         services.AddSingleton<RemoteComputerHistoryService>();
         services.AddSingleton<DeviceCenterService>();
         services.AddSingleton<CalendarTaskService>();
+        services.AddSingleton(sp => new AppKnowledgeService(
+            sp.GetRequiredService<ApiClient>(),
+            () => CurrentAppKnowledgeScope(sp.GetRequiredService<AuthService>())));
         services.AddSingleton<BrowserBridgeService>(sp =>
         {
             var cfg = DaemonConfig.Load().Tracker;
@@ -143,5 +146,16 @@ public static class Startup
         {
             return null;
         }
+    }
+
+    internal static AppKnowledgeAccountScope? CurrentAppKnowledgeScope(AuthService auth)
+    {
+        if (string.IsNullOrWhiteSpace(auth.CurrentUserId)
+            || string.IsNullOrWhiteSpace(auth.CurrentAccessToken))
+        {
+            return null;
+        }
+
+        return new AppKnowledgeAccountScope(auth.ServerUrl, auth.CurrentUserId);
     }
 }

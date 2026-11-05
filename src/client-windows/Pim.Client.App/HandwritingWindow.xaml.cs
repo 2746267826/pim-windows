@@ -1,5 +1,5 @@
 using System.IO;
-using System.Text.Json;
+using Pim.Client.Core.Services.Notes;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -18,6 +18,23 @@ public partial class HandwritingWindow : Window
     public HandwritingWindow()
     {
         InitializeComponent();
+        Canvas.Width = 680;
+        Canvas.Height = 420;
+    }
+
+    public HandwritingWindow(LocalInkDocument document) : this()
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var validated = LocalInkDocumentCodec.Parse(LocalInkDocumentCodec.Serialize(document));
+        Canvas.Width = validated.Width;
+        Canvas.Height = validated.Height;
+        foreach (var sourceStroke in validated.Strokes)
+        {
+            Canvas.Strokes.Add(HandwritingStrokeMapper.ToStroke(sourceStroke));
+        }
+
+        HandwritingTitle.Text = "编辑手写";
+        SaveButton.Content = "保存新版本";
     }
 
     public HandwritingCapture? Capture { get; private set; }
@@ -46,25 +63,14 @@ public partial class HandwritingWindow : Window
         using var png = new MemoryStream();
         encoder.Save(png);
 
-        var strokes = Canvas.Strokes
-            .Select(stroke => stroke.StylusPoints
-                .Select(point => new InkPoint((float)point.X, (float)point.Y, point.PressureFactor))
-                .ToArray())
-            .ToArray();
-        var document = new InkDocument(1, width, height, strokes);
+        var strokes = HandwritingStrokeMapper.FromStrokes(Canvas.Strokes);
+        var document = new LocalInkDocument(1, width, height, strokes);
         Capture = new HandwritingCapture(
             png.ToArray(),
-            JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = false }),
+            LocalInkDocumentCodec.Serialize(document),
             width,
             height);
         DialogResult = true;
     }
 
-    private sealed record InkDocument(
-        int SchemaVersion,
-        int Width,
-        int Height,
-        IReadOnlyList<InkPoint[]> Strokes);
-
-    private sealed record InkPoint(float X, float Y, float Pressure);
 }

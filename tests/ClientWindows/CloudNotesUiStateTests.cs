@@ -7,6 +7,27 @@ namespace Pim.Client.App.Tests;
 public sealed class CloudNotesUiStateTests
 {
     [Fact]
+    public void HandwritingEditFenceRejectsNoteVersionSelectionAndSessionChanges()
+    {
+        var account = new CloudNoteAccountScope("https://pim.example", "owner-a");
+        var noteId = Guid.NewGuid();
+        var versionId = Guid.NewGuid();
+        var fence = new HandwritingEditFence(noteId, versionId, 9, account, 12);
+
+        Assert.True(fence.IsCurrent(noteId, versionId, 9, account, 12));
+        Assert.False(fence.IsCurrent(noteId, versionId, 10, account, 12));
+        Assert.False(fence.IsCurrent(noteId, Guid.NewGuid(), 9, account, 12));
+        Assert.False(fence.IsCurrent(noteId, versionId, 9, new CloudNoteAccountScope("https://pim.example", "owner-b"), 12));
+        Assert.False(fence.IsCurrent(noteId, versionId, 9, account, 13));
+        Assert.False(fence.IsCurrent(noteId, versionId, 9, account, 12, isParentWindowClosed: true));
+
+        var savedVersionId = Guid.NewGuid();
+        var savedFence = fence with { VersionId = savedVersionId };
+        Assert.True(savedFence.IsCurrent(noteId, savedVersionId, 9, account, 12));
+        Assert.False(savedFence.IsCurrent(noteId, versionId, 9, account, 12));
+    }
+
+    [Fact]
     public void DeclinedNoteSwitchCanRestoreTheCurrentEditorTicket()
     {
         var state = new CloudNotesUiState();

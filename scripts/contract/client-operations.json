@@ -125,6 +125,41 @@
       "path": "/api/client/shell/latest"
     },
     {
+      "apiClient": "GetPcCategoryTreeAsync",
+      "method": "GET",
+      "path": "/api/v1/pc/categories/tree"
+    },
+    {
+      "apiClient": "SavePcCategoryAsync",
+      "method": "POST",
+      "path": "/api/v1/pc/categories"
+    },
+    {
+      "apiClient": "DeletePcCategoryAsync",
+      "method": "DELETE",
+      "path": "/api/v1/pc/categories/{id}"
+    },
+    {
+      "apiClient": "SearchAppKnowledgeAppsAsync",
+      "method": "GET",
+      "path": "/api/v1/pc/app-knowledge/apps"
+    },
+    {
+      "apiClient": "GetAppKnowledgeContextsAsync",
+      "method": "GET",
+      "path": "/api/v1/pc/app-knowledge/apps/{appId}/contexts"
+    },
+    {
+      "apiClient": "SaveAppKnowledgeContextAsync",
+      "method": "POST",
+      "path": "/api/v1/pc/app-knowledge/contexts"
+    },
+    {
+      "apiClient": "DeleteAppKnowledgeContextAsync",
+      "method": "DELETE",
+      "path": "/api/v1/pc/app-knowledge/contexts/{id}"
+    },
+    {
       "apiClient": "RegisterNativeAsrNodeAsync",
       "method": "POST",
       "path": "/api/v1/native-notes/asr-routing/nodes/register"
