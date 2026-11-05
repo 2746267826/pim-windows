@@ -12,6 +12,8 @@ public sealed class AppKnowledgeServiceTests
     private static readonly Guid CategoryId = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid ContextId = Guid.Parse("22222222-2222-2222-2222-222222222222");
     private static readonly Guid AppId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+    private static readonly AppKnowledgeAccountScope DefaultAccount =
+        new("http://127.0.0.1:5858", AppId.ToString("D"));
 
     [Fact]
     public async Task DeleteCategoryAcceptsOnlyTheContractSuccessAcknowledgement()
@@ -19,7 +21,7 @@ public sealed class AppKnowledgeServiceTests
         var handler = new KnowledgeHandler();
         using var service = CreateService(handler);
 
-        await service.DeleteCategoryAsync(CategoryId);
+        await service.DeleteCategoryAsync(CategoryId, DefaultAccount);
 
         Assert.Equal(2, handler.RequestCount);
         Assert.Equal("DELETE", handler.LastMethod);
@@ -31,7 +33,7 @@ public sealed class AppKnowledgeServiceTests
         var handler = new KnowledgeHandler();
         using var service = CreateService(handler);
 
-        await service.DeleteContextAsync(ContextId);
+        await service.DeleteContextAsync(ContextId, DefaultAccount);
 
         Assert.Equal("DELETE", handler.LastMethod);
     }
@@ -42,16 +44,18 @@ public sealed class AppKnowledgeServiceTests
         var editHandler = new KnowledgeHandler { CategoryIsBuiltin = true };
         using (var service = CreateService(editHandler))
         {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => service.SaveCategoryAsync(new CategorySaveRequest
-            {
-                Id = CategoryId.ToString("D"),
-                Name = "Renamed",
-                Color = "#123456",
-                Icon = null,
-                Productivity = "neutral",
-                SortOrder = 10,
-                ParentId = null,
-            }));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.SaveCategoryAsync(
+                new CategorySaveRequest
+                {
+                    Id = CategoryId.ToString("D"),
+                    Name = "Renamed",
+                    Color = "#123456",
+                    Icon = null,
+                    Productivity = "neutral",
+                    SortOrder = 10,
+                    ParentId = null,
+                },
+                DefaultAccount));
         }
 
         Assert.Equal(1, editHandler.RequestCount);
@@ -60,7 +64,8 @@ public sealed class AppKnowledgeServiceTests
         var deleteHandler = new KnowledgeHandler { CategoryIsBuiltin = true };
         using (var service = CreateService(deleteHandler))
         {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteCategoryAsync(CategoryId));
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => service.DeleteCategoryAsync(CategoryId, DefaultAccount));
         }
 
         Assert.Equal(1, deleteHandler.RequestCount);
@@ -80,7 +85,8 @@ public sealed class AppKnowledgeServiceTests
         var handler = new KnowledgeHandler { CategoryDeleteAcknowledgement = acknowledgement };
         using var service = CreateService(handler);
 
-        await Assert.ThrowsAsync<InvalidDataException>(() => service.DeleteCategoryAsync(CategoryId));
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => service.DeleteCategoryAsync(CategoryId, DefaultAccount));
     }
 
     [Theory]
@@ -96,7 +102,8 @@ public sealed class AppKnowledgeServiceTests
         var handler = new KnowledgeHandler { ContextDeleteAcknowledgement = acknowledgement };
         using var service = CreateService(handler);
 
-        await Assert.ThrowsAsync<InvalidDataException>(() => service.DeleteContextAsync(ContextId));
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => service.DeleteContextAsync(ContextId, DefaultAccount));
     }
 
     [Fact]
@@ -105,19 +112,22 @@ public sealed class AppKnowledgeServiceTests
         var missingData = new KnowledgeHandler { ContextDeleteAcknowledgement = null };
         using (var service = CreateService(missingData))
         {
-            await Assert.ThrowsAsync<InvalidDataException>(() => service.DeleteContextAsync(ContextId));
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => service.DeleteContextAsync(ContextId, DefaultAccount));
         }
 
         var categoryErrorCode = new KnowledgeHandler { CategoryDeleteCode = 409 };
         using (var service = CreateService(categoryErrorCode))
         {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteCategoryAsync(CategoryId));
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => service.DeleteCategoryAsync(CategoryId, DefaultAccount));
         }
 
         var contextErrorCode = new KnowledgeHandler { ContextDeleteCode = 409 };
         using (var service = CreateService(contextErrorCode))
         {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteContextAsync(ContextId));
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => service.DeleteContextAsync(ContextId, DefaultAccount));
         }
     }
 
@@ -172,7 +182,8 @@ public sealed class AppKnowledgeServiceTests
         using var service = new AppKnowledgeService(api, () => account);
         handler.AfterDelete = api.ClearAccessToken;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteContextAsync(ContextId));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.DeleteContextAsync(ContextId, DefaultAccount));
         Assert.Equal("DELETE", handler.LastMethod);
     }
 
@@ -189,7 +200,8 @@ public sealed class AppKnowledgeServiceTests
             () => new AppKnowledgeAccountScope("http://127.0.0.1:5858", ownerId));
         handler.AfterDelete = () => ownerId = Guid.Parse("44444444-4444-4444-4444-444444444444").ToString("D");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteContextAsync(ContextId));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.DeleteContextAsync(ContextId, DefaultAccount));
         Assert.Equal(1, handler.RequestCount);
         Assert.Equal("DELETE", handler.LastMethod);
     }
@@ -205,9 +217,24 @@ public sealed class AppKnowledgeServiceTests
         using var service = new AppKnowledgeService(api, () => account);
         handler.AfterDelete = () => api.SetBaseUrl("http://127.0.0.1:5959");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteContextAsync(ContextId));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.DeleteContextAsync(ContextId, DefaultAccount));
         Assert.Equal("DELETE", handler.LastMethod);
         Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task CallerCancellationIsPreservedWhenResponseBufferingIsCanceled()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var handler = new KnowledgeHandler { AfterDelete = cancellation.Cancel };
+        using var service = CreateService(handler);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.DeleteContextAsync(ContextId, DefaultAccount, cancellation.Token));
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal("DELETE", handler.LastMethod);
     }
 
     [Fact]
@@ -221,9 +248,45 @@ public sealed class AppKnowledgeServiceTests
         using var service = new AppKnowledgeService(api, () => account);
         handler.AfterDelete = () => api.SetAccessToken("replacement-synthetic-token");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteContextAsync(ContextId));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.DeleteContextAsync(ContextId, DefaultAccount));
         Assert.Equal("DELETE", handler.LastMethod);
         Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task ExpectedScopeMismatchRejectsCreatesBeforeNetwork()
+    {
+        var handler = new KnowledgeHandler();
+        var api = new ApiClient(() => handler);
+        api.SetBaseUrl("http://127.0.0.1:5858");
+        api.SetAccessToken("synthetic-token");
+        var current = DefaultAccount;
+        using var service = new AppKnowledgeService(api, () => current);
+        current = new AppKnowledgeAccountScope(
+            "http://127.0.0.1:5858",
+            "44444444-4444-4444-4444-444444444444");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.SaveCategoryAsync(
+            new CategorySaveRequest
+            {
+                Name = "Old account draft",
+                Color = "#123456",
+                Productivity = "neutral",
+                SortOrder = 10,
+            },
+            DefaultAccount));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.SaveContextAsync(
+            new SaveAppKnowledgeContextRequest
+            {
+                AppId = AppId.ToString("D"),
+                ProcessName = "editor.exe",
+                PatternType = "domain",
+                PatternValue = "docs.example.test",
+            },
+            DefaultAccount));
+
+        Assert.Equal(0, handler.RequestCount);
     }
 
     private static AppKnowledgeService CreateService(KnowledgeHandler handler)
@@ -233,7 +296,7 @@ public sealed class AppKnowledgeServiceTests
         api.SetAccessToken("synthetic-token");
         return new AppKnowledgeService(
             api,
-            () => new AppKnowledgeAccountScope("http://127.0.0.1:5858", AppId.ToString("D")));
+            () => DefaultAccount);
     }
 
     private sealed class KnowledgeHandler : HttpMessageHandler

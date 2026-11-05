@@ -148,9 +148,10 @@ public static class Startup
         }
     }
 
-    private static AppKnowledgeAccountScope? CurrentAppKnowledgeScope(AuthService auth)
+    internal static AppKnowledgeAccountScope? CurrentAppKnowledgeScope(AuthService auth)
     {
-        if (!auth.IsAuthenticated || string.IsNullOrWhiteSpace(auth.CurrentUserId))
+        if (string.IsNullOrWhiteSpace(auth.CurrentUserId)
+            || string.IsNullOrWhiteSpace(auth.CurrentAccessToken))
         {
             return null;
         }

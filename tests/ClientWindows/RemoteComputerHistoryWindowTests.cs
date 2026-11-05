@@ -1,19 +1,17 @@
 using System.IO;
 using System.Net.Http;
 using System.Reflection;
-using System.Runtime.ExceptionServices;
-using System.Windows;
 using System.Windows.Controls;
 using Pim.Client.App;
 using Pim.Client.Core.Contract;
 using Pim.Client.Core.Models;
 using Pim.Client.Core.Services;
-using WpfApplication = System.Windows.Application;
 using Xunit;
 
 namespace Pim.Client.App.Tests;
 
-public sealed class RemoteComputerHistoryWindowTests
+[Collection(WpfApplicationCollection.Name)]
+public sealed class RemoteComputerHistoryWindowTests(WpfApplicationFixture wpf)
 {
     [Fact]
     public void ServerHistoryShowsFiniteDateAndRowBudgetsAndEmptyResultCaveat()
@@ -69,20 +67,14 @@ public sealed class RemoteComputerHistoryWindowTests
     }
 
     [Fact]
-    public void SelectionAndTabChangesKeepSharedDetailsScopedToActiveMode()
+    public async Task SelectionAndTabChangesKeepSharedDetailsScopedToActiveMode()
     {
-        RunSta(() =>
+        var root = Path.Combine(Path.GetTempPath(), "pim-history-window-" + Guid.NewGuid().ToString("N"));
+        var store = new TrackerHistoryStore(root);
+        var now = DateTimeOffset.Now;
+        try
         {
-            if (WpfApplication.Current is null)
-            {
-                var app = new App();
-                app.InitializeComponent();
-            }
-
-            var root = Path.Combine(Path.GetTempPath(), "pim-history-window-" + Guid.NewGuid().ToString("N"));
-            var store = new TrackerHistoryStore(root);
-            var now = DateTimeOffset.Now;
-            store.AppendAsync(new TrackerSession
+            await store.AppendAsync(new TrackerSession
             {
                 Id = 1,
                 DeviceId = "synthetic-local-device",
@@ -91,55 +83,60 @@ public sealed class RemoteComputerHistoryWindowTests
                 StartedAt = now.AddMinutes(-2),
                 EndedAt = now.AddMinutes(-1),
                 DurationSecs = 60,
-            }).GetAwaiter().GetResult();
-            var entry = Assert.Single(store.QueryAsync(now.AddHours(-1), now.AddMinutes(1))
-                .GetAwaiter().GetResult());
+            });
+            var entry = Assert.Single(await store.QueryAsync(now.AddHours(-1), now.AddMinutes(1)));
 
-            var handler = new NoNetworkHandler();
-            var api = new ApiClient(() => handler);
-            var window = new ComputerHistoryWindow(store, new RemoteComputerHistoryService(api), api);
-            try
+            wpf.Run(() =>
             {
-                var localRow = CreateRow("ComputerHistoryRow", entry, "synthetic local");
-                var remoteRecord = new PcDetailRecord
+                var handler = new NoNetworkHandler();
+                var api = new ApiClient(() => handler);
+                var window = new ComputerHistoryWindow(store, new RemoteComputerHistoryService(api), api);
+                try
                 {
-                    DeviceId = "synthetic-remote-device",
-                    RecordType = "window",
-                    Start = now.AddMinutes(-1).ToString("O"),
-                    Title = "REMOTE-DETAIL-SENTINEL",
-                };
-                var remoteRow = CreateRow("RemoteComputerHistoryRow", remoteRecord, "synthetic remote");
-                window.HistoryList.ItemsSource = new[] { localRow };
-                window.RemoteHistoryList.ItemsSource = new[] { remoteRow };
+                    var localRow = CreateRow("ComputerHistoryRow", entry, "synthetic local");
+                    var remoteRecord = new PcDetailRecord
+                    {
+                        DeviceId = "synthetic-remote-device",
+                        RecordType = "window",
+                        Start = now.AddMinutes(-1).ToString("O"),
+                        Title = "REMOTE-DETAIL-SENTINEL",
+                    };
+                    var remoteRow = CreateRow("RemoteComputerHistoryRow", remoteRecord, "synthetic remote");
+                    window.HistoryList.ItemsSource = new[] { localRow };
+                    window.RemoteHistoryList.ItemsSource = new[] { remoteRow };
 
-                window.HistoryModeTabs.SelectedIndex = 1;
-                window.RemoteHistoryList.SelectedItem = remoteRow;
-                var remoteDetails = window.DetailText.Text;
-                Assert.Contains("REMOTE-DETAIL-SENTINEL", remoteDetails);
+                    window.HistoryModeTabs.SelectedIndex = 1;
+                    window.RemoteHistoryList.SelectedItem = remoteRow;
+                    var remoteDetails = window.DetailText.Text;
+                    Assert.Contains("REMOTE-DETAIL-SENTINEL", remoteDetails);
 
-                window.HistoryList.SelectedItem = null;
-                Assert.Equal(remoteDetails, window.DetailText.Text);
-                window.HistoryList.SelectedItem = localRow;
-                Assert.Equal(remoteDetails, window.DetailText.Text);
+                    window.HistoryList.SelectedItem = null;
+                    Assert.Equal(remoteDetails, window.DetailText.Text);
+                    window.HistoryList.SelectedItem = localRow;
+                    Assert.Equal(remoteDetails, window.DetailText.Text);
 
-                window.HistoryModeTabs.SelectedIndex = 0;
-                var localDetails = window.DetailText.Text;
-                Assert.Contains("LOCAL-DETAIL-SENTINEL", localDetails);
-                window.RemoteHistoryList.SelectedItem = null;
-                Assert.Equal(localDetails, window.DetailText.Text);
+                    window.HistoryModeTabs.SelectedIndex = 0;
+                    var localDetails = window.DetailText.Text;
+                    Assert.Contains("LOCAL-DETAIL-SENTINEL", localDetails);
+                    window.RemoteHistoryList.SelectedItem = null;
+                    Assert.Equal(localDetails, window.DetailText.Text);
 
-                window.RemoteHistoryList.SelectedItem = remoteRow;
-                window.HistoryModeTabs.SelectedIndex = 1;
-                Assert.Equal(remoteDetails, window.DetailText.Text);
-                Assert.Equal(0, handler.RequestCount);
-            }
-            finally
-            {
-                window.Close();
-                if (Directory.Exists(root))
-                    Directory.Delete(root, recursive: true);
-            }
-        });
+                    window.RemoteHistoryList.SelectedItem = remoteRow;
+                    window.HistoryModeTabs.SelectedIndex = 1;
+                    Assert.Equal(remoteDetails, window.DetailText.Text);
+                    Assert.Equal(0, handler.RequestCount);
+                }
+                finally
+                {
+                    window.Close();
+                }
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 
     private static object CreateRow(string name, object value, string label)
@@ -153,21 +150,6 @@ public sealed class RemoteComputerHistoryWindowTests
                    args: [value, label],
                    culture: null)
                ?? throw new InvalidOperationException($"Could not create history row {name}.");
-    }
-
-    private static void RunSta(Action action)
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try { action(); }
-            catch (Exception ex) { failure = ex; }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        if (failure is not null)
-            ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
     private sealed class NoNetworkHandler : HttpMessageHandler

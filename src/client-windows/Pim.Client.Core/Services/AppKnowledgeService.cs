@@ -32,33 +32,37 @@ public sealed class AppKnowledgeService : IDisposable
                 return null;
             }
 
-            var server = ApiClient.NormalizeServerUrl(account.ServerUrl);
-            if (!Guid.TryParse(account.OwnerId, out var owner) || owner == Guid.Empty)
-            {
-                throw new InvalidDataException("当前登录账号标识无效。");
-            }
-
-            return new AppKnowledgeAccountScope(server, owner.ToString("D"));
+            return NormalizeAccount(account);
         }
     }
 
     public async Task<IReadOnlyList<CategoryTreeNode>> GetCategoryTreeAsync(CancellationToken ct = default)
     {
         using var operation = BeginOperation();
-        var response = await _api.GetPcCategoryTreeAsync(ct).ConfigureAwait(false);
+        var response = await AwaitCurrentAsync(
+            _api.GetPcCategoryTreeAsync(ct),
+            operation,
+            ct).ConfigureAwait(false);
         RequireCurrent(operation);
         return RequireData(response?.Code, response?.Message, response?.Data, "读取分类树");
     }
 
-    public async Task<CategoryTreeNode> SaveCategoryAsync(CategorySaveRequest request, CancellationToken ct = default)
+    public async Task<CategoryTreeNode> SaveCategoryAsync(
+        CategorySaveRequest request,
+        AppKnowledgeAccountScope expectedAccount,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        using var operation = BeginOperation();
+        ArgumentNullException.ThrowIfNull(expectedAccount);
+        using var operation = BeginOperation(expectedAccount);
         RequireCurrent(operation);
 
         if (request.Id is { } id)
         {
-            var tree = await _api.GetPcCategoryTreeAsync(ct).ConfigureAwait(false);
+            var tree = await AwaitCurrentAsync(
+                _api.GetPcCategoryTreeAsync(ct),
+                operation,
+                ct).ConfigureAwait(false);
             RequireCurrent(operation);
             var nodes = RequireData(tree?.Code, tree?.Message, tree?.Data, "读取分类树");
             var existing = FindCategory(nodes, ParseGuid(id, nameof(request.Id)));
@@ -72,20 +76,30 @@ public sealed class AppKnowledgeService : IDisposable
             }
         }
 
-        var response = await _api.SavePcCategoryAsync(request, ct).ConfigureAwait(false);
+        var response = await AwaitCurrentAsync(
+            _api.SavePcCategoryAsync(request, ct),
+            operation,
+            ct).ConfigureAwait(false);
         RequireCurrent(operation);
         return RequireData(response?.Code, response?.Message, response?.Data, "保存分类");
     }
 
-    public async Task DeleteCategoryAsync(Guid id, CancellationToken ct = default)
+    public async Task DeleteCategoryAsync(
+        Guid id,
+        AppKnowledgeAccountScope expectedAccount,
+        CancellationToken ct = default)
     {
         if (id == Guid.Empty)
         {
             throw new ArgumentException("分类标识无效。", nameof(id));
         }
 
-        using var operation = BeginOperation();
-        var tree = await _api.GetPcCategoryTreeAsync(ct).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(expectedAccount);
+        using var operation = BeginOperation(expectedAccount);
+        var tree = await AwaitCurrentAsync(
+            _api.GetPcCategoryTreeAsync(ct),
+            operation,
+            ct).ConfigureAwait(false);
         RequireCurrent(operation);
         var nodes = RequireData(tree?.Code, tree?.Message, tree?.Data, "读取分类树");
         var category = FindCategory(nodes, id)
@@ -95,7 +109,10 @@ public sealed class AppKnowledgeService : IDisposable
             throw new InvalidOperationException("内置分类不可删除。");
         }
 
-        var response = await _api.DeletePcCategoryAsync(id, ct).ConfigureAwait(false);
+        var response = await AwaitCurrentAsync(
+            _api.DeletePcCategoryAsync(id, ct),
+            operation,
+            ct).ConfigureAwait(false);
         RequireCurrent(operation);
         RequireDeleteAcknowledgement(response?.Code, response?.Message, response?.Data, "已删除", "删除分类");
     }
@@ -103,7 +120,10 @@ public sealed class AppKnowledgeService : IDisposable
     public async Task<IReadOnlyList<AppKnowledgeAppDto>> SearchAppsAsync(string? search, CancellationToken ct = default)
     {
         using var operation = BeginOperation();
-        var response = await _api.SearchAppKnowledgeAppsAsync(search, ct).ConfigureAwait(false);
+        var response = await AwaitCurrentAsync(
+            _api.SearchAppKnowledgeAppsAsync(search, ct),
+            operation,
+            ct).ConfigureAwait(false);
         RequireCurrent(operation);
         return RequireData(response?.Code, response?.Message, response?.Data, "搜索应用知识");
     }
@@ -116,46 +136,91 @@ public sealed class AppKnowledgeService : IDisposable
         }
 
         using var operation = BeginOperation();
-        var response = await _api.GetAppKnowledgeContextsAsync(appId, ct).ConfigureAwait(false);
+        var response = await AwaitCurrentAsync(
+            _api.GetAppKnowledgeContextsAsync(appId, ct),
+            operation,
+            ct).ConfigureAwait(false);
         RequireCurrent(operation);
         return RequireData(response?.Code, response?.Message, response?.Data, "读取应用上下文");
     }
 
     public async Task<AppKnowledgeContextDto> SaveContextAsync(
         SaveAppKnowledgeContextRequest request,
+        AppKnowledgeAccountScope expectedAccount,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        using var operation = BeginOperation();
-        var response = await _api.SaveAppKnowledgeContextAsync(request, ct).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(expectedAccount);
+        using var operation = BeginOperation(expectedAccount);
+        var response = await AwaitCurrentAsync(
+            _api.SaveAppKnowledgeContextAsync(request, ct),
+            operation,
+            ct).ConfigureAwait(false);
         RequireCurrent(operation);
         return RequireData(response?.Code, response?.Message, response?.Data, "保存应用上下文");
     }
 
-    public async Task DeleteContextAsync(Guid id, CancellationToken ct = default)
+    public async Task DeleteContextAsync(
+        Guid id,
+        AppKnowledgeAccountScope expectedAccount,
+        CancellationToken ct = default)
     {
         if (id == Guid.Empty)
         {
             throw new ArgumentException("上下文标识无效。", nameof(id));
         }
 
-        using var operation = BeginOperation();
-        var response = await _api.DeleteAppKnowledgeContextAsync(id, ct).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(expectedAccount);
+        using var operation = BeginOperation(expectedAccount);
+        var response = await AwaitCurrentAsync(
+            _api.DeleteAppKnowledgeContextAsync(id, ct),
+            operation,
+            ct).ConfigureAwait(false);
         RequireCurrent(operation);
         RequireDeleteAcknowledgement(response?.Code, response?.Message, response?.Data, "已删除。", "删除应用上下文");
     }
 
-    private Operation BeginOperation()
+    private Operation BeginOperation(AppKnowledgeAccountScope? expectedAccount = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var account = CurrentAccount
             ?? throw new InvalidOperationException("请先登录 PIM 账户；应用知识仅从当前账户读取。");
+        if (expectedAccount is not null && account != NormalizeAccount(expectedAccount))
+        {
+            throw new InvalidOperationException("登录账号或服务器已切换；本次应用知识写操作已取消，未发送请求。");
+        }
         if (!string.Equals(ToApiRoot(account.ServerUrl), ToApiRoot(_api.CurrentBaseUrl), StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("服务器配置已变化，请刷新后重试。");
         }
 
-        return new Operation(account, Generation, _api.BeginOperationScope());
+        var operation = new Operation(account, Generation, _api.BeginOperationScope());
+        try
+        {
+            RequireCurrent(operation);
+            return operation;
+        }
+        catch
+        {
+            operation.Dispose();
+            throw;
+        }
+    }
+
+    private async Task<T> AwaitCurrentAsync<T>(
+        Task<T> request,
+        Operation operation,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await request.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            RequireCurrent(operation);
+            throw;
+        }
     }
 
     private void RequireCurrent(Operation operation)
@@ -229,6 +294,17 @@ public sealed class AppKnowledgeService : IDisposable
         => Guid.TryParse(value, out var id) && id != Guid.Empty
             ? id
             : throw new InvalidDataException($"{name} 不是有效 UUID。");
+
+    private static AppKnowledgeAccountScope NormalizeAccount(AppKnowledgeAccountScope account)
+    {
+        var server = ApiClient.NormalizeServerUrl(account.ServerUrl);
+        if (!Guid.TryParse(account.OwnerId, out var owner) || owner == Guid.Empty)
+        {
+            throw new InvalidDataException("当前登录账号标识无效。");
+        }
+
+        return new AppKnowledgeAccountScope(server, owner.ToString("D"));
+    }
 
     private void OnExternalScopeChanged() => Interlocked.Increment(ref _generation);
 

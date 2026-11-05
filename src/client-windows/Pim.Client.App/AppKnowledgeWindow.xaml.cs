@@ -44,14 +44,23 @@ public partial class AppKnowledgeWindow : Window
 
     public AppKnowledgeWindow()
     {
-        InitializeComponent();
-        _knowledge = App.Services.GetRequiredService<AppKnowledgeService>();
-        _api = App.Services.GetRequiredService<ApiClient>();
-        _api.ExternalScopeChanged += OnExternalScopeChanged;
-        ProductivityBox.ItemsSource = ProductivityChoices;
-        PatternTypeBox.ItemsSource = PatternChoices;
-        ProductivityBox.SelectedIndex = 1;
-        PatternTypeBox.SelectedIndex = 0;
+        _loading = true;
+        try
+        {
+            InitializeComponent();
+            _knowledge = App.Services.GetRequiredService<AppKnowledgeService>();
+            _api = App.Services.GetRequiredService<ApiClient>();
+            _api.ExternalScopeChanged += OnExternalScopeChanged;
+            ProductivityBox.ItemsSource = ProductivityChoices;
+            PatternTypeBox.ItemsSource = PatternChoices;
+            ProductivityBox.SelectedIndex = 1;
+            PatternTypeBox.SelectedIndex = 0;
+            _uiState.MarkDraftSaved();
+        }
+        finally
+        {
+            _loading = false;
+        }
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -195,18 +204,20 @@ public partial class AppKnowledgeWindow : Window
         var busyOperation = BeginBusy("正在保存分类…");
         try
         {
-            await _knowledge.SaveCategoryAsync(new CategorySaveRequest
-            {
-                Id = _editCategory?.Id,
-                ParentId = parent?.Node.Id,
-                Name = name,
-                Color = color,
-                Icon = _editCategory?.Icon,
-                Productivity = productivity.Value,
-                SortOrder = _editCategory?.SortOrder ?? (GetLoadedCategories().Count == 0
-                    ? 10
-                    : GetLoadedCategories().Max(node => node.SortOrder) + 10),
-            });
+            await _knowledge.SaveCategoryAsync(
+                new CategorySaveRequest
+                {
+                    Id = _editCategory?.Id,
+                    ParentId = parent?.Node.Id,
+                    Name = name,
+                    Color = color,
+                    Icon = _editCategory?.Icon,
+                    Productivity = productivity.Value,
+                    SortOrder = _editCategory?.SortOrder ?? (GetLoadedCategories().Count == 0
+                        ? 10
+                        : GetLoadedCategories().Max(node => node.SortOrder) + 10),
+                },
+                fence.Account);
             if (!IsCategoryCurrent(fence))
             {
                 return;
@@ -266,7 +277,7 @@ public partial class AppKnowledgeWindow : Window
         var busyOperation = BeginBusy("正在删除分类…");
         try
         {
-            await _knowledge.DeleteCategoryAsync(id);
+            await _knowledge.DeleteCategoryAsync(id, fence.Account);
             if (!IsCategoryCurrent(fence))
             {
                 return;
@@ -493,17 +504,19 @@ public partial class AppKnowledgeWindow : Window
         var busyOperation = BeginBusy("正在保存上下文规则…");
         try
         {
-            await _knowledge.SaveContextAsync(new SaveAppKnowledgeContextRequest
-            {
-                AppId = appId.ToString("D"),
-                ProcessName = app.ProcessName,
-                PatternType = pattern.Value,
-                PatternValue = PatternValueBox.Text.Trim(),
-                TargetCategoryName = NullIfBlank(TargetCategoryBox.Text),
-                ProjectTag = NullIfBlank(ProjectTagBox.Text),
-                Confidence = 1,
-                Enabled = ContextEnabledBox.IsChecked == true,
-            });
+            await _knowledge.SaveContextAsync(
+                new SaveAppKnowledgeContextRequest
+                {
+                    AppId = appId.ToString("D"),
+                    ProcessName = app.ProcessName,
+                    PatternType = pattern.Value,
+                    PatternValue = PatternValueBox.Text.Trim(),
+                    TargetCategoryName = NullIfBlank(TargetCategoryBox.Text),
+                    ProjectTag = NullIfBlank(ProjectTagBox.Text),
+                    Confidence = 1,
+                    Enabled = ContextEnabledBox.IsChecked == true,
+                },
+                fence.Account);
             if (!IsContextsCurrent(fence) || !ReferenceEquals(_selectedApp, app))
             {
                 return;
@@ -558,7 +571,7 @@ public partial class AppKnowledgeWindow : Window
         var busyOperation = BeginBusy("正在删除上下文规则…");
         try
         {
-            await _knowledge.DeleteContextAsync(id);
+            await _knowledge.DeleteContextAsync(id, fence.Account);
             if (!IsContextsCurrent(fence) || !ReferenceEquals(_selectedApp, app))
             {
                 return;
