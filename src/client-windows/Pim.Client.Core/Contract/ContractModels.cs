@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 a96614e9e190c83279045c91b0956190e80074199a54b250ceb8c6d16840972a)
+//   契约快照      : contract/openapi.json (sha256 cbfdfb2904fff81145376ff27971a033f2d0c0b33c488c10024a72810e8c1c15)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -827,6 +827,9 @@ public sealed class EndpointHeartbeatRequest
     /// <summary>契约字段 <c>collectionCacheCount</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("collectionCacheCount")]
     public int? CollectionCacheCount { get; set; }
+    /// <summary>契约字段 <c>lastWakeBlockReason</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("lastWakeBlockReason")]
+    public string? LastWakeBlockReason { get; set; }
     /// <summary>契约字段 <c>platform</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("platform")]
     public required string Platform { get; set; }
@@ -901,6 +904,9 @@ public sealed class EndpointStatusDto
     /// <summary>契约字段 <c>lastHeartbeatAt</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("lastHeartbeatAt")]
     public System.DateTimeOffset? LastHeartbeatAt { get; set; }
+    /// <summary>契约字段 <c>lastWakeBlockReason</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("lastWakeBlockReason")]
+    public string? LastWakeBlockReason { get; set; }
     /// <summary>契约字段 <c>onlineOnlyBlockedCount</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("onlineOnlyBlockedCount")]
     public required int OnlineOnlyBlockedCount { get; set; }
