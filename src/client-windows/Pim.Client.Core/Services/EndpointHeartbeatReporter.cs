@@ -167,7 +167,13 @@ public sealed class EndpointHeartbeatReporter
         return hasCompletedUpload ? HealthyStatus : UnknownStatus;
     }
 
-    /// <summary>本机观测 → 契约请求体。只填契约里存在的四个字段。</summary>
+    /// <summary>
+    /// 本机观测 → 契约请求体：只填**本机真观测到**的四个字段。
+    ///
+    /// 契约里还有一个 <c>lastWakeBlockReason</c>（pim-api#569，移动端同步唤醒的诊断），
+    /// Windows 守护程序没有「唤醒」这个动作（上传是常驻周期循环），因此留空不报 ——
+    /// 服务端把空值视作「未上报」，不臆造一个原因去冒充诊断数据。
+    /// </summary>
     public static EndpointHeartbeatRequest BuildRequest(EndpointHeartbeatSnapshot snapshot) => new()
     {
         Platform = WindowsPlatform,

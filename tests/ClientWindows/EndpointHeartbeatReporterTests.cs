@@ -20,7 +20,8 @@ namespace Pim.UnitTests.ClientWindows;
 /// 这里回答的是「端点页为什么永远是空的」这条断链的客户端一侧：
 /// <list type="number">
 ///   <item><description>客户端真的会调用 <c>POST /api/v1/endpoints/{deviceId}/heartbeat</c>，
-///     且请求体只带契约里那四个字段（<c>platform</c> 必填，其余三个来自真实观测）；</description></item>
+///     且请求体字段集合与契约 <c>EndpointHeartbeatRequest</c> 逐个相等（<c>platform</c> 必填，
+///     另外三项来自真实观测；<c>lastWakeBlockReason</c> 是移动端同步唤醒的诊断，Windows 不臆造）；</description></item>
 ///   <item><description><c>deviceId</c> 与守护程序其它接口用的是**同一个**标识
 ///     （<see cref="Environment.MachineName"/>），不会把同一台机器显示成两台设备（AC-4）；</description></item>
 ///   <item><description>上报失败**不静默**：连续次数、最后错误、最后成功时刻都能被读到（G1.3）。</description></item>
@@ -59,22 +60,60 @@ public class EndpointHeartbeatReporterTests
         Assert.Equal(expected, EndpointHeartbeatReporter.ResolveUploadStatus(lastUploadError, hasCompletedUpload));
     }
 
-    /// <summary>契约要求 <c>platform</c> 必填、其余可空；客户端四项都要带上（工单 §四 G1.1）。</summary>
+    /// <summary>
+    /// 请求体字段集合必须与契约 <c>EndpointHeartbeatRequest</c> 的属性集合**逐个相等**：
+    /// 契约里没有的字段一个都不多发（否则服务端 400），契约 required 的字段一个都不能缺值。
+    ///
+    /// 判据取的是 <c>contract/openapi.json</c> 本身，**不写死字段名清单** —— 契约新增可选字段
+    /// 不该让本用例无缘无故变红（那是契约同步 PR 的日常）；一旦新增的是 required 字段，
+    /// 下面那条「带值」断言会立刻红，逼客户端真的去填。
+    ///
+    /// <c>lastWakeBlockReason</c>（pim-api#569）刻意留空：它表达的是「最近一次同步唤醒为什么没上传」，
+    /// 而 Windows 守护程序没有「唤醒」这个动作（上传是常驻周期循环），编一个原因上报等于造假数据。
+    /// 服务端把 null 视作「未上报」（会清掉旧值），Windows 从未写过该值，因此等于无操作。
+    /// </summary>
     [Fact]
     public void BuildRequest_CarriesExactlyTheContractFields()
     {
         var request = EndpointHeartbeatReporter.BuildRequest(Snapshot());
 
-        var fields = JsonSerializer.SerializeToElement(request, new JsonSerializerOptions(JsonSerializerDefaults.Web))
-            .EnumerateObject()
+        var sent = JsonSerializer.SerializeToElement(request, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var fields = sent.EnumerateObject()
             .Select(p => p.Name)
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(
-            new[] { "appVersion", "collectionCacheCount", "platform", "uploadStatus" },
-            fields);
+        var (schemaProperties, required) = HeartbeatRequestSchema();
+        Assert.Equal(schemaProperties.OrderBy(x => x, StringComparer.Ordinal).ToList(), fields);
         Assert.Equal("windows", request.Platform);
+        Assert.Null(request.LastWakeBlockReason);
+
+        foreach (var name in required)
+        {
+            Assert.False(
+                sent.TryGetProperty(name, out var value)
+                    && value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined,
+                $"契约 required 字段 {name} 必须带值，不能是 null");
+        }
+    }
+
+    /// <summary>契约里 <c>EndpointHeartbeatRequest</c> 的属性名与 required 列表（唯一真源是快照本身）。</summary>
+    private static (IReadOnlyList<string> Properties, IReadOnlyList<string> Required) HeartbeatRequestSchema()
+    {
+        using var contract = JsonDocument.Parse(RepoSource("contract", "openapi.json"));
+        var schema = contract.RootElement
+            .GetProperty("components")
+            .GetProperty("schemas")
+            .GetProperty("EndpointHeartbeatRequest");
+
+        var properties = schema.GetProperty("properties").EnumerateObject()
+            .Select(p => p.Name)
+            .ToList();
+        var required = schema.TryGetProperty("required", out var requiredElement)
+            ? requiredElement.EnumerateArray().Select(x => x.GetString()!).ToList()
+            : new List<string>();
+
+        return (properties, required);
     }
 
     /// <summary>四项的值必须来自真实观测，而不是常量。</summary>
@@ -231,11 +270,15 @@ public class EndpointHeartbeatReporterTests
         var sent = Assert.Single(handler.Requests);
         Assert.Equal("POST", sent.Method);
         Assert.Equal("/api/v1/endpoints/PC-01/heartbeat", sent.Path);
+
+        // 真正上线的报文里字段集合同样以契约为准（这条走的是 ApiClient 的真实序列化，不是纯映射）。
+        var (schemaProperties, _) = HeartbeatRequestSchema();
+        var body = JsonDocument.Parse(sent.Body!).RootElement;
         Assert.Equal(
-            new[] { "appVersion", "collectionCacheCount", "platform", "uploadStatus" },
-            JsonDocument.Parse(sent.Body!).RootElement.EnumerateObject()
-                .Select(p => p.Name).OrderBy(x => x, StringComparer.Ordinal).ToList());
+            schemaProperties.OrderBy(x => x, StringComparer.Ordinal).ToList(),
+            body.EnumerateObject().Select(p => p.Name).OrderBy(x => x, StringComparer.Ordinal).ToList());
         Assert.Contains("\"platform\":\"windows\"", sent.Body!);
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("lastWakeBlockReason").ValueKind);
         Assert.NotNull(reporter.LastAttemptAt);
         Assert.NotNull(reporter.LastSuccessAt);
         Assert.Equal(0, reporter.ConsecutiveFailures);
