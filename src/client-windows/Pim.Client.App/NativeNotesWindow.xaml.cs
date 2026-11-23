@@ -475,6 +475,96 @@ public partial class NativeNotesWindow : Window
         }
     }
 
+    private async void OnDeleteHandwriting(object sender, RoutedEventArgs e)
+    {
+        if (_current is null || MaterialsList.SelectedItem is not LocalNoteMaterial selected
+            || selected.Kind != LocalNoteMaterialKind.Handwriting)
+        {
+            MessageBox.Show(this, "请先选择一项手写预览（.png），而不是笔迹源。", "删除手写",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (_current.IsServerSourceReadOnly)
+        {
+            MessageBox.Show(this, "服务器混排原件当前为只读，不能删除手写材料。", "删除手写",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                $"从当前固定版本移除手写「{selected.DisplayName}」及其笔迹源？\n\n"
+                + "这会创建新的固定版本；历史版本和材料文件仍会保留。",
+                "删除手写材料",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var noteId = _current.NoteId;
+        var selectionGeneration = _cloudUi.NoteGeneration;
+        var account = _cloud.CurrentAccountScope;
+        var accountGeneration = _cloud.AccountGeneration;
+        try
+        {
+            if (!await SavePendingAsync()
+                || !IsHandwritingSourceCurrent(noteId, selectionGeneration, account, accountGeneration)
+                || MaterialsList.SelectedItem is not LocalNoteMaterial currentSelection
+                || currentSelection.MaterialId != selected.MaterialId)
+            {
+                return;
+            }
+
+            var note = _current!;
+            var fence = new HandwritingEditFence(
+                note.NoteId,
+                note.CurrentVersionId,
+                selectionGeneration,
+                account,
+                accountGeneration);
+            var saved = await _store.RemoveHandwritingAsync(
+                note.NoteId,
+                selected.MaterialId,
+                expectedCurrentVersionId: fence.VersionId);
+            if (!IsHandwritingFenceCurrent(fence))
+            {
+                return;
+            }
+
+            _current = saved;
+            var savedFence = fence with { VersionId = saved.CurrentVersionId };
+            UpdateMaterials();
+            await RefreshNotesAsync(SearchBox.Text, () => IsHandwritingFenceCurrent(savedFence));
+            if (!IsHandwritingFenceCurrent(savedFence))
+            {
+                return;
+            }
+
+            await RefreshVersionsAsync(saved.NoteId, saved.CurrentVersionId, () => IsHandwritingFenceCurrent(savedFence));
+            if (!IsHandwritingFenceCurrent(savedFence))
+            {
+                return;
+            }
+
+            SaveStateText.Text = "已从当前固定版本移除所选手写材料；历史版本仍保留";
+        }
+        catch (Exception ex)
+        {
+            if (IsHandwritingSourceCurrent(noteId, selectionGeneration, account, accountGeneration))
+            {
+                ShowFailure("手写材料未能删除；原固定版本未修改", ex);
+            }
+        }
+    }
+
+    private void OnMaterialSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        DeleteHandwritingButton.IsEnabled = _current is { IsServerSourceReadOnly: false }
+            && MaterialsList.SelectedItem is LocalNoteMaterial { Kind: LocalNoteMaterialKind.Handwriting };
+    }
+
     private bool IsHandwritingSourceCurrent(
         Guid noteId,
         long selectionGeneration,
@@ -817,6 +907,7 @@ public partial class NativeNotesWindow : Window
         {
             MaterialsText.Text = "固定材料版本 · 尚无材料";
             MaterialsList.ItemsSource = null;
+            DeleteHandwritingButton.IsEnabled = false;
             return;
         }
 
@@ -835,6 +926,8 @@ public partial class NativeNotesWindow : Window
         AddHandwritingButton.IsEnabled = !_current.IsServerSourceReadOnly;
         AddRecordingButton.IsEnabled = !_current.IsServerSourceReadOnly;
         RecordButton.IsEnabled = _recording.IsRecording || !_current.IsServerSourceReadOnly;
+        DeleteHandwritingButton.IsEnabled = !_current.IsServerSourceReadOnly
+            && MaterialsList.SelectedItem is LocalNoteMaterial { Kind: LocalNoteMaterialKind.Handwriting };
         if (_current.IsServerSourceReadOnly)
         {
             MaterialsText.Text += " · 云端混排原件只读，导出保留完整块序";
@@ -859,6 +952,7 @@ public partial class NativeNotesWindow : Window
         AddHandwritingButton.IsEnabled = false;
         AddRecordingButton.IsEnabled = false;
         RecordButton.IsEnabled = _recording.IsRecording;
+        DeleteHandwritingButton.IsEnabled = false;
         _loading = false;
         MaterialsText.Text = "选择或新建笔记以开始";
         MaterialsList.ItemsSource = null;
