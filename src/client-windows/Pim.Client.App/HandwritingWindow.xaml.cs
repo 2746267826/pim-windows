@@ -149,8 +149,11 @@ public partial class HandwritingWindow : Window
     private void OnSelectionMoved(object sender, EventArgs e)
         => SyncCanvasGeometryToEditor("已移动所选笔迹；保存会包含新位置。");
 
-    private void OnSelectionResized(object sender, EventArgs e)
-        => SyncCanvasGeometryToEditor("已缩放所选笔迹；保存会包含新尺寸。");
+    private void OnSelectionResizing(object sender, InkCanvasSelectionEditingEventArgs e)
+    {
+        e.Cancel = true;
+        StatusText.Text = "当前手写源保存坐标与压力但不保存缩放后的笔宽；已取消缩放，可拖动整笔位置。";
+    }
 
     private void SyncCanvasGeometryToEditor(string status)
     {
@@ -171,7 +174,7 @@ public partial class HandwritingWindow : Window
         catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException)
         {
             RefreshCanvasFromEditor();
-            StatusText.Text = "移动或缩放后的笔迹无效，已恢复到上次有效状态。";
+            StatusText.Text = "移动后的笔迹无效，已恢复到上次有效状态。";
         }
 
         UpdateCommandState();
