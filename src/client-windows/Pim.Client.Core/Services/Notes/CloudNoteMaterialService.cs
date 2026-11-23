@@ -615,6 +615,49 @@ public sealed class CloudNoteMaterialService
         return RequireResponse(response.Code, response.Message, response.Data);
     }
 
+    /// <summary>
+    /// Reads the owner-scoped high-level status for exactly one immutable
+    /// server material version. The response must echo the requested
+    /// note/version identity before the caller may display it.
+    /// </summary>
+    public async Task<NoteProcessingStatusDto> GetProcessingStatusAsync(
+        Guid noteId,
+        Guid versionId,
+        CancellationToken cancellationToken = default)
+    {
+        if (noteId == Guid.Empty)
+        {
+            throw new ArgumentException("笔记标识不能为空。", nameof(noteId));
+        }
+        if (versionId == Guid.Empty)
+        {
+            throw new ArgumentException("固定版本标识不能为空。", nameof(versionId));
+        }
+
+        using var operation = BeginOperation();
+        RequireOperationCurrent(operation);
+        var response = await _api.GetNoteProcessingStatusAsync(
+                noteId,
+                versionId,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new InvalidDataException("服务器没有返回笔记处理状态。");
+        RequireOperationCurrent(operation);
+        var status = RequireResponse(response.Code, response.Message, response.Data);
+        if (!Guid.TryParse(status.NoteId, out var returnedNoteId)
+            || returnedNoteId != noteId
+            || !Guid.TryParse(status.VersionId, out var returnedVersionId)
+            || returnedVersionId != versionId
+            || !Guid.TryParse(status.ProcessingId, out var processingId)
+            || processingId == Guid.Empty)
+        {
+            throw new InvalidDataException(
+                "服务器返回的笔记处理状态与所选固定版本不一致；界面未更新。");
+        }
+
+        return status;
+    }
+
     public async Task<IReadOnlyList<NoteAsrSourceDto>> GetMaterialSourcesAsync(
         int pageSize = 50,
         CancellationToken cancellationToken = default)

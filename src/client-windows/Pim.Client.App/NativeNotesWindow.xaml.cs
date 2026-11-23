@@ -28,11 +28,14 @@ public partial class NativeNotesWindow : Window
     private bool _loadingCloudResult;
     private bool _restoringCloudSelection;
     private bool _refreshingCloudResults;
+    private bool _refreshingCloudVersions;
     private NoteDerivedArtifactDto? _selectedArtifact;
     private NoteDerivedVersionDto? _selectedDerivedVersion;
     private NoteDerivedVersionSummaryDto? _selectedDerivedVersionSummary;
     private LoadedCloudArtifactFence? _loadedTaskSourceFence;
     private long _taskSourceSelectionGeneration;
+    private long _processingStatusGeneration;
+    private NoteProcessingStatusTarget? _processingStatusTarget;
 
     public NativeNotesWindow()
     {
@@ -158,10 +161,12 @@ public partial class NativeNotesWindow : Window
             TitleBox.Text = note.Title;
             MarkdownBox.Text = note.Markdown;
             UpdateMaterials();
+            ResetProcessingStatus("正在读取服务端处理状态…");
             await RefreshVersionsAsync(note.NoteId, note.CurrentVersionId);
             if (IsCurrentNoteSelection(selectionGeneration, note.NoteId))
             {
                 await RefreshCloudVersionsAsync(showErrors: false, selectionGeneration);
+                await RefreshProcessingStatusAsync(showErrors: false, selectionGeneration);
                 await RefreshCloudResultsAsync(showErrors: false, selectionGeneration);
             }
             SaveStateText.Text = "已加载固定版本";
@@ -868,6 +873,7 @@ public partial class NativeNotesWindow : Window
         _selectedArtifact = null;
         _selectedDerivedVersion = null;
         _selectedDerivedVersionSummary = null;
+        ResetProcessingStatus("未选择笔记");
         _cloudUi.ClearDraft();
         _loadingCloudResult = true;
         CloudResultBox.Text = string.Empty;
@@ -927,6 +933,7 @@ public partial class NativeNotesWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _closed = true;
+        Interlocked.Increment(ref _processingStatusGeneration);
         _recording.StateChanged -= OnRecordingStateChanged;
     }
 
@@ -1050,6 +1057,7 @@ public partial class NativeNotesWindow : Window
                 ? $"已上传 {result.Upload.VersionId[..8]}，但服务器当前版本已被另一端更新；双方版本均保留。"
                 : $"已上传并完成固定版本 {result.Upload.VersionId[..8]}。";
             await RefreshCloudVersionsAsync(showErrors: false);
+            await RefreshProcessingStatusAsync(showErrors: false);
             await RefreshCloudResultsAsync(showErrors: false);
         }
         catch (Exception ex)
@@ -1060,7 +1068,13 @@ public partial class NativeNotesWindow : Window
     }
 
     private async void OnRefreshCloud(object sender, RoutedEventArgs e)
-        => await RefreshCloudVersionsAsync(showErrors: true);
+    {
+        await RefreshCloudVersionsAsync(showErrors: true);
+        await RefreshProcessingStatusAsync(showErrors: false);
+    }
+
+    private async void OnRefreshProcessingStatus(object sender, RoutedEventArgs e)
+        => await RefreshProcessingStatusAsync(showErrors: true);
 
     private async void OnOpenCloudSources(object sender, RoutedEventArgs e)
     {
@@ -1104,9 +1118,17 @@ public partial class NativeNotesWindow : Window
                     $"{VersionFlags(version)} {version.Phase} · {version.VersionId[..8]} · "
                     + $"{version.CreatedAt.ToLocalTime():MM-dd HH:mm}"))
                 .ToArray();
-            CloudVersionsList.ItemsSource = rows;
-            CloudVersionsList.SelectedItem = rows.FirstOrDefault(row => row.Version.IsCurrent)
-                ?? rows.FirstOrDefault();
+            _refreshingCloudVersions = true;
+            try
+            {
+                CloudVersionsList.ItemsSource = rows;
+                CloudVersionsList.SelectedItem = rows.FirstOrDefault(row => row.Version.IsCurrent)
+                    ?? rows.FirstOrDefault();
+            }
+            finally
+            {
+                _refreshingCloudVersions = false;
+            }
             CloudStatusText.Text = _cloud.IsAvailable
                 ? $"服务器共有 {rows.Length} 个固定材料版本。上传不会自动启动模型。"
                 : "当前未登录；本机笔记仍可离线编辑和录音。";
@@ -1131,11 +1153,181 @@ public partial class NativeNotesWindow : Window
         }
     }
 
-    private void OnCloudVersionSelected(object sender, SelectionChangedEventArgs e)
+    private async Task RefreshProcessingStatusAsync(
+        bool showErrors,
+        long? expectedSelectionGeneration = null)
+    {
+        var target = ResolveProcessingStatusTarget();
+        if (target is null)
+        {
+            ShowProcessingStatusUnavailable(
+                _current is null
+                    ? "未选择笔记"
+                    : "当前笔记尚无已上传固定材料版本；上传后可读取服务端处理状态。");
+            return;
+        }
+
+        var accountScope = _cloud.CurrentAccountScope;
+        if (accountScope is null)
+        {
+            ShowProcessingStatusUnavailable("请先登录云端账号，再读取服务端处理状态。");
+            return;
+        }
+
+        var noteId = _current?.NoteId;
+        var accountGeneration = _cloud.AccountGeneration;
+        var generation = Interlocked.Increment(ref _processingStatusGeneration);
+        var request = new NoteProcessingStatusRequest(
+            generation,
+            target.NoteId,
+            target.VersionId,
+            accountScope,
+            accountGeneration);
+        _processingStatusTarget = target;
+        ProcessingTargetText.Text = $"目标：{target.Label}";
+        ProcessingOverallText.Text = "正在读取服务端处理状态…";
+        ProcessingAsrText.Text = string.Empty;
+        ProcessingDerivedText.Text = string.Empty;
+        ProcessingArtifactsText.Text = string.Empty;
+        ProcessingHintText.Text = string.Empty;
+        ProcessingIssuesText.Text = string.Empty;
+        ProcessingIssuesText.Visibility = Visibility.Collapsed;
+        ProcessingUpdatedText.Text = string.Empty;
+        RefreshProcessingStatusButton.IsEnabled = false;
+        try
+        {
+            var status = await _cloud.GetProcessingStatusAsync(target.NoteId, target.VersionId);
+            if (!IsCurrentProcessingStatusRequest(
+                    request,
+                    target,
+                    noteId,
+                    expectedSelectionGeneration)
+                || _closed)
+            {
+                return;
+            }
+
+            var view = NoteProcessingStatusView.From(status);
+            ProcessingOverallText.Text = view.OverallText;
+            ProcessingAsrText.Text = view.AsrText;
+            ProcessingDerivedText.Text = view.DerivedText;
+            ProcessingArtifactsText.Text = view.ArtifactsText;
+            ProcessingHintText.Text = view.HintText;
+            ProcessingIssuesText.Text = view.IssuesText;
+            ProcessingIssuesText.Visibility = string.IsNullOrWhiteSpace(view.IssuesText)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            ProcessingUpdatedText.Text =
+                $"服务端更新于 {view.UpdatedAt.ToLocalTime():MM-dd HH:mm:ss}";
+        }
+        catch (Exception ex)
+        {
+            if (!IsCurrentProcessingStatusRequest(
+                    request,
+                    target,
+                    noteId,
+                    expectedSelectionGeneration)
+                || _closed)
+            {
+                return;
+            }
+
+            ProcessingOverallText.Text = "服务端处理状态暂不可用；本机笔记与导出不受影响。";
+            ProcessingAsrText.Text = string.Empty;
+            ProcessingDerivedText.Text = string.Empty;
+            ProcessingArtifactsText.Text = string.Empty;
+            ProcessingHintText.Text = string.Empty;
+            ProcessingIssuesText.Text = string.Empty;
+            ProcessingIssuesText.Visibility = Visibility.Collapsed;
+            ProcessingUpdatedText.Text = string.Empty;
+            if (showErrors)
+            {
+                ShowFailure("读取笔记处理状态失败", ex);
+            }
+        }
+        finally
+        {
+            if (!_closed
+                && IsCurrentProcessingStatusRequest(
+                    request,
+                    target,
+                    noteId,
+                    expectedSelectionGeneration))
+            {
+                RefreshProcessingStatusButton.IsEnabled = true;
+            }
+        }
+    }
+
+    private NoteProcessingStatusTarget? ResolveProcessingStatusTarget()
+    {
+        if (_current is null)
+        {
+            return null;
+        }
+
+        if (_current.ServerSource is { } source)
+        {
+            return NoteProcessingStatusTarget.FromServerSource(source);
+        }
+
+        if (CloudVersionsList.SelectedItem is not CloudVersionRow row
+            || !Guid.TryParse(row.Version.NoteId, out var noteId)
+            || !Guid.TryParse(row.Version.VersionId, out var versionId))
+        {
+            return null;
+        }
+
+        return NoteProcessingStatusTarget.ForUploadedVersion(
+            _current.NoteId,
+            noteId,
+            versionId);
+    }
+
+    private bool IsCurrentProcessingStatusRequest(
+        NoteProcessingStatusRequest request,
+        NoteProcessingStatusTarget target,
+        Guid? currentNoteId,
+        long? expectedSelectionGeneration)
+        => (expectedSelectionGeneration is null
+            || expectedSelectionGeneration.Value == _cloudUi.NoteGeneration)
+           && _current?.NoteId == currentNoteId
+           && Equals(_processingStatusTarget, target)
+           && request.IsCurrent(
+               Interlocked.Read(ref _processingStatusGeneration),
+               target.NoteId,
+               target.VersionId,
+               _cloud.CurrentAccountScope,
+               _cloud.AccountGeneration);
+
+    private void ResetProcessingStatus(string overallText)
+    {
+        Interlocked.Increment(ref _processingStatusGeneration);
+        _processingStatusTarget = null;
+        ProcessingTargetText.Text = string.Empty;
+        ProcessingOverallText.Text = overallText;
+        ProcessingAsrText.Text = string.Empty;
+        ProcessingDerivedText.Text = string.Empty;
+        ProcessingArtifactsText.Text = string.Empty;
+        ProcessingHintText.Text = string.Empty;
+        ProcessingIssuesText.Text = string.Empty;
+        ProcessingIssuesText.Visibility = Visibility.Collapsed;
+        ProcessingUpdatedText.Text = string.Empty;
+        RefreshProcessingStatusButton.IsEnabled = false;
+    }
+
+    private void ShowProcessingStatusUnavailable(string message)
+        => ResetProcessingStatus(message);
+
+    private async void OnCloudVersionSelected(object sender, SelectionChangedEventArgs e)
     {
         if (CloudVersionsList.SelectedItem is not CloudVersionRow row)
         {
             PromoteCloudVersionButton.IsEnabled = false;
+            if (!_refreshingCloudVersions)
+            {
+                await RefreshProcessingStatusAsync(showErrors: false);
+            }
             return;
         }
 
@@ -1145,6 +1337,10 @@ public partial class NativeNotesWindow : Window
             : row.Version.IsCurrent
                 ? $"版本 {row.Version.VersionId[..8]} 是服务器当前固定版本。"
                 : $"版本 {row.Version.VersionId[..8]} 是历史固定版本。";
+        if (!_refreshingCloudVersions)
+        {
+            await RefreshProcessingStatusAsync(showErrors: false);
+        }
     }
 
     private async void OnPromoteCloudVersion(object sender, RoutedEventArgs e)
@@ -1177,6 +1373,7 @@ public partial class NativeNotesWindow : Window
                 current is null ? null : Guid.Parse(current.Version.VersionId));
             CloudStatusText.Text = $"服务器当前版本已切换为 {promoted.VersionId[..8]}。";
             await RefreshCloudVersionsAsync(showErrors: false);
+            await RefreshProcessingStatusAsync(showErrors: false);
         }
         catch (Exception ex)
         {
