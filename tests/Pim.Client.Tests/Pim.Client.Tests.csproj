@@ -34,6 +34,7 @@
     <Compile Include="../ClientWindows/NoteProcessingStatusTests.cs" />
     <Compile Include="../ClientWindows/ContractBoundaryTests.cs" />
     <Compile Include="../ClientWindows/EndpointHeartbeatReporterTests.cs" />
+    <Compile Include="../ClientWindows/GlobalHotKeyCoordinatorTests.cs" />
     <Compile Include="../ClientWindows/HeartbeatTickRunnerTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsCollectorUploadGateTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsFixAdvisorTests.cs" />
@@ -64,6 +65,7 @@
     <Compile Include="../ClientWindows/TrackerPageAttributionTests.cs" />
     <Compile Include="../ClientWindows/TrackerStateManagerTests.cs" />
     <Compile Include="../ClientWindows/TrackerHistoryStoreTests.cs" />
+    <Compile Include="../ClientWindows/WindowPlacementTests.cs" />
     <Compile Include="../ClientWindows/WindowsNotificationActionRouterTests.cs" />
     <Compile Include="../ClientWindows/Wo400TokenRenewalTests.cs" />
   </ItemGroup>
