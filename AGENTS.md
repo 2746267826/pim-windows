@@ -51,6 +51,7 @@ This repository keeps `master` at the latest runnable version of the Windows dae
 
 - The commands below are optional local verification help, not a required pre-PR procedure. Existing CI owns the required checks. Base verification claims on actual output and identify the tested revision and environment; do not present stale or assumed results as current evidence.
 - Daemon changes: `dotnet build tests/Pim.Client.Tests/Pim.Client.Tests.csproj`. Extension changes: `cd browser-extension && npm run build`. These are the build half of what the required `test-client-core` job runs, so they work on Linux and Windows alike.
+- `test-client-core` (ubuntu-latest) and `test-client-app` (windows-latest) are required CI jobs and already run these tests. Local verification is limited to the single project covering your change (`dotnet test tests/Pim.Client.Tests/Pim.Client.Tests.csproj --filter "<TestClass>"`); never run the whole solution, and never build/test more than one repository at a time — this 18 GB shared host has been exhausted by concurrent builds before.
 - `src/client-windows/Pim.Client.Windows.slnx` is not a gate command: `net8.0-windows` projects and the `.slnx` format need a Windows toolchain, so building it is a Windows-only convenience, not something to run before pushing from Linux.
 - Report failed or missing verification explicitly. Do not claim acceptance from test code that was not executed or from unrelated passing checks.
 
