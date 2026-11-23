@@ -42,6 +42,7 @@ public partial class TrayIcon : IDisposable
         _notifyIcon.ContextMenuStrip.Items.Add("开始笔记录音", null, async (_, _) => await StartQuickNoteRecordingAsync());
         _notifyIcon.ContextMenuStrip.Items.Add("停止并保存笔记录音", null, async (_, _) => await StopNoteRecordingAsync());
         _notifyIcon.ContextMenuStrip.Items.Add("打开状态中心", null, (_, _) => ShowStatusWindow());
+        _notifyIcon.ContextMenuStrip.Items.Add("原生日历与任务", null, (_, _) => OpenNativePlannerWindow());
         _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         _notifyIcon.ContextMenuStrip.Items.Add("立即同步", null, async (_, _) => await TriggerSyncAsync());
         _notifyIcon.ContextMenuStrip.Items.Add("在浏览器打开 Web 工作台", null, (_, _) => OpenWebWorkbench());
@@ -86,6 +87,30 @@ public partial class TrayIcon : IDisposable
         }
 
         new StatusWindow().Show();
+    }
+
+    private static void OpenNativePlannerWindow()
+    {
+        ActivateOrCreateWindow(
+            System.Windows.Application.Current.Windows.OfType<NativePlannerWindow>(),
+            existing => existing.Activate(),
+            () => new NativePlannerWindow().Show());
+    }
+
+    internal static bool ActivateOrCreateWindow<T>(
+        IEnumerable<T> windows,
+        Action<T> activate,
+        Action create)
+    {
+        var existing = windows.FirstOrDefault();
+        if (existing is not null)
+        {
+            activate(existing);
+            return true;
+        }
+
+        create();
+        return false;
     }
 
     private static void OpenWebWorkbench()

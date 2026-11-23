@@ -42,6 +42,7 @@
     <Compile Include="../ClientWindows/LocalRuntimeCatalogProviderTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeExecutionAdapterTests.cs" />
     <Compile Include="../ClientWindows/NativePlannerUiStateTests.cs" />
+    <Compile Include="../ClientWindows/NativePlannerTrayEntryBehaviorTests.cs" />
     <Compile Include="../ClientWindows/RemoteComputerHistoryWindowTests.cs" />
     <Compile Include="../ClientWindows/NoteTaskSuggestionUiStateTests.cs" />
     <Compile Include="../ClientWindows/AppKnowledgeUiStateTests.cs" />
