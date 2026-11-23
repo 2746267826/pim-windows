@@ -37,15 +37,12 @@ public sealed class NativePlannerTrayEntryTests
         var method = ExtractMethod(ReadTrayIcon(), "private static void OpenNativePlannerWindow()");
 
         Assert.Contains(
-            "System.Windows.Application.Current.Windows.OfType<NativePlannerWindow>().FirstOrDefault()",
+            "System.Windows.Application.Current.Windows.OfType<NativePlannerWindow>()",
             method,
             StringComparison.Ordinal);
-        Assert.Contains("existing.Activate();", method, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(method, "new NativePlannerWindow().Show();"));
-        Assert.True(
-            method.IndexOf("if (existing is not null)", StringComparison.Ordinal)
-            < method.IndexOf("new NativePlannerWindow().Show();", StringComparison.Ordinal),
-            "The existing-window guard must run before the single creation path.");
+        Assert.Contains("ActivateOrCreateWindow(", method, StringComparison.Ordinal);
+        Assert.Contains("existing => existing.Activate()", method, StringComparison.Ordinal);
+        Assert.Contains("() => new NativePlannerWindow().Show()", method, StringComparison.Ordinal);
         Assert.DoesNotContain("OpenWebWorkbench", method, StringComparison.Ordinal);
         Assert.DoesNotContain("Process.Start", method, StringComparison.Ordinal);
         Assert.DoesNotContain("WebView", method, StringComparison.Ordinal);
@@ -67,19 +64,6 @@ public sealed class NativePlannerTrayEntryTests
 
         var end = source.IndexOf("\n    private static", start + signature.Length, StringComparison.Ordinal);
         return end < 0 ? source[start..] : source[start..end];
-    }
-
-    private static int CountOccurrences(string source, string value)
-    {
-        var count = 0;
-        var index = 0;
-        while ((index = source.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
-        {
-            count++;
-            index += value.Length;
-        }
-
-        return count;
     }
 
     private static string RepoPath(params string[] parts)

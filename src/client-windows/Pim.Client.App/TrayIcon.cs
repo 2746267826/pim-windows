@@ -91,14 +91,26 @@ public partial class TrayIcon : IDisposable
 
     private static void OpenNativePlannerWindow()
     {
-        var existing = System.Windows.Application.Current.Windows.OfType<NativePlannerWindow>().FirstOrDefault();
+        ActivateOrCreateWindow(
+            System.Windows.Application.Current.Windows.OfType<NativePlannerWindow>(),
+            existing => existing.Activate(),
+            () => new NativePlannerWindow().Show());
+    }
+
+    internal static bool ActivateOrCreateWindow<T>(
+        IEnumerable<T> windows,
+        Action<T> activate,
+        Action create)
+    {
+        var existing = windows.FirstOrDefault();
         if (existing is not null)
         {
-            existing.Activate();
-            return;
+            activate(existing);
+            return true;
         }
 
-        new NativePlannerWindow().Show();
+        create();
+        return false;
     }
 
     private static void OpenWebWorkbench()
