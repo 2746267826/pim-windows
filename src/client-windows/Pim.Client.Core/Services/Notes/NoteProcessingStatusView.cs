@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Pim.Client.Core.Contract;
 
 namespace Pim.Client.Core.Services.Notes;
@@ -26,9 +27,9 @@ public sealed record NoteProcessingStatusTarget(
             ? new NoteProcessingStatusTarget(noteId, versionId, IsServerSource: false)
             : null;
 
-    public string Label =>
-        $"{(IsServerSource ? "服务器恢复" : "已上传固定版本")} · "
-        + $"笔记 {NoteId.ToString("N")[..8]} · 版本 {VersionId.ToString("N")[..8]}";
+    public string Label => IsServerSource
+        ? "服务器恢复的只读版本"
+        : "已上传的服务器固定版本";
 }
 
 /// <summary>
@@ -65,6 +66,26 @@ public sealed record NoteProcessingStatusView(
     string IssuesText,
     DateTimeOffset UpdatedAt)
 {
+    private static readonly Regex GuidPattern = new(
+        @"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(100));
+
+    private static readonly Regex LongHexPattern = new(
+        @"\b[0-9a-fA-F]{16,}\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(100));
+
+    private static readonly Regex EngineeringFieldPattern = new(
+        @"\b(?:taskId|changeKey|graphEventId|processingId|revision|stepKey|stepKeys|errorCode|callId)\b\s*[:=]\s*\S+",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(100));
+
+    private static readonly Regex TechnicalOnlyPattern = new(
+        @"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(100));
+
     public static NoteProcessingStatusView From(NoteProcessingStatusDto status)
     {
         ArgumentNullException.ThrowIfNull(status);
@@ -126,10 +147,11 @@ public sealed record NoteProcessingStatusView(
         {
             parts.Add("已生成结果");
         }
-        if (!string.IsNullOrWhiteSpace(chain.WaitingReason)
-            && !string.Equals(chain.WaitingReason, state, StringComparison.Ordinal))
+        var waitingReason = UserVisibleText(chain.WaitingReason);
+        if (!string.IsNullOrWhiteSpace(waitingReason)
+            && !string.Equals(waitingReason, state, StringComparison.Ordinal))
         {
-            parts.Add(chain.WaitingReason);
+            parts.Add(waitingReason);
         }
 
         return string.Join(" · ", parts);
@@ -144,7 +166,7 @@ public sealed record NoteProcessingStatusView(
 
     private static string BuildArtifactsText(IReadOnlyList<NoteProcessingArtifactDto> artifacts)
     {
-        var labels = artifacts
+        var labels = (artifacts ?? [])
             .Select(artifact => ArtifactLabel(artifact.Kind))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
@@ -160,9 +182,10 @@ public sealed record NoteProcessingStatusView(
 
     private static string BuildHintText(NoteProcessingStatusDto status)
     {
-        if (!string.IsNullOrWhiteSpace(status.PendingReason))
+        var pendingReason = UserVisibleText(status.PendingReason);
+        if (!string.IsNullOrWhiteSpace(pendingReason))
         {
-            return "说明：" + status.PendingReason;
+            return "说明：" + pendingReason;
         }
 
         return status.State switch
@@ -178,21 +201,43 @@ public sealed record NoteProcessingStatusView(
             NoteProcessingState.Completed =>
                 "说明：两条处理链路均已完成。",
             NoteProcessingState.NeedsAttention =>
-                "说明：有处理步骤需要人工核对，可刷新查看最新状态。",
+                BuildAttentionHint(status),
             _ => "说明：状态未知，请刷新核对。",
         };
     }
 
+    private static string BuildAttentionHint(NoteProcessingStatusDto status)
+    {
+        var asrBlocked = status.Asr.State is
+            NoteProcessingChainState.NeedsAttention or NoteProcessingChainState.Stopped;
+        if (asrBlocked && status.Derived.State == NoteProcessingChainState.WaitingForAsr)
+        {
+            return "说明：录音转写失败或已停止，笔记整理已被阻断；可在其他客户端重试处理后刷新状态。";
+        }
+        if (asrBlocked)
+        {
+            return "说明：录音转写失败或已停止，笔记整理可能被阻断；可在其他客户端重试处理后刷新状态。";
+        }
+        if (status.Derived.State is
+            NoteProcessingChainState.NeedsAttention or NoteProcessingChainState.Stopped)
+        {
+            return "说明：笔记整理失败或已停止，已生成结果仍可查看；可在其他客户端重试处理后刷新状态。";
+        }
+
+        return "说明：有处理步骤需要人工核对，可刷新查看最新状态。";
+    }
+
     private static string BuildIssuesText(NoteProcessingStatusDto status)
     {
-        var messages = status.Issues
+        var messages = (status.Issues ?? [])
             .Select(issue => issue.Message)
-            .Concat(status.Asr.Errors)
-            .Concat(status.Derived.Errors)
+            .Concat(status.Asr.Errors ?? [])
+            .Concat(status.Derived.Errors ?? [])
+            .Select(UserVisibleText)
             .Where(message => !string.IsNullOrWhiteSpace(message))
             .Where(message => !string.Equals(
                 message,
-                status.PendingReason,
+                UserVisibleText(status.PendingReason),
                 StringComparison.Ordinal))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
@@ -205,5 +250,23 @@ public sealed record NoteProcessingStatusView(
         return messages.Length <= 3
             ? "需核对：" + shown
             : $"需核对：{shown}（另有 {messages.Length - 3} 条）";
+    }
+
+    private static string UserVisibleText(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return string.Empty;
+        }
+
+        var redacted = EngineeringFieldPattern.Replace(message, " ");
+        redacted = GuidPattern.Replace(redacted, "[标识已隐藏]");
+        redacted = LongHexPattern.Replace(redacted, "[标识已隐藏]");
+        redacted = string.Join(
+            ' ',
+            redacted.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return TechnicalOnlyPattern.IsMatch(redacted)
+            ? "服务端返回了处理错误，请在处理页查看详情。"
+            : redacted;
     }
 }

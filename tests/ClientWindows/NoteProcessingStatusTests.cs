@@ -1,6 +1,6 @@
 using System.Net;
 using System.Text;
-using System.Text.Json;
+using System.Text.Json.Nodes;
 using Pim.Client.Core.Contract;
 using Pim.Client.Core.Services;
 using Pim.Client.Core.Services.Notes;
@@ -116,14 +116,115 @@ public sealed class NoteProcessingStatusTests
     public async Task ChainErrorsAreShownAsIssuesWithoutLeakingTechnicalCodes()
     {
         var service = CreateService(new ApiClient(
-            () => new ProcessingStatusHandler(StatusJson(asrError: "转写服务超时"))));
+            () => new ProcessingStatusHandler(StatusJson(
+                asrError: "转写服务超时 TaskId=77777777-7777-7777-7777-777777777777 "
+                    + "ChangeKey=change-key-value GraphEventId=graph-event-value"))));
 
         var status = await service.GetProcessingStatusAsync(NoteId, VersionId);
         var view = NoteProcessingStatusView.From(status);
 
         Assert.Contains("转写服务超时", view.IssuesText);
+        Assert.DoesNotContain("77777777", view.IssuesText);
+        Assert.DoesNotContain("change-key-value", view.IssuesText);
+        Assert.DoesNotContain("graph-event-value", view.IssuesText);
+        Assert.DoesNotContain("TaskId", view.IssuesText);
+        Assert.DoesNotContain("ChangeKey", view.IssuesText);
+        Assert.DoesNotContain("GraphEventId", view.IssuesText);
         Assert.DoesNotContain("processing_pending", view.IssuesText);
         Assert.DoesNotContain("NeedsAttention", view.IssuesText);
+    }
+
+    [Fact]
+    public async Task AsrFailureShowsTheBlockedDerivedChainAndRetryRecovery()
+    {
+        var service = CreateService(new ApiClient(
+            () => new ProcessingStatusHandler(StatusJson(
+                state: "NeedsAttention",
+                asrState: "NeedsAttention",
+                asrFailedItems: 1,
+                asrError: "转写服务超时",
+                derivedState: "WaitingForAsr",
+                issueCode: "asr_failed",
+                issueMessage: "录音转写失败，整理任务已阻断。"))));
+
+        var status = await service.GetProcessingStatusAsync(NoteId, VersionId);
+        var view = NoteProcessingStatusView.From(status);
+
+        Assert.Equal("总体：需核对 · 自动处理开启", view.OverallText);
+        Assert.Contains("录音转写：需核对", view.AsrText);
+        Assert.Contains("失败 1", view.AsrText);
+        Assert.Equal("笔记整理：等待录音转写", view.DerivedText);
+        Assert.Contains("录音转写失败或已停止", view.HintText);
+        Assert.Contains("笔记整理已被阻断", view.HintText);
+        Assert.Contains("其他客户端重试", view.HintText);
+        Assert.Contains("录音转写失败，整理任务已阻断。", view.IssuesText);
+        Assert.DoesNotContain("asr_failed", view.IssuesText);
+    }
+
+    [Fact]
+    public async Task RawStepKeyErrorsAreNotShownToUsers()
+    {
+        var service = CreateService(new ApiClient(
+            () => new ProcessingStatusHandler(StatusJson(
+                asrError: "derived.complete_record",
+                issueMessage: null))));
+
+        var status = await service.GetProcessingStatusAsync(NoteId, VersionId);
+        var view = NoteProcessingStatusView.From(status);
+
+        Assert.DoesNotContain("derived.complete_record", view.IssuesText);
+        Assert.Equal("需核对：服务端返回了处理错误，请在处理页查看详情。", view.IssuesText);
+    }
+
+    [Fact]
+    public async Task LegacyPayloadWithoutOptionalFieldsStillRenders()
+    {
+        var service = CreateService(new ApiClient(
+            () => new ProcessingStatusHandler(StatusJson(
+                includeOptionalFields: false,
+                derivedState: "PendingStart",
+                issueMessage: null))));
+
+        var status = await service.GetProcessingStatusAsync(NoteId, VersionId);
+        var view = NoteProcessingStatusView.From(status);
+
+        Assert.Equal("总体：部分完成 · 自动处理开启", view.OverallText);
+        Assert.Equal("录音转写：已完成 · 3/3 · 已生成结果", view.AsrText);
+        Assert.Equal("笔记整理：待发起", view.DerivedText);
+        Assert.Equal(string.Empty, view.IssuesText);
+        Assert.Equal("说明：录音转写已完成，笔记整理仍在进行。", view.HintText);
+    }
+
+    [Fact]
+    public async Task RestoredAndUploadedEntriesUseTheSameServerIdentityWithoutExposingIds()
+    {
+        var service = CreateService(new ApiClient(
+            () => new ProcessingStatusHandler(StatusJson())));
+        var status = await service.GetProcessingStatusAsync(NoteId, VersionId);
+        var source = new LocalNoteServerSource(
+            NoteId,
+            VersionId,
+            InputJson: "{}",
+            ManifestJson: "{}",
+            NoteJson: "{}",
+            DocumentMarkdown: string.Empty,
+            Blocks: [],
+            Files: []);
+        var restored = NoteProcessingStatusTarget.FromServerSource(source);
+        var uploaded = NoteProcessingStatusTarget.ForUploadedVersion(NoteId, NoteId, VersionId);
+
+        Assert.NotNull(restored);
+        Assert.NotNull(uploaded);
+        Assert.Equal(uploaded.NoteId, restored.NoteId);
+        Assert.Equal(uploaded.VersionId, restored.VersionId);
+        Assert.Equal("服务器恢复的只读版本", restored.Label);
+        Assert.Equal("已上传的服务器固定版本", uploaded.Label);
+
+        var view = NoteProcessingStatusView.From(status);
+        Assert.Equal("总体：部分完成 · 自动处理开启", view.OverallText);
+        Assert.Equal("录音转写：已完成 · 3/3 · 已生成结果", view.AsrText);
+        Assert.DoesNotContain(NoteId.ToString("N")[..8], view.OverallText);
+        Assert.DoesNotContain(VersionId.ToString("N")[..8], view.AsrText);
     }
 
     [Fact]
@@ -145,7 +246,9 @@ public sealed class NoteProcessingStatusTests
         Assert.Equal(NoteId, resolved.NoteId);
         Assert.Equal(VersionId, resolved.VersionId);
         Assert.True(resolved.IsServerSource);
-        Assert.Contains("服务器恢复", resolved.Label);
+        Assert.Equal("服务器恢复的只读版本", resolved.Label);
+        Assert.DoesNotContain(NoteId.ToString("N")[..8], resolved.Label);
+        Assert.DoesNotContain(VersionId.ToString("N")[..8], resolved.Label);
     }
 
     [Fact]
@@ -207,81 +310,122 @@ public sealed class NoteProcessingStatusTests
     private static string StatusJson(
         Guid? noteId = null,
         Guid? versionId = null,
-        string? asrError = null)
+        string? asrError = null,
+        string state = "PartiallyCompleted",
+        string asrState = "Succeeded",
+        int asrFailedItems = 0,
+        string derivedState = "WaitingForAsr",
+        string? pendingReason = null,
+        string? issueCode = "processing_pending",
+        string? issueMessage = "录音已完成，整理任务仍在等待。",
+        bool includeOptionalFields = true)
     {
         var actualNoteId = noteId ?? NoteId;
         var actualVersionId = versionId ?? VersionId;
-        var asrErrors = asrError is null
-            ? "[]"
-            : $"[{JsonSerializer.Serialize(asrError)}]";
-        return $$"""
+        var asrErrors = new JsonArray();
+        if (asrError is not null)
+        {
+            asrErrors.Add(asrError);
+        }
+
+        var asr = new JsonObject
+        {
+            ["kind"] = "Asr",
+            ["state"] = asrState,
+            ["taskCreated"] = true,
+            ["totalItems"] = 3,
+            ["completedItems"] = 3,
+            ["failedItems"] = asrFailedItems,
+            ["hasResult"] = true,
+            ["errors"] = asrErrors,
+        };
+        if (includeOptionalFields)
+        {
+            asr["taskId"] = "77777777-7777-7777-7777-777777777777";
+            asr["revision"] = "88888888-8888-8888-8888-888888888888";
+            asr["phase"] = asrState;
+            asr["waitingReason"] = null;
+        }
+
+        var derived = new JsonObject
+        {
+            ["kind"] = "Derived",
+            ["state"] = derivedState,
+            ["taskCreated"] = true,
+            ["totalItems"] = 0,
+            ["completedItems"] = 0,
+            ["failedItems"] = 0,
+            ["hasResult"] = false,
+            ["errors"] = new JsonArray(),
+        };
+        if (includeOptionalFields)
+        {
+            derived["taskId"] = "99999999-9999-9999-9999-999999999999";
+            derived["revision"] = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+            derived["phase"] = derivedState;
+            derived["waitingReason"] = "等待录音转写";
+        }
+
+        var issues = new JsonArray();
+        if (issueMessage is not null)
+        {
+            var issue = new JsonObject
             {
-              "code": 0,
-              "data": {
-                "processingId": "66666666-6666-6666-6666-666666666666",
-                "noteId": "{{actualNoteId:D}}",
-                "versionId": "{{actualVersionId:D}}",
-                "state": "PartiallyCompleted",
-                "autoProcessingEnabled": true,
-                "autoStarted": true,
-                "manualStartAvailable": false,
-                "scope": "FullVersion",
-                "incrementalScopeSupported": false,
-                "pendingReason": null,
-                "asr": {
-                  "kind": "Asr",
-                  "state": "Succeeded",
-                  "taskId": "77777777-7777-7777-7777-777777777777",
-                  "taskCreated": true,
-                  "revision": "88888888-8888-8888-8888-888888888888",
-                  "phase": "Succeeded",
-                  "totalItems": 3,
-                  "completedItems": 3,
-                  "failedItems": 0,
-                  "hasResult": true,
-                  "errors": {{asrErrors}},
-                  "waitingReason": null
-                },
-                "derived": {
-                  "kind": "Derived",
-                  "state": "WaitingForAsr",
-                  "taskId": "99999999-9999-9999-9999-999999999999",
-                  "taskCreated": true,
-                  "revision": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                  "phase": "WaitingForAsr",
-                  "totalItems": 0,
-                  "completedItems": 0,
-                  "failedItems": 0,
-                  "hasResult": false,
-                  "errors": [],
-                  "waitingReason": "等待录音转写"
-                },
-                "artifacts": [
-                  {
-                    "artifactId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-                    "kind": "CompleteRecord",
-                    "headVersionId": "cccccccc-cccc-cccc-cccc-cccccccccccc"
-                  },
-                  {
-                    "artifactId": "dddddddd-dddd-dddd-dddd-dddddddddddd",
-                    "kind": "IndependentAnalysis",
-                    "headVersionId": null
-                  }
-                ],
-                "issues": [
-                  {
-                    "code": "processing_pending",
-                    "message": "录音已完成，整理任务仍在等待。",
-                    "task": "Derived"
-                  }
-                ],
-                "createdAt": "2026-11-23T08:00:00Z",
-                "updatedAt": "2026-11-23T08:05:00Z"
-              },
-              "message": "ok",
-              "timestamp": "2026-11-23T08:05:00Z"
+                ["code"] = issueCode ?? "processing_pending",
+                ["message"] = issueMessage,
+            };
+            if (includeOptionalFields)
+            {
+                issue["task"] = "Derived";
             }
-            """;
+
+            issues.Add(issue);
+        }
+
+        var data = new JsonObject
+        {
+            ["processingId"] = "66666666-6666-6666-6666-666666666666",
+            ["noteId"] = actualNoteId.ToString("D"),
+            ["versionId"] = actualVersionId.ToString("D"),
+            ["state"] = state,
+            ["autoProcessingEnabled"] = true,
+            ["autoStarted"] = true,
+            ["manualStartAvailable"] = false,
+            ["scope"] = "FullVersion",
+            ["incrementalScopeSupported"] = false,
+            ["asr"] = asr,
+            ["derived"] = derived,
+            ["artifacts"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["artifactId"] = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                    ["kind"] = "CompleteRecord",
+                    ["headVersionId"] = "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                },
+                new JsonObject
+                {
+                    ["artifactId"] = "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                    ["kind"] = "IndependentAnalysis",
+                    ["headVersionId"] = null,
+                },
+            },
+            ["issues"] = issues,
+            ["createdAt"] = "2026-11-23T08:00:00Z",
+            ["updatedAt"] = "2026-11-23T08:05:00Z",
+        };
+        if (includeOptionalFields)
+        {
+            data["pendingReason"] = pendingReason;
+        }
+
+        return new JsonObject
+        {
+            ["code"] = 0,
+            ["data"] = data,
+            ["message"] = "ok",
+            ["timestamp"] = "2026-11-23T08:05:00Z",
+        }.ToJsonString();
     }
 
     private static string RepoPath(params string[] parts)

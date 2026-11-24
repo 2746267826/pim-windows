@@ -1222,13 +1222,23 @@ public partial class NativeNotesWindow : Window
         }
         catch (Exception ex)
         {
+            if (_closed)
+            {
+                return;
+            }
             if (!IsCurrentProcessingStatusRequest(
                     request,
                     target,
                     noteId,
-                    expectedSelectionGeneration)
-                || _closed)
+                    expectedSelectionGeneration))
             {
+                if (request.Generation == Interlocked.Read(ref _processingStatusGeneration))
+                {
+                    ShowProcessingStatusUnavailable(
+                        _cloud.CurrentAccountScope is null
+                            ? "登录状态已切换；请重新登录后刷新服务端处理状态。"
+                            : "账号、笔记或版本已切换；请重新选择笔记后再刷新。");
+                }
                 return;
             }
 

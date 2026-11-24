@@ -19,7 +19,7 @@
 - 云端绑定恢复：按规范化服务器 URL + 当前账号持久化本机笔记与云端 Head 绑定；丢失绑定时从服务器已有版本恢复 `baseVersionId`，同版本重试复用首次请求并可跳过已上传分片。
 - 服务器材料目录：`asr-tasks/sources?offset=&limit=` 以 `includeWithoutAudio=true` 展示当前账号已完成材料版本，按标题、版本数、录音段数、时长、当前/冲突状态分组；可跳回同 `noteId` 的本机笔记。
 - 云端结果入口：Windows 笔记窗口可读取服务器固定版本/冲突状态、完整记录、独立分析、历史结果版本和人工修订；只读打开不会启动 ASR 或付费模型。
-- 服务端处理状态：笔记窗口按固定 `noteId`/`versionId` 读取高层 `GET /api/v1/native-notes/processing`，展示总体、录音转写、笔记整理、已生成结果与问题摘要，并提供原生“刷新状态”入口；换端恢复的只读笔记使用其服务器来源 `noteId`/`versionId`。该入口只读，不启动 ASR/模型，也不以 WebView 代替原生流程。
+- 服务端处理状态：笔记窗口按固定 `noteId`/`versionId` 读取高层 `GET /api/v1/native-notes/processing`，展示总体、录音转写（等待/失败阻断/完成）、笔记整理（等待/处理中/完成/失败）、已生成结果与问题摘要，并提供原生“刷新状态”入口；失败提示说明可在其他客户端重试后再刷新。换端恢复的只读笔记使用其服务器来源 `noteId`/`versionId`。问题摘要会隐藏 TaskId、ChangeKey、GraphEventId、内部 step key 等工程标识。该入口只读，不启动 ASR/模型，也不以 WebView 代替原生流程。
 
 当前未覆盖：
 
