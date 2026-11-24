@@ -989,6 +989,22 @@ public class ApiClient
             null,
             ct);
 
+    /// <summary><c>GET /api/v1/native-notes/processing?noteId=&amp;versionId=</c>。</summary>
+    public Task<NoteProcessingStatusDtoApiResponse?> GetNoteProcessingStatusAsync(
+        Guid noteId,
+        Guid versionId,
+        CancellationToken ct = default)
+        => SendAsync<NoteProcessingStatusDtoApiResponse>(
+            ContractOperation.GetNoteProcessingStatus,
+            null,
+            null,
+            ct,
+            queryValues:
+            [
+                ("noteId", RequireGuid(noteId, nameof(noteId)).ToString("D")),
+                ("versionId", RequireGuid(versionId, nameof(versionId)).ToString("D")),
+            ]);
+
     /// <summary><c>GET /api/v1/native-notes/derived-artifacts?noteId=</c>。</summary>
     public Task<NoteDerivedArtifactDtoIReadOnlyListApiResponse?> GetNoteDerivedArtifactsAsync(
         Guid noteId,

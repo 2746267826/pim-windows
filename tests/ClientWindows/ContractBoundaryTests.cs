@@ -1102,6 +1102,11 @@ public class ContractBoundaryBehaviorTests
             (api, _) => api.StopNoteDerivedTaskAsync(
                 Guid.Parse("66666666-6666-6666-6666-666666666666")),
             ExpectedPath: "/api/v1/native-notes/derived-tasks/66666666-6666-6666-6666-666666666666/stop"),
+        new("GET", "/api/v1/native-notes/processing", null,
+            (api, _) => api.GetNoteProcessingStatusAsync(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                Guid.Parse("22222222-2222-2222-2222-222222222222")),
+            ExpectedQuery: "?noteId=11111111-1111-1111-1111-111111111111&versionId=22222222-2222-2222-2222-222222222222"),
         new("GET", "/api/v1/native-notes/derived-artifacts", null,
             (api, _) => api.GetNoteDerivedArtifactsAsync(
                 Guid.Parse("11111111-1111-1111-1111-111111111111")),

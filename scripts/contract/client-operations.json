@@ -358,6 +358,11 @@
       "apiClient": "DismissNoteTaskSuggestionAsync",
       "method": "POST",
       "path": "/api/v1/native-notes/task-suggestions/{id}/dismiss"
+    },
+    {
+      "apiClient": "GetNoteProcessingStatusAsync",
+      "method": "GET",
+      "path": "/api/v1/native-notes/processing"
     }
   ]
 }
