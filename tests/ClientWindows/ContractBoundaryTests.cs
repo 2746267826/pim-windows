@@ -376,6 +376,22 @@ public class ContractBoundaryBehaviorTests
                 ("pageSize", "50")));
         Assert.Throws<ArgumentException>(() => events.ResolveQuery(("start", "tomorrow")));
         Assert.Throws<ArgumentException>(() => ContractOperation.GetTasks.ResolveQuery(("inbox", "yes")));
+
+        var tasks = ContractOperation.GetTasks;
+        var tasksStatus = Assert.Single(
+            tasks.QueryParameters, parameter => parameter.Name == "status");
+        Assert.Equal("enum-array", tasksStatus.Kind);
+        Assert.Equal(
+            new[] { "NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED" },
+            tasksStatus.AllowedValues);
+        Assert.Equal(
+            "?inbox=true&status=NEEDS-ACTION&status=IN-PROCESS",
+            tasks.ResolveQuery(
+                ("inbox", "true"),
+                ("status", "NEEDS-ACTION"),
+                ("status", "IN-PROCESS")));
+        Assert.Throws<ArgumentException>(() => tasks.ResolveQuery(("status", "needs-action")));
+        Assert.Throws<ArgumentException>(() => tasks.ResolveQuery(("page", "1"), ("page", "2")));
     }
 
     [Fact]
