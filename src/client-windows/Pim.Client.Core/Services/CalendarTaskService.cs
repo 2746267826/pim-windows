@@ -53,6 +53,7 @@ public sealed class CalendarTaskService(ApiClient api)
         string? search = null,
         string? status = null,
         Guid? calendarId = null,
+        IReadOnlyList<string?>? statuses = null,
         DateTimeOffset? dueFrom = null,
         DateTimeOffset? dueTo = null,
         CancellationToken cancellationToken = default)
@@ -69,6 +70,7 @@ public sealed class CalendarTaskService(ApiClient api)
             search: search,
             calendarId: calendarId,
             status: status,
+            statuses: statuses,
             dueFrom: dueFrom,
             dueTo: dueTo,
             pageSize: 200,
