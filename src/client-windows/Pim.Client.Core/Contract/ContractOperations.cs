@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 cbfdfb2904fff81145376ff27971a033f2d0c0b33c488c10024a72810e8c1c15)
+//   契约快照      : contract/openapi.json (sha256 4ed8523741f879be4b473e3eead0f737bf62387a27e234c5a8aee7ff3ab60bf3)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -849,6 +849,14 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetNoteProcessingStatus =
+        new("GET", "/api/v1/native-notes/processing", "native-notes/processing",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] { new("noteId", "uuid", true), new("versionId", "uuid", true) },
+            new ContractHeader[] {  },
+            null,
             "application/json",
             new ContractHeader[] {  });
 }

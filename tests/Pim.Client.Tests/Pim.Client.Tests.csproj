@@ -31,6 +31,7 @@
     <Compile Include="../ClientWindows/NoteTaskSuggestionServiceTests.cs" />
     <Compile Include="../ClientWindows/AppKnowledgeServiceTests.cs" />
     <Compile Include="../ClientWindows/NoteMaterialRestoreTests.cs" />
+    <Compile Include="../ClientWindows/NoteProcessingStatusTests.cs" />
     <Compile Include="../ClientWindows/ContractBoundaryTests.cs" />
     <Compile Include="../ClientWindows/EndpointHeartbeatReporterTests.cs" />
     <Compile Include="../ClientWindows/HeartbeatTickRunnerTests.cs" />

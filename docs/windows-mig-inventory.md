@@ -19,12 +19,13 @@
 - 云端绑定恢复：按规范化服务器 URL + 当前账号持久化本机笔记与云端 Head 绑定；丢失绑定时从服务器已有版本恢复 `baseVersionId`，同版本重试复用首次请求并可跳过已上传分片。
 - 服务器材料目录：`asr-tasks/sources?offset=&limit=` 以 `includeWithoutAudio=true` 展示当前账号已完成材料版本，按标题、版本数、录音段数、时长、当前/冲突状态分组；可跳回同 `noteId` 的本机笔记。
 - 云端结果入口：Windows 笔记窗口可读取服务器固定版本/冲突状态、完整记录、独立分析、历史结果版本和人工修订；只读打开不会启动 ASR 或付费模型。
+- 服务端处理状态：笔记窗口按固定 `noteId`/`versionId` 读取高层 `GET /api/v1/native-notes/processing`，展示总体、录音转写（等待/失败阻断/完成）、笔记整理（等待/处理中/完成/失败）、已生成结果与问题摘要，并提供原生“刷新状态”入口；失败提示说明可在其他客户端重试后再刷新。换端恢复的只读笔记使用其服务器来源 `noteId`/`versionId`。问题摘要会隐藏 TaskId、ChangeKey、GraphEventId、内部 step key 等工程标识。该入口只读，不启动 ASR/模型，也不以 WebView 代替原生流程。
 
 当前未覆盖：
 
 - 原生云端笔记目录、笔记级标题/元数据分页与显式删除/回收站尚不存在；用户仍需从本机笔记进入对应稳定 `noteId`，不能浏览服务器上的全部笔记目录。
 - 服务器实现 `GET /api/v1/native-notes/versions/{versionId}/files/{fileIndex}`，但 Windows 仓 canonical OpenAPI 的 200 content schema 缺失；尚不生成猜测的 typed 下载，因此云端回读是逐版本结果/材料元数据，不是跨端完整本地往返。
-- 云端 ASR/派生生成启动需要管理员路由配置与显式计费/模型 consent；本批只读取已有结果并保存人工修订，不自动启动真实 ASR/模型，也不能把只读结果页当作主动记录迁移完成。
+- 云端 ASR/派生生成启动需要管理员路由配置与显式计费/模型 consent；本批只读取高层处理状态和已有结果并保存人工修订，不自动启动真实 ASR/模型，Windows 也还没有高层处理发起入口，不能把只读状态页当作主动记录迁移完成。
 - 完整 M3 Markdown 富编辑仍缺；当前 WPF `TextBox` 只是保留的源码编辑基础，不能标记 Tiptap/ProseMirror 等价能力完成。
 - 真实麦克风、声学、长时、睡眠/唤醒、设备切换与隐私权限路径未操作硬件，保持 `NOT-VERIFIED`。
 - `.pimnote.zip` 是 Windows 本机固定版本交换格式；服务器 schema-v1 包由独立 builder 生成，不能把两者称为跨端往返完成。
