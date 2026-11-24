@@ -530,6 +530,10 @@ grep -q 'new("sha256", "plain-string", true)' "$SB/$OPS_REL" \
 record "query_and_binary_metadata_is_typed" $([ $? -eq 0 ] && echo 0 || echo 1) \
   "generated metadata carries date-time/boolean query kinds and the exact binary media type"
 
+grep -q 'new("status", "enum-array", false, new string\[\] { "NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED" })' "$SB/$OPS_REL"
+record "query_enum_array_metadata_is_typed" $([ $? -eq 0 ] && echo 0 || echo 1) \
+  "repeatable R04 task status is generated as an enum-array with exact wire values"
+
 # 真实契约里的任务状态是属性级内联 enum，wire 值含 '-'。生成器必须提升为具名 enum
 # 并生成精确 wire converter，不能静默改写或 rejection 掉合法契约。
 grep -q 'public enum CreateTaskRequestStatus' "$SB/$MODELS_REL" \
@@ -580,6 +584,12 @@ record "query_enum_allowed_values_are_generated" $([ $? -eq 0 ] && echo 0 || ech
 
 reject_case "query_parameter_unknown_format" "query 参数带未知 format" \
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"name": "page", "in": "query", "schema": {"type": "string", "format": "custom-page"}}]'
+reject_case "query_array_missing_items" "query 数组缺少 items schema" \
+  'parameter = next(p for p in doc["paths"]["/api/v1/calendar/tasks"]["get"]["parameters"] if p.get("name") == "status"); parameter["schema"] = {"type": "array"}'
+reject_case "query_array_explode_false" "query 数组 explode=false（逗号拼接不是契约线格式）" \
+  'parameter = next(p for p in doc["paths"]["/api/v1/calendar/tasks"]["get"]["parameters"] if p.get("name") == "status"); parameter["explode"] = False'
+reject_case "query_array_non_string_items" "query 数组 items 不是字符串枚举" \
+  'parameter = next(p for p in doc["paths"]["/api/v1/calendar/tasks"]["get"]["parameters"] if p.get("name") == "status"); parameter["schema"]["items"] = {"type": "integer", "enum": [1, 2]}'
 reject_case "query_parameter_ref" "query 参数用 \$ref 引用（生成器尚未解析 components.parameters）" \
   'doc["paths"]["/api/v1/endpoints"]["get"]["parameters"] = [{"$" "ref": "#/components/parameters/Page"}]'
 reject_case "query_enum_schema_ref_missing" "query 枚举引用不存在的具名 schema" \
