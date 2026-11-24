@@ -333,7 +333,6 @@ public class ContractBoundaryBehaviorTests
         var taskStatus = Assert.Single(
             taskSuggestions.QueryParameters, parameter => parameter.Name == "status");
         Assert.Equal("enum", taskStatus.Kind);
-        Assert.False(taskStatus.Repeated);
         Assert.Equal(new[] { "Draft", "Confirmed", "Dismissed" }, taskStatus.AllowedValues);
         Assert.Equal("?status=Draft", taskSuggestions.ResolveQuery(("status", "Draft")));
         Assert.Equal("?status=Confirmed", taskSuggestions.ResolveQuery(("status", "Confirmed")));
@@ -342,19 +341,6 @@ public class ContractBoundaryBehaviorTests
             () => taskSuggestions.ResolveQuery(("status", "draft")));
         Assert.Throws<ArgumentException>(
             () => taskSuggestions.ResolveQuery(("status", "Confirmed&admin=true")));
-
-        var taskFilterStatus = Assert.Single(
-            ContractOperation.GetTasks.QueryParameters, parameter => parameter.Name == "status");
-        Assert.Equal("enum", taskFilterStatus.Kind);
-        Assert.True(taskFilterStatus.Repeated);
-        Assert.Equal(
-            new[] { "NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED" },
-            taskFilterStatus.AllowedValues);
-        Assert.Equal(
-            "?status=NEEDS-ACTION",
-            ContractOperation.GetTasks.ResolveQuery(("status", "NEEDS-ACTION")));
-        Assert.Throws<ArgumentException>(
-            () => ContractOperation.GetTasks.ResolveQuery(("status", "needs-action")));
 
         var artifacts = ContractOperation.GetNoteDerivedArtifacts;
         Assert.Equal(
@@ -390,6 +376,22 @@ public class ContractBoundaryBehaviorTests
                 ("pageSize", "50")));
         Assert.Throws<ArgumentException>(() => events.ResolveQuery(("start", "tomorrow")));
         Assert.Throws<ArgumentException>(() => ContractOperation.GetTasks.ResolveQuery(("inbox", "yes")));
+
+        var tasks = ContractOperation.GetTasks;
+        var tasksStatus = Assert.Single(
+            tasks.QueryParameters, parameter => parameter.Name == "status");
+        Assert.Equal("enum-array", tasksStatus.Kind);
+        Assert.Equal(
+            new[] { "NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED" },
+            tasksStatus.AllowedValues);
+        Assert.Equal(
+            "?inbox=true&status=NEEDS-ACTION&status=IN-PROCESS",
+            tasks.ResolveQuery(
+                ("inbox", "true"),
+                ("status", "NEEDS-ACTION"),
+                ("status", "IN-PROCESS")));
+        Assert.Throws<ArgumentException>(() => tasks.ResolveQuery(("status", "needs-action")));
+        Assert.Throws<ArgumentException>(() => tasks.ResolveQuery(("page", "1"), ("page", "2")));
     }
 
     [Fact]

@@ -46,6 +46,7 @@
 （契约没给成员名，臆造名字等于编造接口）、字符串枚举取值无法与 C# 成员名逐字相同
 （`JsonStringEnumConverter` 按成员名上线，改名就是改线格式）、operation 请求体/响应体根
 不是 `$ref`、以及 `in: header|cookie` 等本生成器尚未表达的 operation 参数。
+query 参数只额外支持 `style=form`、默认 explode 的可重复字符串枚举数组；其它数组形状仍拒绝产出。
 
 输出固定 UTF-8 + LF（`newline="\n"`）：Windows 上刷新与 Linux 上 CI 复跑必须逐字节相同。
 
@@ -80,12 +81,6 @@ OPERATIONS_RELATIVE_PATH = Path("src/client-windows/Pim.Client.Core/Contract/Con
 NAMESPACE = "Pim.Client.Core.Contract"
 CONTRACT_BASE_PATH = "/api/v1"
 HTTP_METHODS = ("get", "post", "put", "delete", "patch", "head", "options", "trace")
-
-# 唯一已建模的「重复 query 枚举」边界：wire 上重复同名参数表示 OR 集合。
-# 其它数组 query 形状仍然 fail-closed，避免静默丢掉契约约束。
-REPEATED_QUERY_ENUM_BOUNDARIES = {
-    ("GET", "/api/v1/calendar/tasks", "status"),
-}
 
 JSON_PROPERTY = "System.Text.Json.Serialization.JsonPropertyName"
 JSON_CONVERTER = "System.Text.Json.Serialization.JsonConverter"
@@ -284,66 +279,61 @@ def query_enum_reference(parameter: dict, op_path: str, name: str,
     return enum_name, values
 
 
-def repeated_query_enum_reference(parameter: dict, op_path: str, name: str,
-                                  method: str) -> list[str]:
-    """Resolve the one modeled repeated query enum (OpenAPI form/explode=true)."""
-    if (method, op_path, name) not in REPEATED_QUERY_ENUM_BOUNDARIES:
-        raise GenerationError(
-            f"operation {op_path} 的参数 {name} 是数组 query："
-            "只有已建模的重复枚举边界才允许产出。")
-    allowed_parameter_keys = {
-        "description", "in", "name", "required", "schema", "style", "explode",
-        "deprecated", "example", "title",
-    }
-    unknown_parameter_keys = sorted(
-        key for key in parameter
-        if key not in allowed_parameter_keys and not key.startswith("x-"))
-    if unknown_parameter_keys:
-        raise GenerationError(
-            f"operation {op_path} 的参数 {name} 带生成器无法表达的键"
-            f"（{', '.join(unknown_parameter_keys)}）：拒绝产出。")
-    style = parameter.get("style", "form")
-    explode = parameter.get("explode", True)
-    if style != "form" or explode is not True:
-        raise GenerationError(
-            f"operation {op_path} 的参数 {name} 不是 form/explode=true："
-            "重复参数无法安全序列化，拒绝产出。")
+def query_enum_array_values(parameter: dict, op_path: str, name: str) -> list[str]:
+    """Validate a repeatable query enum array and return its exact wire values."""
     schema = parameter.get("schema") or {}
-    allowed_schema_keys = {"type", "items", "description", "title", "deprecated"}
-    unknown = sorted(key for key in schema if key not in allowed_schema_keys and not key.startswith("x-"))
-    if unknown:
+    style = parameter.get("style")
+    if style not in (None, "form"):
         raise GenerationError(
-            f"operation {op_path} 的参数 {name} 的数组 schema 带生成器无法表达的键"
-            f"（{', '.join(unknown)}）：拒绝产出。")
+            f"operation {op_path} 的参数 {name} 是数组但 style={style!r}："
+            "生成器只支持 form 重复参数。")
+    if "explode" in parameter and parameter["explode"] is not True:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 是数组但 explode 不是 true："
+            "生成器只支持重复同名参数，拒绝输出逗号拼接等其它线格式。")
+
+    schema_unknown = sorted(
+        key for key in schema if key not in {"type", "items"} and not key.startswith("x-"))
+    if schema_unknown:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 数组 schema 带生成器无法表达的键"
+            f"（{', '.join(schema_unknown)}）：拒绝产出。")
     if schema.get("type") != "array":
         raise GenerationError(
-            f"operation {op_path} 的参数 {name} 不是 array：拒绝按重复参数产出。")
+            f"operation {op_path} 的参数 {name} 不是 type=array：拒绝产出。")
+
     items = schema.get("items")
     if not isinstance(items, dict):
         raise GenerationError(
-            f"operation {op_path} 的参数 {name} 的 array 缺少 items：拒绝产出。")
-    allowed_item_keys = {"type", "enum", "description", "title", "deprecated"}
-    unknown = sorted(key for key in items if key not in allowed_item_keys and not key.startswith("x-"))
+            f"operation {op_path} 的参数 {name} 数组缺少 items schema：拒绝产出。")
+    item_unknown = sorted(
+        key for key in items
+        if key not in {"type", "enum", "description", "title", "deprecated"}
+        and not key.startswith("x-"))
     values = items.get("enum")
-    if unknown or items.get("type") != "string" or not isinstance(values, list) \
-            or not values or any(not isinstance(value, str) or not value for value in values) \
+    if item_unknown or items.get("type") != "string" \
+            or not isinstance(values, list) \
+            or not values \
+            or any(not isinstance(value, str) or not value for value in values) \
             or len(values) != len(set(values)):
         raise GenerationError(
-            f"operation {op_path} 的参数 {name} 的 items 不是受支持的唯一值字符串枚举：拒绝产出。")
+            f"operation {op_path} 的参数 {name} 只支持带唯一字符串 enum 的数组 items：拒绝产出。")
     return values
 
 
 def validate_parameter_schema(parameter: dict, op_path: str, name: str,
                               contract: dict | None = None,
                               allow_query_enum_ref: bool = False,
-                              allow_query_enum_array: bool = False,
-                              method: str = "") -> tuple[str, str]:
+                              allow_query_array_enum: bool = False) -> tuple[str, str]:
     """返回 (C# 类型, 形状校验名)。只接受实际契约里出现的参数类型，
     且只有一小撮 format 能映射成可执行校验；其它形状一律拒绝。"""
     schema = parameter.get("schema") or {}
-    if allow_query_enum_array and schema.get("type") == "array":
-        repeated_query_enum_reference(parameter, op_path, name, method)
-        return "string", "enum-repeated"
+    if schema.get("type") == "array":
+        if not allow_query_array_enum:
+            raise GenerationError(
+                f"operation {op_path} 的参数 {name} 是数组：只有 query 的字符串枚举数组已建模。")
+        query_enum_array_values(parameter, op_path, name)
+        return "System.Collections.Generic.IReadOnlyList<string>", "enum-array"
     allowed_keys = {"$ref", "type", "format", "description", "example", "title", "deprecated", "default", "nullable"}
     unknown = sorted(key for key in schema if key not in allowed_keys and not key.startswith("x-"))
     if unknown:
@@ -450,10 +440,7 @@ def validate_parameters(op: dict, op_path: str, path_item: dict | None = None,
                 allow_query_enum_ref=(method == "GET" and
                                       op_path == "/api/v1/native-notes/task-suggestions" and
                                       name == "status"),
-                allow_query_enum_array=(method == "GET" and
-                                        op_path == "/api/v1/calendar/tasks" and
-                                        name == "status"),
-                method=method)
+                allow_query_array_enum=True)
             continue
 
         if location == "header":
@@ -1202,26 +1189,23 @@ def operation_metadata(entry: dict, contract: dict) -> dict:
     for parameter in parameters:
         name = str(parameter.get("name") or "")
         location = parameter.get("in")
-        if location == "query" and (method, full_path, name) in REPEATED_QUERY_ENUM_BOUNDARIES:
-            allowed_values = repeated_query_enum_reference(parameter, full_path, name, method)
-            query_parameters.append((
-                name, "enum", parameter.get("required") is True, allowed_values, True))
-            continue
         _, shape = validate_parameter_schema(
             parameter, full_path, name, contract,
             allow_query_enum_ref=(
                 method == "GET" and location == "query" and
                 full_path == "/api/v1/native-notes/task-suggestions" and
                 name == "status"),
-            method=method)
+            allow_query_array_enum=(location == "query"))
         if parameter.get("in") == "path":
             route_kinds.append((name, shape))
         elif parameter.get("in") == "query":
-            allowed_values = (
-                query_enum_reference(parameter, full_path, name, contract)[1]
-                if shape == "enum" else None)
-            query_parameters.append((
-                name, shape, parameter.get("required") is True, allowed_values, False))
+            if shape == "enum":
+                allowed_values = query_enum_reference(parameter, full_path, name, contract)[1]
+            elif shape == "enum-array":
+                allowed_values = query_enum_array_values(parameter, full_path, name)
+            else:
+                allowed_values = None
+            query_parameters.append((name, shape, parameter.get("required") is True, allowed_values))
         elif parameter.get("in") == "header":
             request_headers.append((name, shape))
     response_media = "application/json"
@@ -1276,9 +1260,8 @@ def render_operation_entry(entry: dict, contract: dict) -> list[str]:
         f'new("{name}", "{kind}", {str(required).lower()}'
         + (f', new string[] {{ {", ".join(json.dumps(value) for value in allowed_values)} }}'
            if allowed_values is not None else "")
-        + (", true" if repeated else "")
         + ")"
-        for name, kind, required, allowed_values, repeated in metadata["queryParameters"])
+        for name, kind, required, allowed_values in metadata["queryParameters"])
     request_headers = ", ".join(
         f'new("{name}", "{kind}")' for name, kind in metadata["requestHeaders"])
     response_headers = ", ".join(
@@ -1314,7 +1297,7 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "/// 需要契约里没有的接口时：不要在这里加，按 AGENTS.md「接口契约与门禁」把需求交给后端。",
         "/// </summary>",
         "public sealed record ContractHeader(string Name, string Kind);",
-        "public sealed record ContractQueryParameter(string Name, string Kind, bool Required, System.Collections.Generic.IReadOnlyList<string>? AllowedValues = null, bool Repeated = false);",
+        "public sealed record ContractQueryParameter(string Name, string Kind, bool Required, System.Collections.Generic.IReadOnlyList<string>? AllowedValues = null);",
         "",
         "public sealed class ContractOperation",
         "{",
@@ -1356,7 +1339,7 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "    /// <summary>路由参数的类型校验规则（uuid / int32 / int64 / plain-string）。</summary>",
         "    public System.Collections.Generic.IReadOnlyList<ContractHeader> RouteParameterKinds { get; }",
         "",
-        "    /// <summary>契约声明的 query 参数（标量或可重复枚举），按契约顺序序列化。</summary>",
+        "    /// <summary>契约声明的 query 参数，按契约顺序序列化；enum-array 允许重复同名参数。</summary>",
         "    public System.Collections.Generic.IReadOnlyList<ContractQueryParameter> QueryParameters { get; }",
         "",
         "    /// <summary>契约要求的必需请求 header。</summary>",
@@ -1457,31 +1440,40 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "",
         "    /// <summary>",
         "    /// 按契约声明的顺序构造 query string（含前导 <c>?</c>，无参数时返回空串）。",
-        "    /// 名字必须与契约完全一致；required 缺席、重复、未知名字或类型不符都会抛异常。",
+        "    /// 名字必须与契约完全一致；required 缺席、标量重复、未知名字或类型不符都会抛异常。",
         "    /// </summary>",
         "    public string ResolveQuery(params (string Name, string? Value)[] queryValues)",
         "    {",
-        "        var supplied = new System.Collections.Generic.Dictionary<string, string?>(System.StringComparer.Ordinal);",
+        "        var supplied = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string?>>(System.StringComparer.Ordinal);",
         "        foreach (var (name, value) in queryValues ?? System.Array.Empty<(string, string?)>())",
         "        {",
-        "            if (!supplied.TryAdd(name, value))",
+        "            if (!supplied.TryGetValue(name, out var values))",
         "            {",
-        "                throw new System.ArgumentException($\"Query 值重复：{name}\", nameof(queryValues));",
+        "                values = new System.Collections.Generic.List<string?>();",
+        "                supplied[name] = values;",
         "            }",
+        "",
+        "            values.Add(value);",
         "        }",
         "",
         "        foreach (var name in supplied.Keys)",
         "        {",
-        "            if (!QueryParameters.Any(parameter => parameter.Name == name))",
+        "            var parameter = QueryParameters.FirstOrDefault(candidate => candidate.Name == name);",
+        "            if (parameter is null)",
         "            {",
         "                throw new System.ArgumentException($\"契约未声明 Query 参数 {name}（{PathTemplate}）\", nameof(queryValues));",
+        "            }",
+        "",
+        "            if (parameter.Kind != \"enum-array\" && supplied[name].Count > 1)",
+        "            {",
+        "                throw new System.ArgumentException($\"Query 值重复：{name}\", nameof(queryValues));",
         "            }",
         "        }",
         "",
         "        var parts = new System.Collections.Generic.List<string>();",
         "        foreach (var parameter in QueryParameters)",
         "        {",
-        "            if (!supplied.TryGetValue(parameter.Name, out var value))",
+        "            if (!supplied.TryGetValue(parameter.Name, out var values))",
         "            {",
         "                if (parameter.Required)",
         "                {",
@@ -1492,7 +1484,37 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "                continue;",
         "            }",
         "",
-        "            if (value is null)",
+        "            if (parameter.Kind == \"enum-array\")",
+        "            {",
+        "                var emitted = 0;",
+        "                foreach (var value in values)",
+        "                {",
+        "                    if (value is null)",
+        "                    {",
+        "                        continue;",
+        "                    }",
+        "",
+        "                    if (parameter.AllowedValues is null || !parameter.AllowedValues.Contains(value, System.StringComparer.Ordinal))",
+        "                    {",
+        "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是契约声明的枚举值\", nameof(queryValues));",
+        "                    }",
+        "",
+        "                    parts.Add(",
+        "                        System.Uri.EscapeDataString(parameter.Name) + \"=\" + System.Uri.EscapeDataString(value));",
+        "                    emitted++;",
+        "                }",
+        "",
+        "                if (emitted == 0 && parameter.Required)",
+        "                {",
+        "                    throw new System.ArgumentException(",
+        "                        $\"必需 Query 参数 {parameter.Name} 不能为空（契约路径 {PathTemplate}）\", nameof(queryValues));",
+        "                }",
+        "",
+        "                continue;",
+        "            }",
+        "",
+        "            var scalarValue = values[0];",
+        "            if (scalarValue is null)",
         "            {",
         "                if (parameter.Required)",
         "                {",
@@ -1506,42 +1528,42 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "            switch (parameter.Kind)",
         "            {",
         "                case \"uuid\":",
-        "                    if (!System.Guid.TryParse(value, out _))",
+        "                    if (!System.Guid.TryParse(scalarValue, out _))",
         "                    {",
         "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 UUID\", nameof(queryValues));",
         "                    }",
         "",
         "                    break;",
         "                case \"int32\":",
-        "                    if (!int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))",
+        "                    if (!int.TryParse(scalarValue, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))",
         "                    {",
         "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 int32\", nameof(queryValues));",
         "                    }",
         "",
         "                    break;",
         "                case \"int64\":",
-        "                    if (!long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))",
+        "                    if (!long.TryParse(scalarValue, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))",
         "                    {",
         "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 int64\", nameof(queryValues));",
         "                    }",
         "",
         "                    break;",
         "                case \"date-time\":",
-        "                    if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out _))",
+        "                    if (!System.DateTimeOffset.TryParse(scalarValue, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out _))",
         "                    {",
         "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 ISO date-time\", nameof(queryValues));",
         "                    }",
         "",
         "                    break;",
         "                case \"boolean\":",
-        "                    if (!bool.TryParse(value, out _))",
+        "                    if (!bool.TryParse(scalarValue, out _))",
         "                    {",
         "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是 boolean\", nameof(queryValues));",
         "                    }",
         "",
         "                    break;",
         "                case \"enum\":",
-        "                    if (parameter.AllowedValues is null || !parameter.AllowedValues.Contains(value, System.StringComparer.Ordinal))",
+        "                    if (parameter.AllowedValues is null || !parameter.AllowedValues.Contains(scalarValue, System.StringComparer.Ordinal))",
         "                    {",
         "                        throw new System.ArgumentException($\"Query 参数 {parameter.Name} 不是契约声明的枚举值\", nameof(queryValues));",
         "                    }",
@@ -1550,7 +1572,7 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "            }",
         "",
         "            parts.Add(",
-        "                System.Uri.EscapeDataString(parameter.Name) + \"=\" + System.Uri.EscapeDataString(value));",
+        "                System.Uri.EscapeDataString(parameter.Name) + \"=\" + System.Uri.EscapeDataString(scalarValue));",
         "        }",
         "",
         "        return parts.Count == 0 ? string.Empty : \"?\" + string.Join(\"&\", parts);",
