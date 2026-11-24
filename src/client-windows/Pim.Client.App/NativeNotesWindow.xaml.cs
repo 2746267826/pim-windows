@@ -573,6 +573,13 @@ public partial class NativeNotesWindow : Window
                 return;
             }
 
+            if (MaterialsList.SelectedItem is LocalNoteMaterial changedSelection
+                && changedSelection.MaterialId != previewMaterialId)
+            {
+                ShowHandwritingDeleteNotApplied("删除未执行：材料选择已变化，请重新确认要删除的手写。");
+                return;
+            }
+
             if (!TrySelectHandwritingPair(previewMaterialId, sourceMaterialId))
             {
                 ShowHandwritingDeleteNotApplied(
