@@ -303,6 +303,30 @@ public partial class App : Application
         new NativeNotesWindow().Show();
     }
 
+    internal static void ShowTodayWindow()
+    {
+        var existing = Current.Windows.OfType<NativeTodayWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            existing.Activate();
+            return;
+        }
+
+        new NativeTodayWindow().Show();
+    }
+
+    internal static void ShowPlannerWindow()
+    {
+        var existing = Current.Windows.OfType<NativePlannerWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            existing.Activate();
+            return;
+        }
+
+        new NativePlannerWindow().Show();
+    }
+
     private async Task RunHeartbeatLoopAsync(CancellationToken ct)
     {
         try

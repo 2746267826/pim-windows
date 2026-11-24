@@ -53,6 +53,8 @@ public sealed class CalendarTaskService(ApiClient api)
         string? search = null,
         string? status = null,
         Guid? calendarId = null,
+        DateTimeOffset? dueFrom = null,
+        DateTimeOffset? dueTo = null,
         CancellationToken cancellationToken = default)
     {
         using var scope = _api.BeginOperationScope();
@@ -67,6 +69,8 @@ public sealed class CalendarTaskService(ApiClient api)
             search: search,
             calendarId: calendarId,
             status: status,
+            dueFrom: dueFrom,
+            dueTo: dueTo,
             pageSize: 200,
             ct: cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回任务。");
