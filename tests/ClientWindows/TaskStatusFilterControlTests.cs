@@ -1,8 +1,8 @@
 using System.IO;
-using System.Windows.Controls;
 using System.Windows;
 using Pim.Client.App;
 using Xunit;
+using CheckBox = System.Windows.Controls.CheckBox;
 
 namespace Pim.Client.App.Tests;
 

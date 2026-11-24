@@ -411,13 +411,13 @@ public class ContractBoundaryBehaviorTests
                 "?page=1&pageSize=100",
             ],
             handler.Requests.Select(request => request.Query).ToArray());
-        Assert.Throws<ArgumentException>(
+        await Assert.ThrowsAsync<ArgumentException>(
             () => api.GetTasksAsync(statuses: ["NEEDS-ACTION", ""]));
-        Assert.Throws<ArgumentException>(
+        await Assert.ThrowsAsync<ArgumentException>(
             () => api.GetTasksAsync(
                 status: "NEEDS-ACTION",
                 statuses: ["IN-PROCESS"]));
-        Assert.Throws<ArgumentException>(
+        await Assert.ThrowsAsync<ArgumentException>(
             () => api.GetTasksAsync(statuses: ["needs-action"]));
         Assert.Equal(2, handler.Requests.Count);
     }
