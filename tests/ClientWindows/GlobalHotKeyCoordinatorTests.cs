@@ -234,6 +234,31 @@ public sealed class GlobalHotKeyCoordinatorTests
         Assert.Equal(0, activated);
     }
 
+    [Fact]
+    public void RepeatedStopAndDispose_UnregisterOnlyOnceAndRemainInert()
+    {
+        var registry = new FakeRegistry();
+        var activated = 0;
+        var coordinator = new GlobalHotKeyCoordinator(
+            registry,
+            GlobalHotKeyGesture.NativeNotes,
+            () => activated++,
+            _ => { });
+
+        coordinator.Start(MessageWindow);
+        coordinator.Stop();
+        coordinator.Stop();
+        coordinator.Dispose();
+        coordinator.Dispose();
+        coordinator.Start(MessageWindow);
+        coordinator.HandleHotKey(GlobalHotKeyGesture.NativeNotes.Id);
+
+        Assert.False(coordinator.IsRegistered);
+        Assert.Single(registry.Registrations);
+        Assert.Equal(1, registry.Unregistrations);
+        Assert.Equal(0, activated);
+    }
+
     private sealed class FakeRegistry : IGlobalHotKeyRegistry
     {
         private readonly Queue<GlobalHotKeyRegistrationResult> _results;
