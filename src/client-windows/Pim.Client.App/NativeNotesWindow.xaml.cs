@@ -4,9 +4,12 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
+using Pim.Client.App.Services;
 using Pim.Client.Core.Contract;
 using Pim.Client.Core.Services.Notes;
 
@@ -17,9 +20,11 @@ public partial class NativeNotesWindow : Window
     private readonly LocalNoteStore _store;
     private readonly WindowsRecordingService _recording;
     private readonly CloudNoteMaterialService _cloud;
+    private readonly NativeNotesWorkspaceStore _workspaceStore;
     private readonly ObservableCollection<LocalNoteSummary> _notes = [];
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
     private readonly CloudNotesUiState _cloudUi = new();
+    private NativeNotesWorkspaceLayout _workspace = new();
     private LocalNoteDocument? _current;
     private bool _loading;
     private bool _closing;
@@ -43,6 +48,7 @@ public partial class NativeNotesWindow : Window
         _store = App.Services.GetRequiredService<LocalNoteStore>();
         _recording = App.Services.GetRequiredService<WindowsRecordingService>();
         _cloud = App.Services.GetRequiredService<CloudNoteMaterialService>();
+        _workspaceStore = new NativeNotesWorkspaceStore(_store.Root);
         NotesList.ItemsSource = _notes;
         _saveTimer.Tick += OnSaveTimer;
         _recording.StateChanged += OnRecordingStateChanged;
@@ -52,12 +58,18 @@ public partial class NativeNotesWindow : Window
     {
         try
         {
+            _workspace = NativeNotesWorkspaceLayout.FromPreferences(await _workspaceStore.LoadAsync());
+            ApplyWorkspaceLayout();
             await _store.EnsureInitializedAsync();
             await RefreshNotesAsync();
             await RefreshCloudVersionsAsync(showErrors: false);
-            if (_notes.Count > 0)
+            var initial = _workspace.LastNoteId is { } lastNoteId
+                ? _notes.FirstOrDefault(note => note.NoteId == lastNoteId)
+                : null;
+            initial ??= _notes.FirstOrDefault();
+            if (initial is not null)
             {
-                NotesList.SelectedIndex = 0;
+                NotesList.SelectedItem = initial;
             }
             else
             {
@@ -82,6 +94,211 @@ public partial class NativeNotesWindow : Window
             ShowFailure("打开本机笔记库失败", ex);
         }
     }
+
+    private void OnWindowSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (IsLoaded)
+        {
+            ApplyWorkspaceLayout();
+        }
+    }
+
+    private async void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape
+            && _workspace.IsSidebarOverlay(WorkspaceWidth())
+            && !_workspace.IsSidebarCollapsed)
+        {
+            e.Handled = true;
+            _workspace.ToggleSidebar();
+            ApplyWorkspaceLayout();
+            await SaveWorkspaceAsync();
+            return;
+        }
+
+        var key = e.Key switch
+        {
+            Key.Left => NativeNotesWorkspaceKey.Left,
+            Key.Right => NativeNotesWorkspaceKey.Right,
+            Key.D0 or Key.NumPad0 => NativeNotesWorkspaceKey.D0,
+            Key.B => NativeNotesWorkspaceKey.B,
+            Key.M => NativeNotesWorkspaceKey.M,
+            _ => (NativeNotesWorkspaceKey?)null,
+        };
+        if (key is null)
+        {
+            return;
+        }
+
+        var modifiers = Keyboard.Modifiers;
+        if (!NativeNotesWorkspaceShortcuts.TryResolve(
+                modifiers.HasFlag(ModifierKeys.Control),
+                modifiers.HasFlag(ModifierKeys.Shift),
+                modifiers.HasFlag(ModifierKeys.Alt),
+                key.Value,
+                out var action))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        _workspace.Apply(action);
+        ApplyWorkspaceLayout();
+        await SaveWorkspaceAsync();
+    }
+
+    private void ApplyWorkspaceLayout()
+    {
+        if (!IsLoaded || WorkspaceGrid is null)
+        {
+            return;
+        }
+
+        var width = WorkspaceWidth();
+        var inline = _workspace.IsSidebarInline(width);
+        var overlay = _workspace.IsSidebarOverlay(width);
+        var visible = _workspace.IsSidebarVisible(width);
+        SidebarColumn.Width = new GridLength(inline ? _workspace.SidebarWidth : 0);
+        SplitterColumn.Width = new GridLength(inline ? 6 : 0);
+        SidebarSplitter.Visibility = inline ? Visibility.Visible : Visibility.Collapsed;
+        SidebarPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        CollapseSidebarButton.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        EditorCollapseSidebarButton.Visibility = !visible || overlay
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SidebarOverlayScrim.Visibility = overlay ? Visibility.Visible : Visibility.Collapsed;
+        if (overlay)
+        {
+            Grid.SetColumn(SidebarPanel, 0);
+            Grid.SetColumnSpan(SidebarPanel, 3);
+            SidebarPanel.HorizontalAlignment = HorizontalAlignment.Left;
+            SidebarPanel.Width = _workspace.EffectiveSidebarWidth(width);
+        }
+        else
+        {
+            Grid.SetColumn(SidebarPanel, 0);
+            Grid.SetColumnSpan(SidebarPanel, 1);
+            SidebarPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+            SidebarPanel.Width = double.NaN;
+        }
+
+        var showingNotes = _workspace.SidebarPane == NativeNotesSidebarPane.Notes;
+        NotesPane.Visibility = showingNotes ? Visibility.Visible : Visibility.Collapsed;
+        MaterialsPane.Visibility = showingNotes ? Visibility.Collapsed : Visibility.Visible;
+        NotesPaneButton.FontWeight = showingNotes ? FontWeights.SemiBold : FontWeights.Normal;
+        MaterialsPaneButton.FontWeight = showingNotes ? FontWeights.Normal : FontWeights.SemiBold;
+    }
+
+    private async void OnShowNotesSidebar(object sender, RoutedEventArgs e)
+        => await OpenSidebarPaneAsync(NativeNotesSidebarPane.Notes);
+
+    private async void OnShowMaterialsSidebar(object sender, RoutedEventArgs e)
+        => await OpenSidebarPaneAsync(NativeNotesSidebarPane.Materials);
+
+    private async void OnShowNotesPane(object sender, RoutedEventArgs e)
+        => await OpenSidebarPaneAsync(NativeNotesSidebarPane.Notes);
+
+    private async void OnShowMaterialsPane(object sender, RoutedEventArgs e)
+        => await OpenSidebarPaneAsync(NativeNotesSidebarPane.Materials);
+
+    private async Task OpenSidebarPaneAsync(NativeNotesSidebarPane pane)
+    {
+        _workspace.ShowPane(pane);
+        ApplyWorkspaceLayout();
+        await SaveWorkspaceAsync();
+    }
+
+    private async void OnToggleSidebar(object sender, RoutedEventArgs e)
+    {
+        _workspace.ToggleSidebar();
+        ApplyWorkspaceLayout();
+        await SaveWorkspaceAsync();
+    }
+
+    private async void OnOverlayScrimMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_workspace.IsSidebarOverlay(WorkspaceWidth()) && !_workspace.IsSidebarCollapsed)
+        {
+            e.Handled = true;
+            _workspace.ToggleSidebar();
+            ApplyWorkspaceLayout();
+            await SaveWorkspaceAsync();
+        }
+    }
+
+    private async void OnSidebarSplitterDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (!_workspace.IsSidebarInline(WorkspaceWidth()))
+        {
+            return;
+        }
+
+        _workspace.SetSidebarWidth(SidebarColumn.ActualWidth);
+        ApplyWorkspaceLayout();
+        await SaveWorkspaceAsync();
+    }
+
+    private async void OnResetWorkspaceLayout(object sender, RoutedEventArgs e)
+    {
+        _workspace.ResetSidebarWidth();
+        ApplyWorkspaceLayout();
+        await SaveWorkspaceAsync();
+    }
+
+    private void OnMoreMenuClick(object sender, RoutedEventArgs e)
+    {
+        if (MoreButton.ContextMenu is not { } menu)
+        {
+            return;
+        }
+
+        menu.PlacementTarget = MoreButton;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    private async void OnOpenUploadRecords(object sender, RoutedEventArgs e)
+    {
+        UploadRecordsExpander.IsExpanded = true;
+        await OpenSidebarPaneAsync(NativeNotesSidebarPane.Materials);
+        UploadRecordsExpander.BringIntoView();
+    }
+
+    private async Task SaveWorkspaceAsync()
+    {
+        try
+        {
+            await _workspaceStore.SaveAsync(_workspace.ToPreferences());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            Logger.Warn($"保存笔记窗口布局失败：{ex.GetType().Name}");
+        }
+    }
+
+    private void SetSyncStatus(NativeNotesSyncStatus status)
+    {
+        SyncStatusText.Text = status.Text;
+        SyncStatusText.ToolTip = status.Text;
+        var brush = status.Tone switch
+        {
+            NativeNotesSyncTone.Active => (System.Windows.Media.Brush)FindResource("PimPrimaryBrush"),
+            NativeNotesSyncTone.Success => (System.Windows.Media.Brush)FindResource("PimActivityBrush"),
+            NativeNotesSyncTone.Warning => (System.Windows.Media.Brush)FindResource("PimWarningBrush"),
+            NativeNotesSyncTone.Error => (System.Windows.Media.Brush)FindResource("PimDangerBrush"),
+            _ => (System.Windows.Media.Brush)FindResource("PimMutedTextBrush"),
+        };
+        SyncStatusText.Foreground = brush;
+        MoreButtonBusyBadge.Background = brush;
+        MoreButtonBusyBadge.Visibility = status.Tone is
+            NativeNotesSyncTone.Active or NativeNotesSyncTone.Warning or NativeNotesSyncTone.Error
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+    }
+
+    private double WorkspaceWidth()
+        => WorkspaceGrid?.ActualWidth
+           ?? (ActualWidth > 0 ? ActualWidth : Width);
 
     private async void OnNewNote(object sender, RoutedEventArgs e)
     {
@@ -161,7 +378,13 @@ public partial class NativeNotesWindow : Window
             TitleBox.Text = note.Title;
             MarkdownBox.Text = note.Markdown;
             UpdateMaterials();
+            _workspace.RememberNote(note.NoteId);
+            ApplyWorkspaceLayout();
+            await SaveWorkspaceAsync();
             ResetProcessingStatus("正在读取服务端处理状态…");
+            SetSyncStatus(_cloud.CurrentAccountScope is null
+                ? NativeNotesSyncStatusView.SignedOut()
+                : NativeNotesSyncStatusView.Checking());
             await RefreshVersionsAsync(note.NoteId, note.CurrentVersionId);
             if (IsCurrentNoteSelection(selectionGeneration, note.NoteId))
             {
@@ -201,6 +424,7 @@ public partial class NativeNotesWindow : Window
         }
 
         SaveStateText.Text = "正在等待本机自动保存…";
+        SetSyncStatus(NativeNotesSyncStatusView.Saving());
         _saveTimer.Stop();
         _saveTimer.Start();
     }
@@ -783,6 +1007,7 @@ public partial class NativeNotesWindow : Window
             _current = await _store.SaveAsync(_current.NoteId, title, markdown);
             UpdateMaterials();
             SaveStateText.Text = "已保存为新的固定版本";
+            SetSyncStatus(NativeNotesSyncStatusView.Saved());
             await RefreshNotesAsync(SearchBox.Text);
             await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
             return true;
@@ -790,6 +1015,7 @@ public partial class NativeNotesWindow : Window
         catch (Exception ex)
         {
             SaveStateText.Text = "保存失败，当前正文仍保留在窗口中";
+            SetSyncStatus(NativeNotesSyncStatusView.LocalSaveFailed());
             ShowFailure("本机自动保存失败", ex);
             return false;
         }
@@ -820,7 +1046,7 @@ public partial class NativeNotesWindow : Window
     {
         if (_current is null)
         {
-            MaterialsText.Text = "固定材料版本 · 尚无材料";
+            MaterialsText.Text = "未选择笔记";
             MaterialsList.ItemsSource = null;
             return;
         }
@@ -842,7 +1068,7 @@ public partial class NativeNotesWindow : Window
         RecordButton.IsEnabled = _recording.IsRecording || !_current.IsServerSourceReadOnly;
         if (_current.IsServerSourceReadOnly)
         {
-            MaterialsText.Text += " · 云端混排原件只读，导出保留完整块序";
+            MaterialsText.Text += " · 只读";
         }
     }
 
@@ -865,7 +1091,7 @@ public partial class NativeNotesWindow : Window
         AddRecordingButton.IsEnabled = false;
         RecordButton.IsEnabled = _recording.IsRecording;
         _loading = false;
-        MaterialsText.Text = "选择或新建笔记以开始";
+        MaterialsText.Text = "未选择笔记";
         MaterialsList.ItemsSource = null;
         VersionsBox.ItemsSource = null;
         CloudVersionsList.ItemsSource = null;
@@ -874,11 +1100,13 @@ public partial class NativeNotesWindow : Window
         _selectedDerivedVersion = null;
         _selectedDerivedVersionSummary = null;
         ResetProcessingStatus("未选择笔记");
+        CloudStatusText.Text = string.Empty;
+        SetSyncStatus(NativeNotesSyncStatusView.NoNote());
         _cloudUi.ClearDraft();
         _loadingCloudResult = true;
         CloudResultBox.Text = string.Empty;
         _loadingCloudResult = false;
-        CloudResultStateText.Text = "未选择笔记";
+        CloudResultStateText.Text = string.Empty;
         SaveStateText.Text = "";
     }
 
@@ -890,6 +1118,7 @@ public partial class NativeNotesWindow : Window
         }
 
         _saveTimer.Stop();
+        _ = SaveWorkspaceAsync();
         if (_cloudUi.IsDraftDirty
             && MessageBox.Show(
                 this,
@@ -1046,7 +1275,8 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        CloudStatusText.Text = "正在校验并上传当前固定版本…";
+        CloudStatusText.Text = "正在上传…";
+        SetSyncStatus(NativeNotesSyncStatusView.Uploading());
         try
         {
             var result = await _cloud.UploadVersionAsync(
@@ -1054,15 +1284,16 @@ public partial class NativeNotesWindow : Window
                 _current.CurrentVersionId,
                 userConfirmedStorage: true);
             CloudStatusText.Text = result.Upload.HasConflict
-                ? $"已上传 {result.Upload.VersionId[..8]}，但服务器当前版本已被另一端更新；双方版本均保留。"
-                : $"已上传并完成固定版本 {result.Upload.VersionId[..8]}。";
+                ? $"已上传 {result.Upload.VersionId[..8]} · 冲突"
+                : $"已上传 {result.Upload.VersionId[..8]}";
             await RefreshCloudVersionsAsync(showErrors: false);
             await RefreshProcessingStatusAsync(showErrors: false);
             await RefreshCloudResultsAsync(showErrors: false);
         }
         catch (Exception ex)
         {
-            CloudStatusText.Text = "云端上传未完成；本机固定版本未修改。";
+            CloudStatusText.Text = "上传未完成";
+            SetSyncStatus(NativeNotesSyncStatusView.Unavailable());
             ShowFailure("上传当前固定版本失败", ex);
         }
     }
@@ -1094,6 +1325,7 @@ public partial class NativeNotesWindow : Window
         if (_current is null)
         {
             CloudVersionsList.ItemsSource = null;
+            CloudStatusText.Text = string.Empty;
             return;
         }
 
@@ -1130,8 +1362,14 @@ public partial class NativeNotesWindow : Window
                 _refreshingCloudVersions = false;
             }
             CloudStatusText.Text = _cloud.IsAvailable
-                ? $"服务器共有 {rows.Length} 个固定材料版本。上传不会自动启动模型。"
-                : "当前未登录；本机笔记仍可离线编辑和录音。";
+                ? rows.Length == 0
+                    ? "暂无上传记录"
+                    : $"固定版本：{rows.Length}"
+                : "未登录";
+            if (!_cloud.IsAvailable)
+            {
+                SetSyncStatus(NativeNotesSyncStatusView.SignedOut());
+            }
         }
         catch (Exception ex)
         {
@@ -1145,7 +1383,8 @@ public partial class NativeNotesWindow : Window
             }
 
             CloudVersionsList.ItemsSource = null;
-            CloudStatusText.Text = "云端版本暂不可用；本机固定版本不受影响。";
+            CloudStatusText.Text = "云端版本暂不可用。";
+            SetSyncStatus(NativeNotesSyncStatusView.Unavailable());
             if (showErrors)
             {
                 ShowFailure("读取云端固定版本失败", ex);
@@ -1163,14 +1402,20 @@ public partial class NativeNotesWindow : Window
             ShowProcessingStatusUnavailable(
                 _current is null
                     ? "未选择笔记"
-                    : "当前笔记尚无已上传固定材料版本；上传后可读取服务端处理状态。");
+                    : "当前笔记尚未上传");
+            SetSyncStatus(_current is null
+                ? NativeNotesSyncStatusView.NoNote()
+                : _cloud.CurrentAccountScope is null
+                    ? NativeNotesSyncStatusView.SignedOut()
+                    : NativeNotesSyncStatusView.LocalOnly());
             return;
         }
 
         var accountScope = _cloud.CurrentAccountScope;
         if (accountScope is null)
         {
-            ShowProcessingStatusUnavailable("请先登录云端账号，再读取服务端处理状态。");
+            ShowProcessingStatusUnavailable("未登录");
+            SetSyncStatus(NativeNotesSyncStatusView.SignedOut());
             return;
         }
 
@@ -1194,6 +1439,7 @@ public partial class NativeNotesWindow : Window
         ProcessingIssuesText.Visibility = Visibility.Collapsed;
         ProcessingUpdatedText.Text = string.Empty;
         RefreshProcessingStatusButton.IsEnabled = false;
+        SetSyncStatus(NativeNotesSyncStatusView.Checking());
         try
         {
             var status = await _cloud.GetProcessingStatusAsync(target.NoteId, target.VersionId);
@@ -1219,6 +1465,7 @@ public partial class NativeNotesWindow : Window
                 : Visibility.Visible;
             ProcessingUpdatedText.Text =
                 $"服务端更新于 {view.UpdatedAt.ToLocalTime():MM-dd HH:mm:ss}";
+            SetSyncStatus(NativeNotesSyncStatusView.FromProcessing(status));
         }
         catch (Exception ex)
         {
@@ -1242,7 +1489,7 @@ public partial class NativeNotesWindow : Window
                 return;
             }
 
-            ProcessingOverallText.Text = "服务端处理状态暂不可用；本机笔记与导出不受影响。";
+            ProcessingOverallText.Text = "服务端处理状态暂不可用。";
             ProcessingAsrText.Text = string.Empty;
             ProcessingDerivedText.Text = string.Empty;
             ProcessingArtifactsText.Text = string.Empty;
@@ -1250,6 +1497,7 @@ public partial class NativeNotesWindow : Window
             ProcessingIssuesText.Text = string.Empty;
             ProcessingIssuesText.Visibility = Visibility.Collapsed;
             ProcessingUpdatedText.Text = string.Empty;
+            SetSyncStatus(NativeNotesSyncStatusView.Unavailable());
             if (showErrors)
             {
                 ShowFailure("读取笔记处理状态失败", ex);
@@ -1461,8 +1709,8 @@ public partial class NativeNotesWindow : Window
             }
 
             CloudResultStateText.Text = rows.Length == 0
-                ? "服务器暂无记录或分析结果；只读页不会启动 ASR/模型。"
-                : $"共 {rows.Length} 个结果版本；可查看历史、保存人工修订或切回历史版本。";
+                ? "服务器暂无结果"
+                : $"结果版本：{rows.Length}";
         }
         catch (Exception ex)
         {
