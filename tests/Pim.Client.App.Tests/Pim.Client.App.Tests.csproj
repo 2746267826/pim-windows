@@ -31,6 +31,7 @@
     <Compile Include="../ClientWindows/GlobalHotKeyHostTests.cs" />
     <Compile Include="../ClientWindows/ScheduledTaskServiceTests.cs" />
     <Compile Include="../ClientWindows/SingleInstanceGuardTests.cs" />
+    <Compile Include="../ClientWindows/TaskStatusFilterControlTests.cs" />
     <Compile Include="../ClientWindows/TrayIconTests.cs" />
     <Compile Include="../ClientWindows/WindowsCompanionShellTests.cs" />
     <Compile Include="../ClientWindows/WindowsDaemonPrimaryPathTests.cs" />

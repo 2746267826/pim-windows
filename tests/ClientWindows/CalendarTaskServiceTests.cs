@@ -27,7 +27,7 @@ public sealed class CalendarTaskServiceTests
             calendarId: Guid.Parse(CalendarId));
         var workspace = await service.GetTaskWorkspaceAsync(
             search: "Windows",
-            status: "NEEDS-ACTION");
+            statuses: ["NEEDS-ACTION"]);
 
         Assert.Single(agenda.Calendars);
         Assert.Single(agenda.Events.Items);
@@ -47,6 +47,69 @@ public sealed class CalendarTaskServiceTests
         Assert.Contains("search=%E8%AF%84%E5%AE%A1", handler.Calls[1].Query, StringComparison.Ordinal);
         Assert.Contains("calendarId=" + CalendarId, handler.Calls[1].Query, StringComparison.Ordinal);
         Assert.Contains("status=NEEDS-ACTION", handler.Calls[3].Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TaskStatusQueryMatchesServerEmptyDuplicateInvalidAndConflictRules()
+    {
+        Assert.Empty(TaskStatusQuery.Normalize(null));
+        Assert.Empty(TaskStatusQuery.Normalize(Array.Empty<string?>()));
+        Assert.Empty(TaskStatusQuery.Normalize(new string?[] { null, "", "  " }));
+        Assert.Equal(
+            ["NEEDS-ACTION", "IN-PROCESS"],
+            TaskStatusQuery.Normalize(
+                new string?[] { "NEEDS-ACTION", "IN-PROCESS", "NEEDS-ACTION" }));
+        Assert.Equal(
+            ["COMPLETED"],
+            TaskStatusQuery.Normalize("COMPLETED", null));
+        Assert.Empty(TaskStatusQuery.Normalize("  ", null));
+
+        foreach (var invalid in new[]
+                 {
+                     "needs-action",
+                     " NEEDS-ACTION ",
+                     "NEEDS-ACTION,IN-PROCESS",
+                     "UNKNOWN",
+                 })
+        {
+            Assert.Throws<ArgumentException>(
+                () => TaskStatusQuery.Normalize(new string?[] { invalid }));
+        }
+
+        Assert.Throws<ArgumentException>(
+            () => TaskStatusQuery.Normalize(new string?[] { "NEEDS-ACTION", "" }));
+        Assert.Throws<ArgumentException>(
+            () => TaskStatusQuery.Normalize(
+                "NEEDS-ACTION",
+                new string?[] { "IN-PROCESS" }));
+        Assert.Throws<ArgumentException>(
+            () => TaskStatusQuery.Normalize(
+                "NEEDS-ACTION",
+                Array.Empty<string?>()));
+    }
+
+    [Fact]
+    public async Task TaskWorkspaceSendsRepeatedStatusesAndOmitsAnEmptyStatusFilter()
+    {
+        var handler = new PlannerHandler();
+        var api = new ApiClient(() => handler);
+        api.SetAccessToken("synthetic-planner-token");
+        var service = new CalendarTaskService(api);
+
+        await service.GetTaskWorkspaceAsync(
+            statuses: ["NEEDS-ACTION", "IN-PROCESS", "NEEDS-ACTION"]);
+        await service.GetTaskWorkspaceAsync(statuses: []);
+
+        var taskQueries = handler.Calls
+            .Where(call => call.Path == "/api/v1/calendar/tasks")
+            .Select(call => call.Query)
+            .ToArray();
+        Assert.Equal(
+            [
+                "?status=NEEDS-ACTION&status=IN-PROCESS&page=1&pageSize=200",
+                "?page=1&pageSize=200",
+            ],
+            taskQueries);
     }
 
     [Fact]
