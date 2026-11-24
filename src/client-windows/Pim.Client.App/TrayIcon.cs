@@ -33,7 +33,7 @@ public partial class TrayIcon : IDisposable
         _notifyIcon = new System.Windows.Forms.NotifyIcon
         {
             Icon = LoadIcon(),
-            Text = "PIM 守护程序 - 点击查看状态",
+            Text = $"PIM 守护程序 - {GlobalHotKeyGesture.NativeNotes.DisplayName} 打开笔记",
             Visible = true,
             ContextMenuStrip = new System.Windows.Forms.ContextMenuStrip()
         };
