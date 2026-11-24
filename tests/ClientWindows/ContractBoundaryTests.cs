@@ -333,6 +333,7 @@ public class ContractBoundaryBehaviorTests
         var taskStatus = Assert.Single(
             taskSuggestions.QueryParameters, parameter => parameter.Name == "status");
         Assert.Equal("enum", taskStatus.Kind);
+        Assert.False(taskStatus.Repeated);
         Assert.Equal(new[] { "Draft", "Confirmed", "Dismissed" }, taskStatus.AllowedValues);
         Assert.Equal("?status=Draft", taskSuggestions.ResolveQuery(("status", "Draft")));
         Assert.Equal("?status=Confirmed", taskSuggestions.ResolveQuery(("status", "Confirmed")));
@@ -341,6 +342,19 @@ public class ContractBoundaryBehaviorTests
             () => taskSuggestions.ResolveQuery(("status", "draft")));
         Assert.Throws<ArgumentException>(
             () => taskSuggestions.ResolveQuery(("status", "Confirmed&admin=true")));
+
+        var taskFilterStatus = Assert.Single(
+            ContractOperation.GetTasks.QueryParameters, parameter => parameter.Name == "status");
+        Assert.Equal("enum", taskFilterStatus.Kind);
+        Assert.True(taskFilterStatus.Repeated);
+        Assert.Equal(
+            new[] { "NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED" },
+            taskFilterStatus.AllowedValues);
+        Assert.Equal(
+            "?status=NEEDS-ACTION",
+            ContractOperation.GetTasks.ResolveQuery(("status", "NEEDS-ACTION")));
+        Assert.Throws<ArgumentException>(
+            () => ContractOperation.GetTasks.ResolveQuery(("status", "needs-action")));
 
         var artifacts = ContractOperation.GetNoteDerivedArtifacts;
         Assert.Equal(

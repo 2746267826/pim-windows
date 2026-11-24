@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 4ed8523741f879be4b473e3eead0f737bf62387a27e234c5a8aee7ff3ab60bf3)
+//   契约快照      : contract/openapi.json (sha256 e788b2ce4902e79bfa360aed7b5a8a8d561b2f0c5e4d46100abb2e5d724e61a6)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -22,7 +22,7 @@ namespace Pim.Client.Core.Contract;
 /// 需要契约里没有的接口时：不要在这里加，按 AGENTS.md「接口契约与门禁」把需求交给后端。
 /// </summary>
 public sealed record ContractHeader(string Name, string Kind);
-public sealed record ContractQueryParameter(string Name, string Kind, bool Required, System.Collections.Generic.IReadOnlyList<string>? AllowedValues = null);
+public sealed record ContractQueryParameter(string Name, string Kind, bool Required, System.Collections.Generic.IReadOnlyList<string>? AllowedValues = null, bool Repeated = false);
 
 public sealed class ContractOperation
 {
@@ -64,7 +64,7 @@ public sealed class ContractOperation
     /// <summary>路由参数的类型校验规则（uuid / int32 / int64 / plain-string）。</summary>
     public System.Collections.Generic.IReadOnlyList<ContractHeader> RouteParameterKinds { get; }
 
-    /// <summary>契约声明的标量 query 参数，按契约顺序序列化。</summary>
+    /// <summary>契约声明的 query 参数（标量或可重复枚举），按契约顺序序列化。</summary>
     public System.Collections.Generic.IReadOnlyList<ContractQueryParameter> QueryParameters { get; }
 
     /// <summary>契约要求的必需请求 header。</summary>
@@ -382,7 +382,7 @@ public sealed class ContractOperation
     public static readonly ContractOperation GetTasks =
         new("GET", "/api/v1/calendar/tasks", "calendar/tasks",
             new ContractHeader[] {  },
-            new ContractQueryParameter[] { new("inbox", "boolean", false), new("search", "plain-string", false), new("calendarId", "uuid", false), new("status", "plain-string", false), new("priority", "int32", false), new("plannedFrom", "date-time", false), new("plannedTo", "date-time", false), new("dueFrom", "date-time", false), new("dueTo", "date-time", false), new("page", "int32", false), new("pageSize", "int32", false) },
+            new ContractQueryParameter[] { new("inbox", "boolean", false), new("search", "plain-string", false), new("calendarId", "uuid", false), new("status", "enum", false, new string[] { "NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED" }, true), new("priority", "int32", false), new("plannedFrom", "date-time", false), new("plannedTo", "date-time", false), new("dueFrom", "date-time", false), new("dueTo", "date-time", false), new("page", "int32", false), new("pageSize", "int32", false) },
             new ContractHeader[] {  },
             null,
             "application/json",

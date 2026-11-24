@@ -81,6 +81,12 @@ NAMESPACE = "Pim.Client.Core.Contract"
 CONTRACT_BASE_PATH = "/api/v1"
 HTTP_METHODS = ("get", "post", "put", "delete", "patch", "head", "options", "trace")
 
+# 唯一已建模的「重复 query 枚举」边界：wire 上重复同名参数表示 OR 集合。
+# 其它数组 query 形状仍然 fail-closed，避免静默丢掉契约约束。
+REPEATED_QUERY_ENUM_BOUNDARIES = {
+    ("GET", "/api/v1/calendar/tasks", "status"),
+}
+
 JSON_PROPERTY = "System.Text.Json.Serialization.JsonPropertyName"
 JSON_CONVERTER = "System.Text.Json.Serialization.JsonConverter"
 JSON_STRING_ENUM = "System.Text.Json.Serialization.JsonStringEnumConverter"
@@ -278,12 +284,66 @@ def query_enum_reference(parameter: dict, op_path: str, name: str,
     return enum_name, values
 
 
+def repeated_query_enum_reference(parameter: dict, op_path: str, name: str,
+                                  method: str) -> list[str]:
+    """Resolve the one modeled repeated query enum (OpenAPI form/explode=true)."""
+    if (method, op_path, name) not in REPEATED_QUERY_ENUM_BOUNDARIES:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 是数组 query："
+            "只有已建模的重复枚举边界才允许产出。")
+    allowed_parameter_keys = {
+        "description", "in", "name", "required", "schema", "style", "explode",
+        "deprecated", "example", "title",
+    }
+    unknown_parameter_keys = sorted(
+        key for key in parameter
+        if key not in allowed_parameter_keys and not key.startswith("x-"))
+    if unknown_parameter_keys:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 带生成器无法表达的键"
+            f"（{', '.join(unknown_parameter_keys)}）：拒绝产出。")
+    style = parameter.get("style", "form")
+    explode = parameter.get("explode", True)
+    if style != "form" or explode is not True:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 不是 form/explode=true："
+            "重复参数无法安全序列化，拒绝产出。")
+    schema = parameter.get("schema") or {}
+    allowed_schema_keys = {"type", "items", "description", "title", "deprecated"}
+    unknown = sorted(key for key in schema if key not in allowed_schema_keys and not key.startswith("x-"))
+    if unknown:
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 的数组 schema 带生成器无法表达的键"
+            f"（{', '.join(unknown)}）：拒绝产出。")
+    if schema.get("type") != "array":
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 不是 array：拒绝按重复参数产出。")
+    items = schema.get("items")
+    if not isinstance(items, dict):
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 的 array 缺少 items：拒绝产出。")
+    allowed_item_keys = {"type", "enum", "description", "title", "deprecated"}
+    unknown = sorted(key for key in items if key not in allowed_item_keys and not key.startswith("x-"))
+    values = items.get("enum")
+    if unknown or items.get("type") != "string" or not isinstance(values, list) \
+            or not values or any(not isinstance(value, str) or not value for value in values) \
+            or len(values) != len(set(values)):
+        raise GenerationError(
+            f"operation {op_path} 的参数 {name} 的 items 不是受支持的唯一值字符串枚举：拒绝产出。")
+    return values
+
+
 def validate_parameter_schema(parameter: dict, op_path: str, name: str,
                               contract: dict | None = None,
-                              allow_query_enum_ref: bool = False) -> tuple[str, str]:
+                              allow_query_enum_ref: bool = False,
+                              allow_query_enum_array: bool = False,
+                              method: str = "") -> tuple[str, str]:
     """返回 (C# 类型, 形状校验名)。只接受实际契约里出现的参数类型，
     且只有一小撮 format 能映射成可执行校验；其它形状一律拒绝。"""
     schema = parameter.get("schema") or {}
+    if allow_query_enum_array and schema.get("type") == "array":
+        repeated_query_enum_reference(parameter, op_path, name, method)
+        return "string", "enum-repeated"
     allowed_keys = {"$ref", "type", "format", "description", "example", "title", "deprecated", "default", "nullable"}
     unknown = sorted(key for key in schema if key not in allowed_keys and not key.startswith("x-"))
     if unknown:
@@ -389,7 +449,11 @@ def validate_parameters(op: dict, op_path: str, path_item: dict | None = None,
                 parameter, op_path, name, contract,
                 allow_query_enum_ref=(method == "GET" and
                                       op_path == "/api/v1/native-notes/task-suggestions" and
-                                      name == "status"))
+                                      name == "status"),
+                allow_query_enum_array=(method == "GET" and
+                                        op_path == "/api/v1/calendar/tasks" and
+                                        name == "status"),
+                method=method)
             continue
 
         if location == "header":
@@ -1138,19 +1202,26 @@ def operation_metadata(entry: dict, contract: dict) -> dict:
     for parameter in parameters:
         name = str(parameter.get("name") or "")
         location = parameter.get("in")
+        if location == "query" and (method, full_path, name) in REPEATED_QUERY_ENUM_BOUNDARIES:
+            allowed_values = repeated_query_enum_reference(parameter, full_path, name, method)
+            query_parameters.append((
+                name, "enum", parameter.get("required") is True, allowed_values, True))
+            continue
         _, shape = validate_parameter_schema(
             parameter, full_path, name, contract,
             allow_query_enum_ref=(
                 method == "GET" and location == "query" and
                 full_path == "/api/v1/native-notes/task-suggestions" and
-                name == "status"))
+                name == "status"),
+            method=method)
         if parameter.get("in") == "path":
             route_kinds.append((name, shape))
         elif parameter.get("in") == "query":
             allowed_values = (
                 query_enum_reference(parameter, full_path, name, contract)[1]
                 if shape == "enum" else None)
-            query_parameters.append((name, shape, parameter.get("required") is True, allowed_values))
+            query_parameters.append((
+                name, shape, parameter.get("required") is True, allowed_values, False))
         elif parameter.get("in") == "header":
             request_headers.append((name, shape))
     response_media = "application/json"
@@ -1205,8 +1276,9 @@ def render_operation_entry(entry: dict, contract: dict) -> list[str]:
         f'new("{name}", "{kind}", {str(required).lower()}'
         + (f', new string[] {{ {", ".join(json.dumps(value) for value in allowed_values)} }}'
            if allowed_values is not None else "")
+        + (", true" if repeated else "")
         + ")"
-        for name, kind, required, allowed_values in metadata["queryParameters"])
+        for name, kind, required, allowed_values, repeated in metadata["queryParameters"])
     request_headers = ", ".join(
         f'new("{name}", "{kind}")' for name, kind in metadata["requestHeaders"])
     response_headers = ", ".join(
@@ -1242,7 +1314,7 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "/// 需要契约里没有的接口时：不要在这里加，按 AGENTS.md「接口契约与门禁」把需求交给后端。",
         "/// </summary>",
         "public sealed record ContractHeader(string Name, string Kind);",
-        "public sealed record ContractQueryParameter(string Name, string Kind, bool Required, System.Collections.Generic.IReadOnlyList<string>? AllowedValues = null);",
+        "public sealed record ContractQueryParameter(string Name, string Kind, bool Required, System.Collections.Generic.IReadOnlyList<string>? AllowedValues = null, bool Repeated = false);",
         "",
         "public sealed class ContractOperation",
         "{",
@@ -1284,7 +1356,7 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "    /// <summary>路由参数的类型校验规则（uuid / int32 / int64 / plain-string）。</summary>",
         "    public System.Collections.Generic.IReadOnlyList<ContractHeader> RouteParameterKinds { get; }",
         "",
-        "    /// <summary>契约声明的标量 query 参数，按契约顺序序列化。</summary>",
+        "    /// <summary>契约声明的 query 参数（标量或可重复枚举），按契约顺序序列化。</summary>",
         "    public System.Collections.Generic.IReadOnlyList<ContractQueryParameter> QueryParameters { get; }",
         "",
         "    /// <summary>契约要求的必需请求 header。</summary>",
