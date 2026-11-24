@@ -65,6 +65,7 @@
                                 Click="OnEditHandwriting" />
                         <Button x:Name="DeleteHandwritingButton" Content="删除所选手写"
                                 Style="{StaticResource PimSecondaryButton}" IsEnabled="False"
+                                ToolTip="选择手写预览（.png）后，删除它和唯一配对的笔迹源；不会删除照片、录音或历史版本"
                                 Click="OnDeleteHandwriting" />
                     </StackPanel>
                     <TextBlock DockPanel.Dock="Top" Text="当前固定版本中的材料（双击照片预览或音频回放）" FontSize="12"

@@ -151,4 +151,107 @@ public sealed class HandwritingWindowLayoutTests(WpfApplicationFixture wpf)
             window.Close();
         });
     }
+
+    [Fact]
+    public void MovedMultipleSelectedStrokesUndoAndRedoAsOneStep()
+    {
+        wpf.Run(() =>
+        {
+            var window = new HandwritingWindow();
+            window.Show();
+            window.UpdateLayout();
+            window.Editor.BeginStroke(new LocalInkPoint(20, 30, 0.5));
+            window.Editor.AppendPoint(new LocalInkPoint(60, 70, 0.6));
+            window.Editor.AppendPoint(new LocalInkPoint(100, 110, 0.4));
+            var first = window.Editor.EndStroke();
+            window.Editor.BeginStroke(new LocalInkPoint(160, 50, 0.5));
+            window.Editor.AppendPoint(new LocalInkPoint(210, 90, 0.5));
+            window.Editor.AppendPoint(new LocalInkPoint(250, 140, 0.5));
+            var second = window.Editor.EndStroke();
+            window.RefreshCanvasFromEditorForTest();
+            window.UpdateLayout();
+
+            var original = window.Editor.Strokes.ToArray();
+            var canvas = Assert.IsType<InkCanvas>(window.FindName("Canvas"));
+            canvas.Select(new StrokeCollection(canvas.Strokes));
+            canvas.Strokes.Transform(
+                new System.Windows.Media.Matrix(1, 0, 0, 1, 24, 16),
+                applyToStylusTip: false);
+            var onMoved = typeof(InkCanvas).GetMethod(
+                "OnSelectionMoved",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(onMoved);
+            onMoved.Invoke(canvas, [EventArgs.Empty]);
+
+            var moved = window.Editor.Strokes.ToArray();
+            Assert.Equal(new[] { first!.Id, second!.Id }, moved.Select(stroke => stroke.Id));
+            Assert.Equal(
+                original.SelectMany(stroke => stroke.Points.Select(point => (point.X + 24, point.Y + 16))),
+                moved.SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))));
+
+            var undoButton = Assert.IsType<Button>(window.FindName("UndoButton"));
+            undoButton.RaiseEvent(new System.Windows.RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(
+                original.SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))),
+                window.Editor.Strokes.SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))));
+
+            var redoButton = Assert.IsType<Button>(window.FindName("RedoButton"));
+            redoButton.RaiseEvent(new System.Windows.RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(
+                moved.SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))),
+                window.Editor.Strokes.SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))));
+            window.Close();
+        });
+    }
+
+    [Fact]
+    public void InvalidGroupMoveRestoresCanvasToLastValidInkState()
+    {
+        wpf.Run(() =>
+        {
+            var window = new HandwritingWindow();
+            window.Show();
+            window.UpdateLayout();
+            window.Editor.BeginStroke(new LocalInkPoint(20, 30, 0.5));
+            window.Editor.AppendPoint(new LocalInkPoint(60, 70, 0.6));
+            window.Editor.AppendPoint(new LocalInkPoint(100, 110, 0.4));
+            var first = window.Editor.EndStroke();
+            window.Editor.BeginStroke(new LocalInkPoint(160, 50, 0.5));
+            window.Editor.AppendPoint(new LocalInkPoint(210, 90, 0.5));
+            window.Editor.AppendPoint(new LocalInkPoint(250, 140, 0.5));
+            var second = window.Editor.EndStroke();
+            window.RefreshCanvasFromEditorForTest();
+            window.UpdateLayout();
+
+            var original = window.Editor.Strokes.ToArray();
+            var canvas = Assert.IsType<InkCanvas>(window.FindName("Canvas"));
+            canvas.Select(new StrokeCollection(canvas.Strokes));
+            canvas.Strokes.Transform(
+                new System.Windows.Media.Matrix(1, 0, 0, 1, 5000, 5000),
+                applyToStylusTip: false);
+            var onMoved = typeof(InkCanvas).GetMethod(
+                "OnSelectionMoved",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(onMoved);
+            onMoved.Invoke(canvas, [EventArgs.Empty]);
+
+            Assert.Equal(new[] { first!.Id, second!.Id }, window.Editor.Strokes.Select(stroke => stroke.Id));
+            Assert.Equal(
+                original.SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))),
+                window.Editor.Strokes.SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))));
+            Assert.Equal(2, canvas.Strokes.Count);
+            Assert.Equal(
+                original.SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))),
+                HandwritingStrokeMapper.FromStrokes(canvas.Strokes)
+                    .SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))));
+            var status = Assert.IsType<TextBlock>(window.FindName("StatusText"));
+            Assert.Contains("恢复到上次有效状态", status.Text, StringComparison.Ordinal);
+
+            var undoButton = Assert.IsType<Button>(window.FindName("UndoButton"));
+            undoButton.RaiseEvent(new System.Windows.RoutedEventArgs(Button.ClickEvent));
+            Assert.Single(window.Editor.Strokes);
+            Assert.Single(canvas.Strokes);
+            window.Close();
+        });
+    }
 }

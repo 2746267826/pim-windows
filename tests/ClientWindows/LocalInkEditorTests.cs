@@ -164,6 +164,48 @@ public sealed class LocalInkEditorTests : IDisposable
     }
 
     [Fact]
+    public void MovedTwoStrokesAreOneUndoStepAndOneRedoRestoresTheGroup()
+    {
+        var editor = new LocalInkEditor(680, 420);
+        DrawStroke(editor, 10, 10, 80, 80);
+        DrawStroke(editor, 150, 40, 220, 120);
+        var originals = editor.Strokes.ToArray();
+        var moved = new[]
+        {
+            Move(originals[0], 25, 15),
+            Move(originals[1], 18, 12),
+        };
+
+        Assert.Equal(2, editor.UpdateStrokeGeometry(moved));
+        AssertStrokePoints(moved, editor.Strokes);
+
+        Assert.True(editor.Undo());
+        AssertStrokePoints(originals, editor.Strokes);
+
+        Assert.True(editor.Redo());
+        AssertStrokePoints(moved, editor.Strokes);
+    }
+
+    [Fact]
+    public void MultiStrokeMoveOutsideCanvasIsRejectedWithoutAnUndoStep()
+    {
+        var editor = new LocalInkEditor(320, 180);
+        DrawStroke(editor, 10, 10, 80, 80);
+        DrawStroke(editor, 100, 20, 160, 90);
+        var originals = editor.Strokes.ToArray();
+        var stillInside = Move(originals[0], 15, 10);
+        var outside = Move(originals[1], 400, 0);
+
+        Assert.Throws<InvalidDataException>(() =>
+            editor.UpdateStrokeGeometry([stillInside, outside]));
+
+        AssertStrokePoints(originals, editor.Strokes);
+        Assert.True(editor.Undo());
+        Assert.Single(editor.Strokes);
+        AssertStrokePoints([originals[0]], editor.Strokes);
+    }
+
+    [Fact]
     public void InvalidSelectionGeometryUpdatesAreAtomic()
     {
         var editor = new LocalInkEditor(320, 180);
@@ -227,6 +269,36 @@ public sealed class LocalInkEditorTests : IDisposable
         Assert.Single(editor.Strokes);
         Assert.True(editor.Undo());
         Assert.Empty(editor.Strokes);
+    }
+
+    [Fact]
+    public void MultiStrokePasteClampsTheGroupAtTheEdgeAndUndoesAsOneStep()
+    {
+        var editor = new LocalInkEditor(100, 100);
+        DrawStroke(editor, 60, 60, 80, 80);
+        DrawStroke(editor, 82, 70, 98, 92);
+        var originals = editor.Strokes.ToArray();
+        var clipboard = editor.Copy(originals.Select(stroke => stroke.Id).ToArray());
+
+        var pasted = editor.Paste(clipboard);
+
+        Assert.Equal(2, pasted.Count);
+        Assert.Equal(4, editor.Strokes.Count);
+        Assert.All(pasted.SelectMany(stroke => stroke.Points), point =>
+        {
+            Assert.InRange(point.X, 0, 100);
+            Assert.InRange(point.Y, 0, 100);
+        });
+        var offsetX = pasted[0].Points[0].X - originals[0].Points[0].X;
+        var offsetY = pasted[0].Points[0].Y - originals[0].Points[0].Y;
+        Assert.Equal(
+            originals[1].Points.Select(point => (point.X + offsetX, point.Y + offsetY)),
+            pasted[1].Points.Select(point => (point.X, point.Y)));
+
+        Assert.True(editor.Undo());
+        AssertStrokePoints(originals, editor.Strokes);
+        Assert.True(editor.Redo());
+        Assert.Equal(4, editor.Strokes.Count);
     }
 
     [Fact]
@@ -326,6 +398,175 @@ public sealed class LocalInkEditorTests : IDisposable
     }
 
     [Fact]
+    public async Task RemovingOneHandwritingKeepsRecordingPhotoOtherPairAndHistory()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("删除单组手写");
+        var photoBytes = Encoding.UTF8.GetBytes("photo-bytes");
+        var withPhoto = await store.AddMaterialsAsync(note.NoteId,
+        [
+            new LocalNoteMaterialInput(
+                new MemoryStream(photoBytes),
+                "board.png",
+                LocalNoteMaterialKind.Photo,
+                "image/png"),
+        ]);
+        var firstPng = new byte[] { 0x89, 0x50, 0x4E, 0x47, 1 };
+        const string firstInk =
+            """{"schemaVersion":1,"width":320,"height":180,"strokes":[[[10,20,0.5],[30,40,0.5]]]}""";
+        var withFirst = await store.AddHandwritingAsync(
+            note.NoteId,
+            new MemoryStream(firstPng),
+            firstInk,
+            "手写 A",
+            320,
+            180,
+            expectedCurrentVersionId: withPhoto.CurrentVersionId);
+        var recordingBytes = Encoding.UTF8.GetBytes("recording-bytes");
+        var withRecording = await store.AddMaterialsAsync(note.NoteId,
+        [
+            new LocalNoteMaterialInput(
+                new MemoryStream(recordingBytes),
+                "录音.wav",
+                LocalNoteMaterialKind.Recording,
+                "audio/wav",
+                DurationMilliseconds: 100),
+        ],
+        expectedCurrentVersionId: withFirst.CurrentVersionId);
+        var secondPng = new byte[] { 0x89, 0x50, 0x4E, 0x47, 2 };
+        const string secondInk =
+            """{"schemaVersion":1,"width":320,"height":180,"strokes":[[[50,60,0.5],[70,80,0.5]]]}""";
+        var withSecond = await store.AddHandwritingAsync(
+            note.NoteId,
+            new MemoryStream(secondPng),
+            secondInk,
+            "手写 B",
+            320,
+            180,
+            expectedCurrentVersionId: withRecording.CurrentVersionId);
+
+        var firstPreview = withSecond.Materials.Single(material =>
+            material.Kind == LocalNoteMaterialKind.Handwriting
+            && material.DisplayName == "手写 A.png");
+        var firstSource = withSecond.Materials.Single(material =>
+            material.Kind == LocalNoteMaterialKind.HandwritingSource
+            && material.DisplayName == "手写 A.ink.json");
+        var secondPreview = withSecond.Materials.Single(material =>
+            material.Kind == LocalNoteMaterialKind.Handwriting
+            && material.DisplayName == "手写 B.png");
+        var secondSource = withSecond.Materials.Single(material =>
+            material.Kind == LocalNoteMaterialKind.HandwritingSource
+            && material.DisplayName == "手写 B.ink.json");
+        var recording = withSecond.Materials.Single(material =>
+            material.Kind == LocalNoteMaterialKind.Recording);
+
+        var removed = await store.RemoveHandwritingAsync(
+            note.NoteId,
+            firstPreview.MaterialId,
+            expectedCurrentVersionId: withSecond.CurrentVersionId);
+
+        Assert.NotEqual(withSecond.CurrentVersionId, removed.CurrentVersionId);
+        Assert.Equal(
+            new[]
+            {
+                LocalNoteMaterialKind.Photo,
+                LocalNoteMaterialKind.Recording,
+                LocalNoteMaterialKind.Handwriting,
+                LocalNoteMaterialKind.HandwritingSource,
+            },
+            removed.Materials.Select(material => material.Kind));
+        Assert.Contains(removed.Materials, material => material.MaterialId == recording.MaterialId);
+        Assert.Contains(removed.Materials, material => material.MaterialId == secondPreview.MaterialId);
+        Assert.Contains(removed.Materials, material => material.MaterialId == secondSource.MaterialId);
+        Assert.DoesNotContain(removed.Materials, material => material.MaterialId == firstSource.MaterialId);
+        Assert.True(File.Exists(Path.Combine(_root, firstPreview.RelativePath)));
+        Assert.True(File.Exists(Path.Combine(_root, firstSource.RelativePath)));
+
+        var history = await store.LoadVersionAsync(note.NoteId, withSecond.CurrentVersionId);
+        Assert.Equal(withSecond.Materials.Select(material => material.MaterialId), history.MaterialIds);
+        var unchanged = await store.LoadAsync(note.NoteId);
+        Assert.Equal(removed.CurrentVersionId, unchanged.CurrentVersionId);
+    }
+
+    [Fact]
+    public async Task DeletingPreviewFromOlderVersionIsRejectedAndKeepsCurrentVersion()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("跨版本删除");
+        var firstPng = new byte[] { 0x89, 0x50, 0x4E, 0x47, 1 };
+        const string firstInk =
+            """{"schemaVersion":1,"width":320,"height":180,"strokes":[[[10,20,0.5],[30,40,0.5]]]}""";
+        var withFirst = await store.AddHandwritingAsync(
+            note.NoteId,
+            new MemoryStream(firstPng),
+            firstInk,
+            "旧手写",
+            320,
+            180,
+            expectedCurrentVersionId: note.CurrentVersionId);
+        var oldPreview = withFirst.Materials.Single(material =>
+            material.Kind == LocalNoteMaterialKind.Handwriting);
+        var removed = await store.RemoveHandwritingAsync(
+            note.NoteId,
+            oldPreview.MaterialId,
+            expectedCurrentVersionId: withFirst.CurrentVersionId);
+        var secondPng = new byte[] { 0x89, 0x50, 0x4E, 0x47, 2 };
+        const string secondInk =
+            """{"schemaVersion":1,"width":320,"height":180,"strokes":[[[50,60,0.5],[70,80,0.5]]]}""";
+        var withSecond = await store.AddHandwritingAsync(
+            note.NoteId,
+            new MemoryStream(secondPng),
+            secondInk,
+            "新手写",
+            320,
+            180,
+            expectedCurrentVersionId: removed.CurrentVersionId);
+
+        var rejected = await Assert.ThrowsAsync<LocalNoteStoreException>(() =>
+            store.RemoveHandwritingAsync(
+                note.NoteId,
+                oldPreview.MaterialId,
+                expectedCurrentVersionId: withSecond.CurrentVersionId));
+
+        Assert.Contains("不在当前固定版本", rejected.Message, StringComparison.Ordinal);
+        var unchanged = await store.LoadAsync(note.NoteId);
+        Assert.Equal(withSecond.CurrentVersionId, unchanged.CurrentVersionId);
+        Assert.Equal(
+            withSecond.Materials.Select(material => material.MaterialId),
+            unchanged.Materials.Select(material => material.MaterialId));
+        var currentVersion = await store.LoadVersionAsync(note.NoteId, withSecond.CurrentVersionId);
+        Assert.Equal(withSecond.Materials.Count, currentVersion.MaterialIds.Count);
+    }
+
+    [Fact]
+    public void HandwritingPairResolutionRejectsMissingDuplicateOrMismatchedSource()
+    {
+        var preview = Material(Guid.NewGuid(), LocalNoteMaterialKind.Handwriting, "手写.png", 320, 180);
+        var source = Material(Guid.NewGuid(), LocalNoteMaterialKind.HandwritingSource, "手写.ink.json", 320, 180);
+        var photo = Material(Guid.NewGuid(), LocalNoteMaterialKind.Photo, "照片.png", 320, 180);
+
+        Assert.Equal(
+            source.MaterialId,
+            LocalInkMaterialPairing.ResolveSource(
+                preview.MaterialId,
+                [photo, preview, source]).MaterialId);
+        Assert.Throws<InvalidDataException>(() =>
+            LocalInkMaterialPairing.ResolveSource(preview.MaterialId, [preview]));
+        Assert.Throws<InvalidDataException>(() =>
+            LocalInkMaterialPairing.ResolveSource(preview.MaterialId, [preview, photo]));
+        Assert.Throws<InvalidDataException>(() =>
+            LocalInkMaterialPairing.ResolveSource(
+                preview.MaterialId,
+                [preview, source with { Width = 1 }]));
+        Assert.Throws<InvalidDataException>(() =>
+            LocalInkMaterialPairing.ResolveSource(
+                preview.MaterialId,
+                [preview, source, preview]));
+        Assert.Throws<InvalidDataException>(() =>
+            LocalInkMaterialPairing.ResolveSource(photo.MaterialId, [photo, preview, source]));
+    }
+
+    [Fact]
     public void InvalidLoadedDocumentIsRejected()
     {
         Assert.Throws<InvalidDataException>(() => new LocalInkEditor(new LocalInkDocument(
@@ -350,6 +591,44 @@ public sealed class LocalInkEditorTests : IDisposable
         editor.AppendPoint(new LocalInkPoint(x2, y2, 0.4));
         Assert.NotNull(editor.EndStroke());
     }
+
+    private static LocalInkStroke Move(LocalInkStroke stroke, double offsetX, double offsetY)
+        => stroke with
+        {
+            Points = stroke.Points
+                .Select(point => new LocalInkPoint(point.X + offsetX, point.Y + offsetY, point.Pressure))
+                .ToArray(),
+        };
+
+    private static void AssertStrokePoints(
+        IReadOnlyList<LocalInkStroke> expected,
+        IReadOnlyList<LocalInkStroke> actual)
+    {
+        Assert.Equal(expected.Select(stroke => stroke.Id), actual.Select(stroke => stroke.Id));
+        Assert.Equal(
+            expected.SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))),
+            actual.SelectMany(stroke => stroke.Points.Select(point => (point.X, point.Y))));
+    }
+
+    private static LocalNoteMaterial Material(
+        Guid id,
+        LocalNoteMaterialKind kind,
+        string displayName,
+        int? width,
+        int? height)
+        => new()
+        {
+            MaterialId = id,
+            Kind = kind,
+            DisplayName = displayName,
+            ContentSha256 = new string('0', 64),
+            RelativePath = "materials/" + displayName,
+            MediaType = "application/octet-stream",
+            Length = 1,
+            AddedAt = DateTimeOffset.UnixEpoch,
+            Width = width,
+            Height = height,
+        };
 
     public void Dispose()
     {
