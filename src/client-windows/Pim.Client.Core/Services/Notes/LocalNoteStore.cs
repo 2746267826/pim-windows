@@ -287,6 +287,64 @@ public sealed class LocalNoteStore
         return await AddMaterialsAsync(noteId, inputs, cancellationToken, expectedCurrentVersionId);
     }
 
+    public async Task<LocalNoteDocument> RemoveHandwritingAsync(
+        Guid noteId,
+        Guid previewMaterialId,
+        CancellationToken cancellationToken = default,
+        Guid? expectedCurrentVersionId = null)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var note = await LoadNoteLockedAsync(noteId, cancellationToken);
+            if (expectedCurrentVersionId is { } expectedVersionId
+                && note.CurrentVersionId != expectedVersionId)
+            {
+                throw new LocalNoteStoreException("笔记固定版本已变化；手写材料未删除，请重新打开后再编辑。");
+            }
+
+            if (note.IsServerSourceReadOnly)
+            {
+                throw new LocalNoteStoreException("该服务器混合材料版本在当前编辑器中只读；不能删除手写材料。");
+            }
+
+            var version = await LoadVersionLockedAsync(noteId, note.CurrentVersionId, cancellationToken);
+            var materials = ResolveVersionMaterials(note, version);
+            var preview = materials.FirstOrDefault(material => material.MaterialId == previewMaterialId)
+                ?? throw new LocalNoteStoreException("所选手写预览不在当前固定版本中。");
+            if (preview.Kind != LocalNoteMaterialKind.Handwriting)
+            {
+                throw new LocalNoteStoreException("只能删除当前固定版本中的手写预览及其笔迹源。");
+            }
+
+            LocalNoteMaterial source;
+            try
+            {
+                source = LocalInkMaterialPairing.ResolveSource(previewMaterialId, materials);
+            }
+            catch (InvalidDataException ex)
+            {
+                throw new LocalNoteStoreException("所选手写预览缺少唯一配对的笔迹源，已拒绝删除。", ex);
+            }
+
+            var remaining = materials
+                .Where(material => material.MaterialId != preview.MaterialId
+                    && material.MaterialId != source.MaterialId)
+                .ToArray();
+            return await CreateCheckpointLockedAsync(
+                note,
+                note.Title,
+                note.Markdown,
+                remaining,
+                LocalNoteCheckpointReason.ManualSave,
+                cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<LocalNoteVersion> LoadVersionAsync(
         Guid noteId,
         Guid versionId,

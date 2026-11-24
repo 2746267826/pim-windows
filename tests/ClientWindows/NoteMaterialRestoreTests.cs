@@ -48,6 +48,38 @@ public sealed class NoteMaterialRestoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadOnlyServerSourceHandwritingCannotBeDeletedLocally()
+    {
+        var fixture = await CreateMixedRecordingFixtureAsync();
+        var store = new LocalNoteStore(_root);
+        var service = CreateService(
+            CreateApi(new RestoreHandler(fixture)),
+            store,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+        var restored = await service.RestoreVersionAsync(
+            fixture.VersionId,
+            userConfirmedLocalCopy: true);
+        var note = await store.LoadAsync(restored.Import.NoteId);
+        Assert.True(note.IsServerSourceReadOnly);
+        var preview = Assert.Single(note.Materials, material =>
+            material.Kind == LocalNoteMaterialKind.Handwriting);
+        var source = Assert.Single(note.Materials, material =>
+            material.Kind == LocalNoteMaterialKind.HandwritingSource);
+
+        var rejected = await Assert.ThrowsAsync<LocalNoteStoreException>(() =>
+            store.RemoveHandwritingAsync(
+                note.NoteId,
+                preview.MaterialId,
+                expectedCurrentVersionId: note.CurrentVersionId));
+
+        Assert.Contains("只读", rejected.Message, StringComparison.Ordinal);
+        var unchanged = await store.LoadAsync(note.NoteId);
+        Assert.Equal(note.CurrentVersionId, unchanged.CurrentVersionId);
+        Assert.Contains(unchanged.Materials, material => material.MaterialId == preview.MaterialId);
+        Assert.Contains(unchanged.Materials, material => material.MaterialId == source.MaterialId);
+    }
+
+    [Fact]
     public async Task RestorePreservesInterleavedBlocksAndEveryRecordingSegmentThroughZipAndUploadBuild()
     {
         var fixture = await CreateMixedRecordingFixtureAsync();
