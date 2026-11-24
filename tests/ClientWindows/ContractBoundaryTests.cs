@@ -395,6 +395,34 @@ public class ContractBoundaryBehaviorTests
     }
 
     [Fact]
+    public async Task TaskStatusQueryRepeatsValuesAndRejectsInvalidOrConflictingInputBeforeSending()
+    {
+        var handler = new RecordingHandler();
+        var api = new ApiClient(() => handler);
+
+        await api.GetTasksAsync(
+            statuses: ["NEEDS-ACTION", "IN-PROCESS", "NEEDS-ACTION"],
+            pageSize: 25);
+        await api.GetTasksAsync(statuses: []);
+
+        Assert.Equal(
+            [
+                "?status=NEEDS-ACTION&status=IN-PROCESS&page=1&pageSize=25",
+                "?page=1&pageSize=100",
+            ],
+            handler.Requests.Select(request => request.Query).ToArray());
+        Assert.Throws<ArgumentException>(
+            () => api.GetTasksAsync(statuses: ["NEEDS-ACTION", ""]));
+        Assert.Throws<ArgumentException>(
+            () => api.GetTasksAsync(
+                status: "NEEDS-ACTION",
+                statuses: ["IN-PROCESS"]));
+        Assert.Throws<ArgumentException>(
+            () => api.GetTasksAsync(statuses: ["needs-action"]));
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
     public async Task CalendarAndTaskOperationsSendContractQueriesAndWireStatuses()
     {
         var handler = new RecordingHandler();
