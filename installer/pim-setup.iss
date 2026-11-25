@@ -53,14 +53,19 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-; 旧 Pim.Shell.App 仍由独立的 shell 发布工作流构建，但不再进入统一安装包；
+; 统一安装包只承载守护程序；旧 Pim.Shell.App 及其 WebView2 专属载荷不得进入发布目录。
 ; CloseApplications/KillPimProcesses 保留旧进程清理，确保覆盖安装能升级原位旧壳。
-Source: "{#PublishDir}\*"; DestDir: "{app}"; Excludes: "Pim.Shell.App.*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PublishDir}\*"; DestDir: "{app}"; Excludes: "Pim.Shell.App.*,Microsoft.Web.WebView2.*,WebView2Loader.dll"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
-; 覆盖安装时删除旧版开始菜单入口与旧壳文件；不触碰 Pim.Client.App 或 Web 兼容入口。
+; 覆盖安装时删除旧版开始菜单入口、旧壳文件和 WebView2 依赖；不触碰 Pim.Client.App 或 Web 兼容入口。
 Type: files; Name: "{group}\PIM Shell.lnk"
 Type: files; Name: "{app}\Pim.Shell.App.*"
+Type: files; Name: "{app}\Microsoft.Web.WebView2.*"
+Type: files; Name: "{app}\WebView2Loader.dll"
+Type: files; Name: "{app}\runtimes\win-x86\native\WebView2Loader.dll"
+Type: files; Name: "{app}\runtimes\win-x64\native\WebView2Loader.dll"
+Type: files; Name: "{app}\runtimes\win-arm64\native\WebView2Loader.dll"
 
 [Dirs]
 ; 预创建 WER 崩溃转储目录，并赋予标准用户修改权限，避免非提权进程崩溃时 WER 无权限写入

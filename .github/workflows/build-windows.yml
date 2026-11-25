@@ -108,7 +108,13 @@ jobs:
       # Windows 客户端的用例已迁入本仓 tests/ClientWindows/，但测试工程尚未建立
       # （启用条件见 tests/ClientWindows/README.md）。工程就位后本步骤自动生效。
       - name: Publish Daemon
+        shell: pwsh
         run: |
+          # publish/ 是统一安装包的唯一来源，必须每次从空目录开始：
+          # 旧壳或上一次构建的 WebView2 载荷不能借复用目录混入 ZIP/安装器。
+          if (Test-Path publish) { Remove-Item -LiteralPath publish -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path publish | Out-Null
+
           dotnet publish Pim.Client.App/Pim.Client.App.csproj `
             -c Release `
             -o publish/ `
@@ -116,16 +122,7 @@ jobs:
             -p:InformationalVersion=${{ steps.ver.outputs.version }} `
             -p:Version=${{ steps.ver.outputs.assembly_version }} `
             -p:FileVersion=${{ steps.ver.outputs.assembly_version }}
-
-      - name: Publish Shell
-        run: |
-          dotnet publish ../../src/client-shell-windows/Pim.Shell.App/Pim.Shell.App.csproj `
-            -c Release `
-            -o publish/ `
-            --self-contained false `
-            -p:InformationalVersion=${{ steps.ver.outputs.version }} `
-            -p:Version=${{ steps.ver.outputs.assembly_version }} `
-            -p:FileVersion=${{ steps.ver.outputs.assembly_version }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # 供应链固定（审计 F-08）：这里以前是 `git clone --depth 1` 直接拿默认分支的
       # 最新提交，安装器会打包随时间变化、且从未被本仓评审过的上游代码。
@@ -332,6 +329,7 @@ jobs:
           node --test scripts/ci/test-zip-writer.mjs
           node --test scripts/ci/test-verify-extension-zips.mjs
           node --test scripts/ci/test-site-reporter-guard.mjs
+          node --test scripts/ci/test-windows-payload.mjs
 
       - name: Verify packaged extensions
         shell: bash
@@ -363,6 +361,14 @@ jobs:
       - name: Package Windows build
         shell: pwsh
         run: Compress-Archive -Path publish/* -DestinationPath pim-windows-v${{ steps.ver.outputs.artifact_slug }}.zip
+
+      - name: Verify Windows payload manifest
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          node scripts/ci/verify-windows-payload.mjs \
+            --dir src/client-windows/publish \
+            --zip src/client-windows/pim-windows-v${{ steps.ver.outputs.artifact_slug }}.zip
 
       - name: Build Inno Setup installer
         shell: pwsh

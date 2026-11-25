@@ -69,7 +69,7 @@
 | --- | --- | --- |
 | MIG-01 今日、工作台 | 新增纯原生 `NativeWorkbenchWindow` 作为主工作台，从托盘「原生工作台」或托盘双击打开；原生 Today、原生日历/任务、原生笔记、电脑记录、应用知识、设备中心与状态中心均从原生入口进入；读取当前账户今日到期任务与今日日程，支持快速新建今日任务、标记完成和打开完整原生规划器；旧 `/today` 和 `/quick-notes` 仍保留系统浏览器 Web 兼容入口 | 今日与工作台主入口已原生化且不再依赖内嵌 WebView；复杂日程编辑、工作台全部 Web tile、旧 `Pim.Shell.App` 独立发布物和真实桌面流程仍未迁移或验证 |
 | MIG-02 日历、任务、日历本/任务本 | 新增原生规划工作台，按契约 operation 读取日历/分页日程/任务本/分页任务，可按时间范围、日历、多选状态和标题筛选（空选表示全部，重复去重，非法值请求前拒绝）；支持创建日程、创建任务、选择任务本、将任务标记完成 | 读取与常见创建/完成动作已原生；系列/重复、提醒、附件、任务规划/分段、批量操作及完整日历本管理仍未迁移。任务状态多选已完成客户端实现与自动化测试，真实桌面交互仍需人工验收 |
-| MIG-03 确认中心、提醒、习惯、报告、数据中心 | Shell 路由 `/confirmations`、`/reports`、`/data-center`；`NotificationActionRouter` 可发端点通知动作，但业务页面仍 Web | 混合，业务未原生化 |
+| MIG-03 确认中心、提醒、习惯、报告、数据中心 | Shell 路由 `/confirmations`、`/reports`、`/data-center`；`NotificationActionRouter` 只做风险分级与端点通知动作 API 调用，系统 toast、点击激活和深链注册仍未接入；业务页面仍 Web | 混合，业务未原生化；通知深链需后续交付 |
 | MIG-04 快速记录、文件 | 旧快速记录有显式 Web 兼容入口 `/quick-notes`；旧附件仍由服务端/Web；本机新笔记独立保存，二者未合并 | 旧入口保留；迁移未完成 |
 | MIG-05 电脑记录、浏览器使用、电脑明细 | `NativeTrackerService`、`TrackerLogger`、`TrackerSessionManager`、`BrowserBridgeService`、KeyStats 采集与上传均原生保留；本机历史继续按最近 30 天、10,000 条、64 MB 有界保留，支持今天/7/30 天、类别、搜索和明细；新增“服务器历史”模式，按最多 31 天的日期范围、当前账号设备和 `window`/`web`/`web-page` 类型查询已上传详情；服务端每页最多 200 条、最多浏览 25 页（5,000 条），明确提示截断及空结果不证明采集/上传完整 | 本机与服务器查询入口均有原生实现；服务端历史依赖已上传数据及现有 owner-scoped API。未覆盖上传前数据、本地与远端合并、超过客户端预算的完整导出或真实多设备/浏览器数据验收，不能标全量迁移完成 |
 | MIG-06 手机记录、历史位置 | Windows 无手机采集、地图/轨迹业务 UI | WebView-only |
@@ -78,7 +78,7 @@
 | MIG-09 登录、初始化、服务器、账号安全 | `LoginWindow`、`AuthService`、DPAPI token 存储、服务器地址保存均原生；用户/管理员管理仍 Web | 原生复用强；管理员边界未迁移 |
 | MIG-10 Outlook、Drive、AI、MCP 设置 | 对应设置路由由 Web 承载；Windows 本地模型/运行时有独立原生状态 UI，但不等同完整第三方设置业务 | 基础组件可复用，业务 WebView-only |
 | MIG-11 系统状态、可靠性、数据/日历管理、回收站、审计 | `StatusWindow`、Bootstrap/daemon 日志、采集状态、本地模型状态为原生；数据修复/回收站/审计仍 Web | 状态诊断部分复用，其余未迁移 |
-| MIG-12 端点/壳入口、嵌入页、旧路由别名 | 已移除不可达的 `MainShellWindow`/`EmbeddedWebViewHost` 与守护程序内 WebView2 依赖；托盘和原生工作台均以原生窗口为主，Web 页面只通过系统浏览器显式兼容入口打开；认证与通知动作路由可复用 | 守护程序内嵌 WebView 已清理；独立 `Pim.Shell.App` 发布工件仍由现有 workflow 构建，产品是否退役该工件仍需单独裁决 |
-| MIG-13 安装更新、托盘/通知、采集启停、队列同步、设置 | 托盘、通知路由、自动启动、更新检查、Tracker/BrowserBridge/KeyStats、守护进程退出路径均保留；`WindowsRecordingService` 为 DI 单例，关闭笔记窗口只解绑 UI 事件，不停止录音 | 生命周期复用强；仍需真实安装/升级与设备/长时验收 |
+| MIG-12 端点/壳入口、嵌入页、旧路由别名 | 已移除不可达的 `MainShellWindow`/`EmbeddedWebViewHost` 与守护程序内 WebView2 依赖；托盘和原生工作台均以原生窗口为主，Web 页面只通过系统浏览器显式兼容入口打开；认证与通知动作路由可复用 | 守护程序内嵌 WebView 已清理；统一 `pim-windows` ZIP/安装器已排除旧壳与 WebView2 载荷，但独立 `Pim.Shell.App` 发布工件仍由现有 workflow 构建，旧壳/Tauri 退役仍需单独交付 |
+| MIG-13 安装更新、托盘/通知、采集启停、队列同步、设置 | 托盘、通知动作路由、自动启动、更新检查、Tracker/BrowserBridge/KeyStats、守护进程退出路径均保留；`WindowsRecordingService` 为 DI 单例，关闭笔记窗口只解绑 UI 事件，不停止录音 | 生命周期复用强；系统通知展示与深链未接入，仍需真实安装/升级与设备/长时验收 |
 
 结论：本批新增的是 Windows 本机主动笔记纵向能力，以及 MIG-04/MIG-13 的兼容入口和生命周期证据；MIG-02、MIG-05、MIG-08 也只在上表列出的动作上部分原生化，没有任何 MIG-01 至 MIG-13 因本批自动销项。

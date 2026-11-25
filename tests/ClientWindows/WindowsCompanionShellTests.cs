@@ -64,9 +64,26 @@ public class WindowsCompanionShellTests
         var installer = File.ReadAllText(RepoPath("installer", "pim-setup.iss"));
 
         Assert.DoesNotContain("Name: \"{group}\\PIM Shell\"", installer, StringComparison.Ordinal);
-        Assert.Contains("Excludes: \"Pim.Shell.App.*\"", installer, StringComparison.Ordinal);
+        Assert.Contains(
+            "Excludes: \"Pim.Shell.App.*,Microsoft.Web.WebView2.*,WebView2Loader.dll\"",
+            installer,
+            StringComparison.Ordinal);
         Assert.Contains("Name: \"{group}\\PIM Shell.lnk\"", installer, StringComparison.Ordinal);
         Assert.Contains("Pim.Shell.App.exe", installer, StringComparison.Ordinal);
+        Assert.Contains("Type: files; Name: \"{app}\\Microsoft.Web.WebView2.*\"", installer, StringComparison.Ordinal);
+        Assert.Contains("Type: files; Name: \"{app}\\WebView2Loader.dll\"", installer, StringComparison.Ordinal);
+        Assert.Contains(
+            "Type: files; Name: \"{app}\\runtimes\\win-x64\\native\\WebView2Loader.dll\"",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Type: files; Name: \"{app}\\runtimes\\win-x86\\native\\WebView2Loader.dll\"",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Type: files; Name: \"{app}\\runtimes\\win-arm64\\native\\WebView2Loader.dll\"",
+            installer,
+            StringComparison.Ordinal);
     }
 
     private static string RepoPath(params string[] parts)
