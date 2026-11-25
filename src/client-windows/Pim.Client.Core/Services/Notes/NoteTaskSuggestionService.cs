@@ -12,7 +12,12 @@ public sealed record NoteTaskSuggestionEditDraft(
     int Priority,
     DateTimeOffset? Due,
     string? TaskBookId,
-    string? CalendarId);
+    string? CalendarId)
+{
+    public DateTimeOffset? Start { get; init; }
+    public DateTimeOffset? End { get; init; }
+    public string? TimeZoneId { get; init; }
+}
 
 public sealed record NoteTaskSuggestionSource(
     Guid NoteId,
@@ -298,9 +303,7 @@ public sealed class NoteTaskSuggestionService
 
             if (suggestion.Status == NoteTaskSuggestionStatusDto.Confirmed)
             {
-                if (!Guid.TryParse(suggestion.TaskId, out _))
-                    throw new InvalidDataException(
-                        "服务器已确认建议但没有有效任务标识；确认凭据仍保留。");
+                _ = RequireConfirmedReceipt(suggestion);
             }
             else if (suggestion.Status != NoteTaskSuggestionStatusDto.Dismissed)
             {
@@ -351,12 +354,13 @@ public sealed class NoteTaskSuggestionService
         NoteTaskSuggestionOperationFence? expectedFence = null)
     {
         ArgumentNullException.ThrowIfNull(suggestion);
-        ValidateDraft(draft);
         if (suggestion.Status != NoteTaskSuggestionStatusDto.Draft
             || !Guid.TryParse(suggestion.Id, out var suggestionId))
             throw new InvalidOperationException("只有有效的草稿建议可以编辑。");
         if (!string.Equals(RequireRevision(draft.ExpectedRevision), suggestion.Revision, StringComparison.Ordinal))
             throw new InvalidOperationException("任务建议已产生新修订；请刷新后再编辑，原草稿仍保留。");
+        ValidateDraft(draft);
+        ValidateDraftForSuggestion(draft, suggestion);
 
         using var operation = BeginOperation(expectedFence);
         using var suggestionGate = await AcquireSuggestionWriteGateAsync(suggestionId, cancellationToken)
@@ -368,16 +372,7 @@ public sealed class NoteTaskSuggestionService
         RequireCurrent(operation);
         var response = await _api.UpdateNoteTaskSuggestionAsync(
                 suggestionId,
-                new UpdateNoteTaskSuggestionRequest
-                {
-                    CalendarId = draft.CalendarId,
-                    Description = draft.Description,
-                    Due = draft.Due,
-                    ExpectedRevision = draft.ExpectedRevision,
-                    Priority = draft.Priority,
-                    TaskBookId = draft.TaskBookId,
-                    Title = draft.Title,
-                },
+                BuildUpdateRequest(suggestion, draft),
                 cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回编辑后的任务建议；本机草稿仍保留。");
@@ -439,7 +434,7 @@ public sealed class NoteTaskSuggestionService
         ArgumentNullException.ThrowIfNull(suggestion);
         if (suggestion.Status != NoteTaskSuggestionStatusDto.Draft
             || !Guid.TryParse(suggestion.Id, out var suggestionId))
-            throw new InvalidOperationException("只有有效的草稿建议可以确认并写入任务本。");
+            throw new InvalidOperationException("只有有效的草稿建议可以确认并写入任务本或日历。");
         expectedRevision = RequireMatchingRevision(expectedRevision, suggestion);
 
         using var operation = BeginOperation(expectedFence);
@@ -475,16 +470,14 @@ public sealed class NoteTaskSuggestionService
         RequireCurrent(operation);
         var confirmed = RequireResponse(response.Code, response.Message, response.Data);
         RequireSuggestionIdentity(confirmed, suggestion, NoteTaskSuggestionStatusDto.Confirmed);
-        if (!Guid.TryParse(confirmed.TaskId, out _))
-            throw new InvalidDataException("服务器确认了建议，但没有返回实际任务标识。");
+        _ = RequireConfirmedReceipt(confirmed);
         var verifiedResponse = await _api.GetNoteTaskSuggestionAsync(suggestionId, cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidDataException("确认回执已收到但无法读取服务器状态；确认凭据仍保留，可用同一请求安全重试。");
         RequireCurrent(operation);
         var verified = RequireResponse(verifiedResponse.Code, verifiedResponse.Message, verifiedResponse.Data);
         RequireSuggestionIdentity(verified, suggestion, NoteTaskSuggestionStatusDto.Confirmed);
-        if (!string.Equals(verified.TaskId, confirmed.TaskId, StringComparison.Ordinal))
-            throw new InvalidDataException("服务器确认状态的任务标识与确认回执不一致；确认凭据仍保留。");
+        RequireReceiptMatches(confirmed, verified);
         RequireCurrent(operation);
         await _local.DeleteConfirmationRequestAsync(
                 operation.Account,
@@ -613,6 +606,71 @@ public sealed class NoteTaskSuggestionService
             throw new ArgumentOutOfRangeException(nameof(draft), "任务优先级必须在 1 到 9 之间。");
         ValidateOptionalId(draft.TaskBookId, nameof(draft.TaskBookId));
         ValidateOptionalId(draft.CalendarId, nameof(draft.CalendarId));
+        if ((draft.Start is null) != (draft.End is null))
+            throw new ArgumentException("日程开始和结束时间必须同时提供或同时为空。", nameof(draft));
+        if (draft.Start is { } start && draft.End is { } end && end <= start)
+            throw new ArgumentException("日程结束时间必须晚于开始时间。", nameof(draft));
+        var timeZoneId = NoteTaskSuggestionEventTime.NormalizeTimeZoneId(draft.TimeZoneId);
+        if (timeZoneId is not null && !NoteTaskSuggestionEventTime.IsIanaTimeZone(timeZoneId))
+            throw new ArgumentException("日程时区必须是有效的 IANA 时区。", nameof(draft));
+    }
+
+    private static void ValidateDraftForSuggestion(
+        NoteTaskSuggestionEditDraft draft,
+        NoteTaskSuggestionDto suggestion)
+    {
+        if (suggestion.Kind == NoteTaskSuggestionKindDto.Task)
+        {
+            if (draft.Start is not null
+                || draft.End is not null
+                || NoteTaskSuggestionEventTime.NormalizeTimeZoneId(draft.TimeZoneId) is not null)
+                throw new ArgumentException("任务建议不能携带日程时间或时区。", nameof(draft));
+            return;
+        }
+
+        if (draft.Due is not null)
+            throw new ArgumentException("日程建议不能使用截止时间，请填写开始和结束时间。", nameof(draft));
+        if (draft.TaskBookId is not null)
+            throw new ArgumentException("日程建议不能写入任务本，请选择日程日历。", nameof(draft));
+
+        var timeZoneId = NoteTaskSuggestionEventTime.NormalizeTimeZoneId(draft.TimeZoneId)
+            ?? NoteTaskSuggestionEventTime.NormalizeTimeZoneId(suggestion.TimeZoneId);
+        if (timeZoneId is not null && !NoteTaskSuggestionEventTime.IsIanaTimeZone(timeZoneId))
+            throw new ArgumentException("日程时区必须是有效的 IANA 时区。", nameof(draft));
+
+        var start = draft.Start ?? suggestion.Start;
+        var end = draft.End ?? suggestion.End;
+        if (start is null || end is null)
+            throw new ArgumentException("日程开始和结束时间必须同时完整。", nameof(draft));
+        if (end <= start)
+            throw new ArgumentException("日程结束时间必须晚于开始时间。", nameof(draft));
+    }
+
+    private static UpdateNoteTaskSuggestionRequest BuildUpdateRequest(
+        NoteTaskSuggestionDto suggestion,
+        NoteTaskSuggestionEditDraft draft)
+    {
+        var isEvent = suggestion.Kind == NoteTaskSuggestionKindDto.Event;
+        var timeZoneId = isEvent
+            ? NoteTaskSuggestionEventTime.NormalizeTimeZoneId(draft.TimeZoneId)
+              ?? NoteTaskSuggestionEventTime.NormalizeTimeZoneId(suggestion.TimeZoneId)
+            : null;
+        if (timeZoneId is not null && !NoteTaskSuggestionEventTime.IsIanaTimeZone(timeZoneId))
+            throw new ArgumentException("日程时区必须是有效的 IANA 时区。", nameof(draft));
+
+        return new UpdateNoteTaskSuggestionRequest
+        {
+            CalendarId = draft.CalendarId,
+            Description = draft.Description,
+            Due = isEvent ? null : draft.Due,
+            End = isEvent ? draft.End ?? suggestion.End : null,
+            ExpectedRevision = draft.ExpectedRevision,
+            Priority = draft.Priority,
+            Start = isEvent ? draft.Start ?? suggestion.Start : null,
+            TaskBookId = isEvent ? null : draft.TaskBookId,
+            TimeZoneId = timeZoneId,
+            Title = draft.Title,
+        };
     }
 
     private static void ValidateOptionalId(string? value, string name)
@@ -681,8 +739,38 @@ public sealed class NoteTaskSuggestionService
             || !SameHash(actual.SourceInputSha256, expected.SourceInputSha256)
             || !SameHash(actual.SourceManifestSha256, expected.SourceManifestSha256)
             || !string.Equals(actual.SourceGenerationTaskId, expected.SourceGenerationTaskId, StringComparison.Ordinal)
+            || actual.Kind != expected.Kind
             || actual.Status != status)
             throw new InvalidDataException("服务器返回的任务建议身份或状态与本次操作不一致。");
+    }
+
+    private static Guid RequireConfirmedReceipt(NoteTaskSuggestionDto suggestion)
+    {
+        if (suggestion.Kind == NoteTaskSuggestionKindDto.Event)
+        {
+            return Guid.TryParse(suggestion.EventId, out var eventId)
+                ? eventId
+                : throw new InvalidDataException(
+                    "服务器已确认日程建议，但没有返回有效日程标识；确认凭据仍保留。");
+        }
+
+        return Guid.TryParse(suggestion.TaskId, out var taskId)
+            ? taskId
+            : throw new InvalidDataException(
+                "服务器已确认任务建议，但没有返回有效任务标识；确认凭据仍保留。");
+    }
+
+    private static void RequireReceiptMatches(
+        NoteTaskSuggestionDto confirmed,
+        NoteTaskSuggestionDto verified)
+    {
+        if (confirmed.Kind != verified.Kind)
+            throw new InvalidDataException("服务器确认状态的建议类型与确认回执不一致；确认凭据仍保留。");
+
+        var confirmedId = RequireConfirmedReceipt(confirmed);
+        var verifiedId = RequireConfirmedReceipt(verified);
+        if (confirmedId != verifiedId)
+            throw new InvalidDataException("服务器确认状态的目标标识与确认回执不一致；确认凭据仍保留。");
     }
 
     private static void RequirePendingMatchesSuggestion(
