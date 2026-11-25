@@ -30,6 +30,9 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
         Assert.Equal(
             "https://pim.example.test/quick-notes",
             WebCompatibilityLinks.BuildUrl("https://pim.example.test/api/v1/", "quick-notes"));
+        Assert.Equal(
+            "https://pim.example.test/",
+            WebCompatibilityLinks.BuildUrl("https://pim.example.test/api/v1", "/"));
         Assert.DoesNotContain(
             "token",
             WebCompatibilityLinks.BuildUrl("https://pim.example.test/api/v1", "/today"),

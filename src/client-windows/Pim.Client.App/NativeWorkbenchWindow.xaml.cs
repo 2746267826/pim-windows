@@ -86,7 +86,7 @@ public partial class NativeWorkbenchWindow : Window
         => WebCompatibilityLinks.Open(_api.CurrentBaseUrl, "/quick-notes");
 
     private void OnOpenWebWorkbench(object sender, RoutedEventArgs e)
-        => WebCompatibilityLinks.Open(_api.CurrentBaseUrl, "/today");
+        => WebCompatibilityLinks.Open(_api.CurrentBaseUrl, "/");
 
     private void OnClosed(object? sender, EventArgs e)
         => _api.ExternalScopeChanged -= OnExternalScopeChanged;

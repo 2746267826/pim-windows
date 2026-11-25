@@ -121,7 +121,7 @@ public partial class TrayIcon : IDisposable
     }
 
     private static void OpenWebWorkbench()
-        => WebCompatibilityLinks.Open(DaemonConfig.Load().ServerUrl, "/today");
+        => WebCompatibilityLinks.Open(DaemonConfig.Load().ServerUrl, "/");
 
     private static void ShowLogin()
     {
