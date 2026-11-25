@@ -293,10 +293,9 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
                     Assert.Equal(
                         "服务器：https://other.example.test/api/v1",
                         Text(workbench, "ServerStateText"));
-                    Assert.Contains(
-                        "未登录",
-                        Text(workbench, "WorkspaceStateText"),
-                        StringComparison.Ordinal);
+                    Assert.Equal(
+                        "原生入口仍可打开；登录后才能读取当前账户的数据。",
+                        Text(workbench, "WorkspaceStateText"));
                     Assert.Contains(
                         "账号或服务器已变更",
                         Text(planner, "TaskListStateText"),
