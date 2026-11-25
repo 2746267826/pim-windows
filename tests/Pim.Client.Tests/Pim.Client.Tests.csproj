@@ -47,6 +47,7 @@
     <Compile Include="../ClientWindows/CalendarTaskServiceTests.cs" />
     <Compile Include="../ClientWindows/DeviceCenterServiceTests.cs" />
     <Compile Include="../ClientWindows/RemoteComputerHistoryServiceTests.cs" />
+    <Compile Include="../ClientWindows/ServerUrlSecurityTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeCatalogTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeAccountGuardTests.cs" />
     <Compile Include="../ClientWindows/LocalAsrWorkerEngineTests.cs" />

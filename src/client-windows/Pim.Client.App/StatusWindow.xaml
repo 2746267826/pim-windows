@@ -336,6 +336,11 @@
                                     Margin="8,0,0,0"
                                     Click="OnSaveServerUrl"/>
                         </Grid>
+                        <TextBlock Text="远程服务器必须使用 HTTPS；只有本机回环地址（127.0.0.1、::1、localhost）允许 HTTP。"
+                                   TextWrapping="Wrap"
+                                   Foreground="{StaticResource PimMutedTextBrush}"
+                                   FontSize="11"
+                                   Margin="0,0,0,16"/>
 
                         <CheckBox x:Name="AutoStartCheckBox"
                                   Content="开机自启动"

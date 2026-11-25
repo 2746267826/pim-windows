@@ -96,6 +96,7 @@ public class AuthService
 
     public async Task<bool> LoginAsync(string username, string password)
     {
+        EnsureCredentialTransportIsSecure();
         var result = await _apiClient.LoginAsync(new LoginRequest
         {
             Username = username,
@@ -111,6 +112,7 @@ public class AuthService
     public async Task<string?> RegisterAsync(
         string username, string email, string password, string? displayName)
     {
+        EnsureCredentialTransportIsSecure();
         var result = await _apiClient.RegisterAsync(new RegisterRequest
         {
             Username = username,
@@ -366,6 +368,7 @@ public class AuthService
     /// </summary>
     public Task<bool> RefreshAsync()
     {
+        EnsureCredentialTransportIsSecure();
         lock (_refreshSync)
         {
             if (_refreshInFlight is { IsCompleted: false })
@@ -375,6 +378,19 @@ public class AuthService
 
             _refreshInFlight = RefreshCoreAsync();
             return _refreshInFlight;
+        }
+    }
+
+    /// <summary>
+    /// 密码、注册信息和 refresh token 都只能发往安全地址。ApiClient 已经在
+    /// SetBaseUrl/构造时拦截远程 HTTP；这里再守一次，避免未来新增调用方绕开边界。
+    /// </summary>
+    private void EnsureCredentialTransportIsSecure()
+    {
+        var validation = ServerUrlPolicy.Validate(ServerUrl);
+        if (!validation.IsValid)
+        {
+            throw new InvalidOperationException(validation.MessageZh);
         }
     }
 

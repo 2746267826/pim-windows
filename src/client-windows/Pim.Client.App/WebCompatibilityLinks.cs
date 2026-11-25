@@ -13,9 +13,12 @@ internal static class WebCompatibilityLinks
 {
     internal static string BuildUrl(string? serverUrl, string route)
     {
-        var root = string.IsNullOrWhiteSpace(serverUrl)
+        var requested = string.IsNullOrWhiteSpace(serverUrl)
             ? ClientDefaults.DefaultServerUrl
-            : ApiClient.NormalizeServerUrl(serverUrl);
+            : serverUrl;
+        var root = ServerUrlPolicy.TryNormalize(requested, out var normalized, out _)
+            ? normalized
+            : ServerUrlPolicy.LocalDevelopmentUrl;
         root = root.TrimEnd('/');
         if (root.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase))
         {

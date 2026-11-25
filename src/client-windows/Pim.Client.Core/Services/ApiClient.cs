@@ -73,17 +73,23 @@ public class ApiClient
     /// </param>
     public ApiClient(Func<HttpMessageHandler>? messageHandlerFactory)
     {
-        _messageHandlerFactory = messageHandlerFactory ?? (() => new HttpClientHandler { UseProxy = false });
+        _messageHandlerFactory = messageHandlerFactory ?? CreateDefaultHandler;
+        var initialServerUrl = ServerUrlPolicy.TryNormalize(
+            ClientDefaults.DefaultServerUrl,
+            out var normalized,
+            out _)
+            ? normalized
+            : ServerUrlPolicy.LocalDevelopmentUrl;
         _httpClient = new HttpClient(_messageHandlerFactory())
         {
-            BaseAddress = new Uri($"{ClientDefaults.DefaultServerUrl}/api/v1/")
+            BaseAddress = BuildApiBaseAddress(initialServerUrl)
         };
     }
 
     public void SetBaseUrl(string baseUrl)
     {
-        var normalized = NormalizeServerUrl(baseUrl);
-        var uri = new Uri(normalized.TrimEnd('/') + "/api/v1/");
+        var normalized = ServerUrlPolicy.Normalize(baseUrl);
+        var uri = BuildApiBaseAddress(normalized);
         var scopeChanged = false;
         lock (_clientSync)
         {
@@ -136,22 +142,21 @@ public class ApiClient
     }
 
     public static string NormalizeServerUrl(string baseUrl)
+        => ServerUrlPolicy.Normalize(baseUrl);
+
+    /// <summary>
+    /// 生产传输层：不自动跟随重定向（避免把 Authorization 送到另一个 origin），
+    /// 不保存 Cookie（API 只用 Bearer），也不读取系统代理（与原行为一致）。
+    /// </summary>
+    internal static HttpClientHandler CreateDefaultHandler() => new()
     {
-        var trimmed = baseUrl.Trim().TrimEnd('/');
-        if (!trimmed.Contains("://", StringComparison.Ordinal))
-        {
-            trimmed = "http://" + trimmed;
-        }
-        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
-        {
-            return trimmed;
-        }
-        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-            return trimmed;
-        return uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
-            ? new UriBuilder(uri) { Host = "127.0.0.1" }.Uri.ToString().TrimEnd('/')
-            : trimmed;
-    }
+        AllowAutoRedirect = false,
+        UseCookies = false,
+        UseProxy = false,
+    };
+
+    private static Uri BuildApiBaseAddress(string normalizedServerUrl) =>
+        new(normalizedServerUrl.TrimEnd('/') + "/api/v1/");
 
     public void SetAccessToken(string token)
     {
@@ -1297,6 +1302,17 @@ public class ApiClient
                 RequestTiming?.Invoke($"{response.RequestMessage?.Method} {response.RequestMessage?.RequestUri}", firstHopMs);
             }
 
+            if (IsRedirectStatusCode(response.StatusCode))
+            {
+                // 不跟随重定向：登录/续期请求体里是密码或 refresh token，
+                // Authorization 也附着在同一个 HttpClient 上。跟随到另一个 origin
+                // 或从 HTTPS 降级到 HTTP 都会把凭据带出当前部署边界。
+                response.Dispose();
+                throw new HttpRequestException(
+                    "服务器返回了重定向，客户端已中止请求；为避免登录凭据被发送到其他地址，"
+                    + "不会自动跟随重定向。请把服务器地址改为最终的 HTTPS 地址。");
+            }
+
             return response;
         }
         catch
@@ -1547,6 +1563,9 @@ public class ApiClient
 
         return path.Length == 0 ? "/" : path;
     }
+
+    private static bool IsRedirectStatusCode(HttpStatusCode statusCode)
+        => (int)statusCode is >= 300 and < 400;
 
     private static NativeAsrSegmentHeaders ParseNativeAsrSegmentHeaders(
         HttpResponseMessage response)

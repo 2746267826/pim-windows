@@ -34,10 +34,15 @@ public sealed class DaemonHeartbeatReporter
         DaemonSourceState keyStatsState = DaemonSourceState.Unknown,
         object? statusDetails = null)
     {
-        var normalizedServerUrl = ApiClient.NormalizeServerUrl(
-            string.IsNullOrWhiteSpace(serverUrl)
-                ? ClientDefaults.DefaultServerUrl
-                : serverUrl);
+        var requestedServerUrl = string.IsNullOrWhiteSpace(serverUrl)
+            ? ClientDefaults.DefaultServerUrl
+            : serverUrl;
+        var normalizedServerUrl = ServerUrlPolicy.TryNormalize(
+            requestedServerUrl,
+            out var normalized,
+            out _)
+            ? normalized
+            : ServerUrlPolicy.LocalDevelopmentUrl;
 
         var statusPayload = new Dictionary<string, object?>
         {
