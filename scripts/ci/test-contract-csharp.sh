@@ -523,7 +523,7 @@ record "generator_accepts_real_query_and_binary_operations" $([ "$GEN_RC" -eq 0 
   "rc=$GEN_RC for required/optional query parameters and note material octet-stream upload"
 grep -q 'new("sha256", "plain-string", true)' "$SB/$OPS_REL" \
   && grep -q 'new("offset", "int32", false), new("limit", "int32", false)' "$SB/$OPS_REL" \
-  && grep -q 'new("start", "date-time", false)' "$SB/$OPS_REL" \
+  && grep -q 'new("start", "date-time", true)' "$SB/$OPS_REL" \
   && grep -q 'new("inbox", "boolean", false)' "$SB/$OPS_REL" \
   && grep -q '"application/octet-stream"' "$SB/$OPS_REL" \
   && grep -q "public string ResolveQuery" "$SB/$OPS_REL"
