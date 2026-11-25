@@ -2,6 +2,7 @@ using System.Drawing;
 using System.IO;
 using Microsoft.Extensions.DependencyInjection;
 using Pim.Client.App.Services;
+using Pim.Client.Core;
 using Pim.Client.Core.Services;
 
 namespace Pim.Client.App;
