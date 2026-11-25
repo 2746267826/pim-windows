@@ -1,3 +1,5 @@
+using Pim.Client.Core.Services;
+
 namespace Pim.Client.Core;
 
 public static class ClientDefaults
