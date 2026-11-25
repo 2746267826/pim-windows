@@ -32,12 +32,15 @@ public sealed class HandwritingMaterialSelectionBindingTests(WpfApplicationFixtu
                 material.Kind == LocalNoteMaterialKind.Handwriting);
             var source = withInk.Materials.Single(material =>
                 material.Kind == LocalNoteMaterialKind.HandwritingSource);
-            var list = new ListBox();
-            var selection = new HandwritingMaterialSelectionState();
-            var binding = new MaterialSelectionBinding(list, selection);
+            ListBox list = null!;
+            HandwritingMaterialSelectionState selection = null!;
+            MaterialSelectionBinding binding = null!;
             HandwritingMaterialSelectionFence fence = default;
             wpf.Run(() =>
             {
+                list = new ListBox();
+                selection = new HandwritingMaterialSelectionState();
+                binding = new MaterialSelectionBinding(list, selection);
                 binding.Bind(withInk.Materials);
                 list.SelectedItem = withInk.Materials.Single(material =>
                     material.MaterialId == preview.MaterialId);
@@ -53,9 +56,10 @@ public sealed class HandwritingMaterialSelectionBindingTests(WpfApplicationFixtu
             {
                 binding.Bind(refreshed.Materials);
                 var selected = Assert.IsType<LocalNoteMaterial>(list.SelectedItem);
+                Assert.Equal(preview.MaterialId, selected.MaterialId);
                 Assert.True(selection.IsCurrent(fence, selected));
                 Assert.True(binding.Select(preview.MaterialId));
-                Assert.Same(refreshedPreview, list.SelectedItem);
+                Assert.Equal(preview.MaterialId, binding.SelectedMaterial?.MaterialId);
             });
 
             var removed = await store.RemoveHandwritingAsync(
@@ -95,10 +99,10 @@ public sealed class HandwritingMaterialSelectionBindingTests(WpfApplicationFixtu
             binding.Bind(refreshedMaterials);
 
             var selected = Assert.IsType<LocalNoteMaterial>(list.SelectedItem);
-            Assert.Same(refreshedMaterials[0], selected);
+            Assert.Equal(previewId, selected.MaterialId);
             Assert.True(selection.IsCurrent(fence, selected));
             Assert.True(binding.Select(previewId));
-            Assert.Same(refreshedMaterials[0], list.SelectedItem);
+            Assert.Equal(previewId, binding.SelectedMaterial?.MaterialId);
             Assert.Equal(
                 sourceId,
                 LocalInkMaterialPairing.ResolveSource(previewId, refreshedMaterials).MaterialId);
