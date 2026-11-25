@@ -106,8 +106,7 @@ public partial class NativePlannerWindow : Window
         await _eventGate.WaitAsync();
         try
         {
-            if (_closed || !_eventUi.IsLoadCurrent(generation, account)
-                || account != CurrentAccount())
+            if (_closed || account != CurrentAccount())
             {
                 return;
             }
@@ -115,6 +114,11 @@ public partial class NativePlannerWindow : Window
             if (account is null)
             {
                 ClearEventUi("请先登录 PIM 账户；日程只从当前账户读取。");
+                return;
+            }
+
+            if (!_eventUi.IsLoadCurrent(generation, account))
+            {
                 return;
             }
 
@@ -199,8 +203,7 @@ public partial class NativePlannerWindow : Window
         await _taskGate.WaitAsync();
         try
         {
-            if (_closed || !_taskUi.IsLoadCurrent(generation, account)
-                || account != CurrentAccount())
+            if (_closed || account != CurrentAccount())
             {
                 return;
             }
@@ -208,6 +211,11 @@ public partial class NativePlannerWindow : Window
             if (account is null)
             {
                 ClearTaskUi("请先登录 PIM 账户；任务只从当前账户读取。");
+                return;
+            }
+
+            if (!_taskUi.IsLoadCurrent(generation, account))
+            {
                 return;
             }
 
