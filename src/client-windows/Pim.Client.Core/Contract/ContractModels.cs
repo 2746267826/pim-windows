@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 c33efcb7bafd64d00a39eb0d68b150fe5f4f11e934026163ffc2cfaf72cd2bc8)
+//   契约快照      : contract/openapi.json (sha256 893af01abbecd4bab0cd46600e1c6a7a3ee6777e5a9cbef33a3a9a6bc05fe318)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -480,6 +480,12 @@ public sealed class ConfirmNoteTaskSuggestionRequest
 /// <summary>契约 <c>components.schemas.CreateEventRequest</c>（request）。</summary>
 public sealed class CreateEventRequest
 {
+    /// <summary>契约字段 <c>allDayEndDateExclusive</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("allDayEndDateExclusive")]
+    public System.DateOnly? AllDayEndDateExclusive { get; set; }
+    /// <summary>契约字段 <c>allDayStartDate</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("allDayStartDate")]
+    public System.DateOnly? AllDayStartDate { get; set; }
     /// <summary>契约字段 <c>attachmentReferences</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("attachmentReferences")]
     public System.Collections.Generic.List<EventAttachmentReferenceDto>? AttachmentReferences { get; set; }
@@ -1003,6 +1009,12 @@ public sealed class EventPersonDto
 /// <summary>契约 <c>components.schemas.EventResponse</c>（response）。</summary>
 public sealed class EventResponse
 {
+    /// <summary>契约字段 <c>allDayEndDateExclusive</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("allDayEndDateExclusive")]
+    public System.DateOnly? AllDayEndDateExclusive { get; set; }
+    /// <summary>契约字段 <c>allDayStartDate</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("allDayStartDate")]
+    public System.DateOnly? AllDayStartDate { get; set; }
     /// <summary>契约字段 <c>attachmentReferences</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("attachmentReferences")]
     public System.Collections.Generic.List<EventAttachmentReferenceDto>? AttachmentReferences { get; set; }
@@ -1021,6 +1033,15 @@ public sealed class EventResponse
     /// <summary>契约字段 <c>descriptionFormat</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("descriptionFormat")]
     public string? DescriptionFormat { get; set; }
+    /// <summary>契约字段 <c>displayLocalEnd</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("displayLocalEnd")]
+    public string? DisplayLocalEnd { get; set; }
+    /// <summary>契约字段 <c>displayLocalStart</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("displayLocalStart")]
+    public string? DisplayLocalStart { get; set; }
+    /// <summary>契约字段 <c>displayTimeZoneId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("displayTimeZoneId")]
+    public string? DisplayTimeZoneId { get; set; }
     /// <summary>契约字段 <c>dtEnd</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("dtEnd")]
     public required System.DateTimeOffset DtEnd { get; set; }
@@ -1060,6 +1081,12 @@ public sealed class EventResponse
     /// <summary>契约字段 <c>isSeriesMaster</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("isSeriesMaster")]
     public bool IsSeriesMaster { get; set; }
+    /// <summary>契约字段 <c>localEnd</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("localEnd")]
+    public string? LocalEnd { get; set; }
+    /// <summary>契约字段 <c>localStart</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("localStart")]
+    public string? LocalStart { get; set; }
     /// <summary>契约字段 <c>location</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("location")]
     public string? Location { get; set; }
@@ -1126,6 +1153,15 @@ public sealed class EventResponse
     /// <summary>契约字段 <c>timeZoneId</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("timeZoneId")]
     public string? TimeZoneId { get; set; }
+    /// <summary>契约字段 <c>timeZoneIdType</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timeZoneIdType")]
+    public string? TimeZoneIdType { get; set; }
+    /// <summary>契约字段 <c>timeZoneResolution</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timeZoneResolution")]
+    public string? TimeZoneResolution { get; set; }
+    /// <summary>契约字段 <c>timeZoneSourceType</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("timeZoneSourceType")]
+    public string? TimeZoneSourceType { get; set; }
     /// <summary>契约字段 <c>title</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("title")]
     public required string Title { get; set; }

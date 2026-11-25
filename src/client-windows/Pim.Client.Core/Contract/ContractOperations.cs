@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 c33efcb7bafd64d00a39eb0d68b150fe5f4f11e934026163ffc2cfaf72cd2bc8)
+//   契约快照      : contract/openapi.json (sha256 893af01abbecd4bab0cd46600e1c6a7a3ee6777e5a9cbef33a3a9a6bc05fe318)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -397,7 +397,7 @@ public sealed class ContractOperation
     public static readonly ContractOperation GetCalendarEvents =
         new("GET", "/api/v1/calendar/events", "calendar/events",
             new ContractHeader[] {  },
-            new ContractQueryParameter[] { new("start", "date-time", false), new("end", "date-time", false), new("search", "plain-string", false), new("calendarId", "uuid", false), new("page", "int32", false), new("pageSize", "int32", false) },
+            new ContractQueryParameter[] { new("start", "date-time", true), new("end", "date-time", true), new("search", "plain-string", false), new("calendarId", "uuid", false), new("page", "int32", false), new("pageSize", "int32", false) },
             new ContractHeader[] {  },
             null,
             "application/json",
