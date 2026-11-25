@@ -12,6 +12,10 @@ public sealed class NativePlannerTrayEntryTests
         var trayCode = ReadTrayIcon();
 
         Assert.Contains(
+            "ContextMenuStrip.Items.Add(\"原生今日\", null, (_, _) => OpenNativeTodayWindow());",
+            trayCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "ContextMenuStrip.Items.Add(\"原生日历与任务\", null, (_, _) => OpenNativePlannerWindow());",
             trayCode,
             StringComparison.Ordinal);
@@ -32,17 +36,22 @@ public sealed class NativePlannerTrayEntryTests
     }
 
     [Fact]
-    public void OpenNativePlannerWindow_ReusesSingletonAndDoesNotFallBackToBrowser()
+    public void OpenNativeTodayWindow_UsesNativeSingletonAndDoesNotFallBackToBrowser()
+    {
+        var method = ExtractMethod(ReadTrayIcon(), "private static void OpenNativeTodayWindow()");
+
+        Assert.Contains("App.ShowTodayWindow()", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenWebWorkbench", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("Process.Start", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("WebView", method, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OpenNativePlannerWindow_UsesNativeSingletonAndDoesNotFallBackToBrowser()
     {
         var method = ExtractMethod(ReadTrayIcon(), "private static void OpenNativePlannerWindow()");
 
-        Assert.Contains(
-            "System.Windows.Application.Current.Windows.OfType<NativePlannerWindow>()",
-            method,
-            StringComparison.Ordinal);
-        Assert.Contains("ActivateOrCreateWindow(", method, StringComparison.Ordinal);
-        Assert.Contains("existing => existing.Activate()", method, StringComparison.Ordinal);
-        Assert.Contains("() => new NativePlannerWindow().Show()", method, StringComparison.Ordinal);
+        Assert.Contains("App.ShowPlannerWindow()", method, StringComparison.Ordinal);
         Assert.DoesNotContain("OpenWebWorkbench", method, StringComparison.Ordinal);
         Assert.DoesNotContain("Process.Start", method, StringComparison.Ordinal);
         Assert.DoesNotContain("WebView", method, StringComparison.Ordinal);

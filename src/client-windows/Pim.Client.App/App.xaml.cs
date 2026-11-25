@@ -15,6 +15,7 @@ public partial class App : Application
 {
     public static IServiceProvider Services { get; private set; } = null!;
     private TrayIcon? _trayIcon;
+    private GlobalHotKeyHost? _globalHotKeyHost;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly PeriodicTimer _heartbeatTimer = new(TimeSpan.FromMinutes(2));
     private Task? _heartbeatTask;
@@ -206,6 +207,7 @@ public partial class App : Application
             _trayIcon.Show();
             Logger.Info("Tray icon shown");
             BootstrapLog.Write("Tray icon shown");
+            StartGlobalHotKey();
 
             var restoreResult = await authService.TryRestoreTokenDetailedAsync();
             if (restoreResult == TokenRestoreResult.Success)
@@ -293,14 +295,52 @@ public partial class App : Application
 
     internal static void ShowNotesWindow()
     {
-        var existing = Current.Windows.OfType<NativeNotesWindow>().FirstOrDefault();
+        WindowSummoner.ShowOrActivate(
+            Current.Windows.OfType<NativeNotesWindow>(),
+            () => new NativeNotesWindow());
+    }
+
+    private void StartGlobalHotKey()
+    {
+        try
+        {
+            _globalHotKeyHost = new GlobalHotKeyHost(
+                new Win32GlobalHotKeyRegistry(),
+                GlobalHotKeyGesture.NativeNotes,
+                ShowNotesWindow,
+                message => _trayIcon?.NotifyWarning(message),
+                message => Logger.Warn(message));
+            _globalHotKeyHost.Start();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Global hotkey startup failed: {ex.Message}");
+            BootstrapLog.Write($"Global hotkey startup failed: {ex}");
+        }
+    }
+
+    internal static void ShowTodayWindow(Window? owner = null)
+    {
+        var existing = Current.Windows.OfType<NativeTodayWindow>().FirstOrDefault();
         if (existing is not null)
         {
-            existing.Activate();
+            WindowSummoner.BringToFront(existing);
             return;
         }
 
-        new NativeNotesWindow().Show();
+        new NativeTodayWindow { Owner = owner }.Show();
+    }
+
+    internal static void ShowPlannerWindow(Window? owner = null)
+    {
+        var existing = Current.Windows.OfType<NativePlannerWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            WindowSummoner.BringToFront(existing);
+            return;
+        }
+
+        new NativePlannerWindow { Owner = owner }.Show();
     }
 
     private async Task RunHeartbeatLoopAsync(CancellationToken ct)
@@ -604,6 +644,14 @@ public partial class App : Application
                 task => Logger.Warn($"Daemon heartbeat loop faulted: {task.Exception?.GetBaseException().Message ?? "unknown error"}"),
                 TaskContinuationOptions.OnlyOnFaulted);
             _shutdown.Dispose();
+            try
+            {
+                _globalHotKeyHost?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Global hotkey disposal failed: {ex.Message}");
+            }
             _trayIcon?.Dispose();
         }
         finally

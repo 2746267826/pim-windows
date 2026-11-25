@@ -328,12 +328,17 @@ public class ApiClient
         DateTimeOffset? dueTo = null,
         int page = 1,
         int pageSize = 100,
+        IReadOnlyList<string?>? statuses = null,
         CancellationToken ct = default)
     {
         if (page < 1)
             throw new ArgumentOutOfRangeException(nameof(page));
         if (pageSize is < 1 or > 200)
             throw new ArgumentOutOfRangeException(nameof(pageSize));
+
+        var statusValues = TaskStatusQuery.Normalize(status, statuses)
+            .Select(status => (Name: "status", Value: (string?)status))
+            .ToArray();
 
         return SendAsync<TaskResponsePagedResultApiResponse>(
             ContractOperation.GetTasks,
@@ -345,7 +350,7 @@ public class ApiClient
                 ("inbox", inbox?.ToString().ToLowerInvariant()),
                 ("search", search),
                 ("calendarId", calendarId?.ToString("D")),
-                ("status", status),
+                .. statusValues,
                 ("priority", priority?.ToString(CultureInfo.InvariantCulture)),
                 ("plannedFrom", FormatQueryDateTime(plannedFrom)),
                 ("plannedTo", FormatQueryDateTime(plannedTo)),

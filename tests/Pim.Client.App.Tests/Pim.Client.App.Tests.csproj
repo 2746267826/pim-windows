@@ -29,8 +29,10 @@
     <Compile Include="../ClientWindows/HandwritingWindowLayoutTests.cs" />
     <Compile Include="../ClientWindows/AuthTokenStorageTests.cs" />
     <Compile Include="../ClientWindows/DaemonLoggerShutdownTests.cs" />
+    <Compile Include="../ClientWindows/GlobalHotKeyHostTests.cs" />
     <Compile Include="../ClientWindows/ScheduledTaskServiceTests.cs" />
     <Compile Include="../ClientWindows/SingleInstanceGuardTests.cs" />
+    <Compile Include="../ClientWindows/TaskStatusFilterControlTests.cs" />
     <Compile Include="../ClientWindows/TrayIconTests.cs" />
     <Compile Include="../ClientWindows/WindowsCompanionShellTests.cs" />
     <Compile Include="../ClientWindows/WindowsDaemonPrimaryPathTests.cs" />
@@ -44,6 +46,8 @@
     <Compile Include="../ClientWindows/LocalRuntimeExecutionAdapterTests.cs" />
     <Compile Include="../ClientWindows/NativePlannerUiStateTests.cs" />
     <Compile Include="../ClientWindows/NativePlannerTrayEntryBehaviorTests.cs" />
+    <Compile Include="../ClientWindows/NativeTodayWindowTests.cs" />
+    <Compile Include="../ClientWindows/NoteEntryWindowBehaviorTests.cs" />
     <Compile Include="../ClientWindows/RemoteComputerHistoryWindowTests.cs" />
     <Compile Include="../ClientWindows/NoteTaskSuggestionUiStateTests.cs" />
     <Compile Include="../ClientWindows/AppKnowledgeUiStateTests.cs" />

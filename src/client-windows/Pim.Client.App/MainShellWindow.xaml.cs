@@ -101,6 +101,11 @@ public partial class MainShellWindow : Window
         App.ShowNotesWindow();
     }
 
+    private void OnOpenNativeToday(object sender, RoutedEventArgs e)
+    {
+        App.ShowTodayWindow(this);
+    }
+
     private void OnOpenAppKnowledge(object sender, RoutedEventArgs e)
     {
         var existing = Application.Current.Windows.OfType<AppKnowledgeWindow>().FirstOrDefault();
@@ -139,14 +144,7 @@ public partial class MainShellWindow : Window
 
     private void OnOpenNativePlanner(object sender, RoutedEventArgs e)
     {
-        var existing = Application.Current.Windows.OfType<NativePlannerWindow>().FirstOrDefault();
-        if (existing is not null)
-        {
-            existing.Activate();
-            return;
-        }
-
-        new NativePlannerWindow { Owner = this }.Show();
+        App.ShowPlannerWindow(this);
     }
 
     private void RefreshShellState()

@@ -1,0 +1,207 @@
+<Window x:Class="Pim.Client.App.NativeTodayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="今日" Height="820" Width="1240" MinHeight="680" MinWidth="1020"
+        WindowStartupLocation="CenterOwner" Background="{StaticResource PimMutedSurfaceBrush}"
+        Loaded="OnLoaded" Closed="OnClosed">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Margin="0,0,0,12">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
+                <Button x:Name="RefreshTodayButton" Content="刷新今日"
+                        Style="{StaticResource PimSecondaryButton}" Margin="0,0,8,0"
+                        Click="OnRefresh" />
+                <Button Content="原生日历与任务"
+                        Style="{StaticResource PimSecondaryButton}"
+                        Click="OnOpenPlanner" />
+            </StackPanel>
+            <StackPanel>
+                <TextBlock Text="今日" FontSize="26" FontWeight="SemiBold"
+                           Foreground="{StaticResource PimTextBrush}" />
+                <TextBlock x:Name="TodayDateText" Text="正在读取今天…"
+                           Margin="0,4,0,0" FontSize="12"
+                           Foreground="{StaticResource PimMutedTextBrush}" />
+            </StackPanel>
+        </DockPanel>
+
+        <Border Grid.Row="1" Background="{StaticResource PimSurfaceBrush}"
+                BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
+                CornerRadius="12" Padding="14,10" Margin="0,0,0,12">
+            <DockPanel>
+                <TextBlock x:Name="TodayStateText" DockPanel.Dock="Right"
+                           Text="正在读取今日数据…" FontSize="12"
+                           Foreground="{StaticResource PimMutedTextBrush}" />
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="TaskSummaryText" Text="今日任务：读取中"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource PimTextBrush}" />
+                    <TextBlock Text=" · " Foreground="{StaticResource PimMutedTextBrush}" />
+                    <TextBlock x:Name="EventSummaryText" Text="今日日程：读取中"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource PimTextBrush}" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Background="{StaticResource PimSurfaceBrush}"
+                    BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
+                    CornerRadius="12" Padding="14">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <DockPanel Margin="0,0,0,10">
+                        <Button x:Name="CompleteTaskButton" Content="标记所选完成"
+                                DockPanel.Dock="Right"
+                                Style="{StaticResource PimPrimaryButton}"
+                                IsEnabled="False" Click="OnCompleteTask" />
+                        <StackPanel>
+                            <TextBlock Text="今日任务" FontSize="18" FontWeight="SemiBold"
+                                       Foreground="{StaticResource PimTextBrush}" />
+                            <TextBlock Text="只显示今天到期且尚未完成的任务。"
+                                       Margin="0,4,0,0" FontSize="11"
+                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                        </StackPanel>
+                    </DockPanel>
+
+                    <ListBox x:Name="TaskList" Grid.Row="1"
+                             BorderBrush="{StaticResource PimBorderBrush}"
+                             Background="{StaticResource PimMutedSurfaceBrush}"
+                             SelectionChanged="OnTaskSelected">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Label}" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource PimTextBrush}" />
+                                        <TextBlock Text="{Binding Subtitle}" Margin="0,3,0,0"
+                                                   FontSize="11" TextTrimming="CharacterEllipsis"
+                                                   Foreground="{StaticResource PimMutedTextBrush}" />
+                                    </StackPanel>
+                                    <Border Grid.Column="1" Background="{Binding StatusBrush}"
+                                            CornerRadius="10" Padding="8,3"
+                                            VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding StatusLabel}" FontSize="11"
+                                                   Foreground="White" />
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <TextBlock x:Name="TaskListStateText" Grid.Row="2"
+                               Margin="0,10,0,0" Text="正在读取今日任务…"
+                               TextWrapping="Wrap" FontSize="12"
+                               Foreground="{StaticResource PimMutedTextBrush}" />
+
+                    <TextBlock x:Name="TaskDetailText" Grid.Row="3"
+                               Margin="0,12,0,0" Text="选择任务查看详情。"
+                               TextWrapping="Wrap" FontSize="12"
+                               Foreground="{StaticResource PimTextBrush}" />
+
+                    <Border Grid.Row="4" Margin="0,12,0,0" Padding="0,12,0,0"
+                            BorderBrush="{StaticResource PimBorderBrush}"
+                            BorderThickness="0,1,0,0">
+                        <StackPanel>
+                            <TextBlock Text="快速新建今日任务" FontWeight="SemiBold"
+                                       Foreground="{StaticResource PimTextBrush}" />
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="74" />
+                                    <ColumnDefinition Width="140" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="TaskTitleBox" Height="34" Padding="8,5"
+                                         Margin="0,0,8,0" VerticalContentAlignment="Center"
+                                         MaxLength="255" />
+                                <ComboBox x:Name="TaskPriorityBox" Grid.Column="1"
+                                          Height="34" Margin="0,0,8,0" />
+                                <ComboBox x:Name="TaskBookBox" Grid.Column="2"
+                                          Height="34" Margin="0,0,8,0" />
+                                <Button x:Name="CreateTaskButton" Grid.Column="3"
+                                        Content="创建" Style="{StaticResource PimPrimaryButton}"
+                                        Height="34" IsEnabled="False" Click="OnCreateTask" />
+                            </Grid>
+                            <TextBlock x:Name="TaskCreateStateText" Margin="0,8,0,0"
+                                       Text="" TextWrapping="Wrap" FontSize="11"
+                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                            <TextBlock Text="默认到期今天 18:00；需要指定日期、任务本或新建日程时，请打开原生日历与任务。"
+                                       Margin="0,6,0,0" TextWrapping="Wrap" FontSize="11"
+                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="2" Background="{StaticResource PimSurfaceBrush}"
+                    BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
+                    CornerRadius="12" Padding="14">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Margin="0,0,0,10">
+                        <TextBlock Text="今日日程" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="{StaticResource PimTextBrush}" />
+                        <TextBlock Text="读取当前账户今天开始或持续中的日程；新建日程请使用完整规划器。"
+                                   Margin="0,4,0,0" FontSize="11"
+                                   Foreground="{StaticResource PimMutedTextBrush}" />
+                    </StackPanel>
+
+                    <ListBox x:Name="EventList" Grid.Row="1"
+                             BorderBrush="{StaticResource PimBorderBrush}"
+                             Background="{StaticResource PimMutedSurfaceBrush}"
+                             SelectionChanged="OnEventSelected">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="6">
+                                    <TextBlock Text="{Binding Label}" FontWeight="SemiBold"
+                                               Foreground="{StaticResource PimTextBrush}" />
+                                    <TextBlock Text="{Binding Subtitle}" Margin="0,3,0,0"
+                                               FontSize="11" TextTrimming="CharacterEllipsis"
+                                               Foreground="{StaticResource PimMutedTextBrush}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <TextBlock x:Name="EventListStateText" Grid.Row="2"
+                               Margin="0,10,0,0" Text="正在读取今日日程…"
+                               TextWrapping="Wrap" FontSize="12"
+                               Foreground="{StaticResource PimMutedTextBrush}" />
+
+                    <TextBlock x:Name="EventDetailText" Grid.Row="3"
+                               Margin="0,12,0,0" Text="选择日程查看详情。"
+                               TextWrapping="Wrap" FontSize="12"
+                               Foreground="{StaticResource PimTextBrush}" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

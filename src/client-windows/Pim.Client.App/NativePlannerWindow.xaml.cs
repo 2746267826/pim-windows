@@ -40,16 +40,6 @@ public partial class NativePlannerWindow : Window
         CalendarFilterBox.SelectedIndex = 0;
         EventCalendarBox.ItemsSource = Array.Empty<CalendarChoice>();
 
-        TaskStatusFilterBox.ItemsSource = new[]
-        {
-            StatusChoice.All,
-            new StatusChoice("待处理", "NEEDS-ACTION"),
-            new StatusChoice("进行中", "IN-PROCESS"),
-            new StatusChoice("已完成", "COMPLETED"),
-            new StatusChoice("已取消", "CANCELLED"),
-        };
-        TaskStatusFilterBox.SelectedIndex = 0;
-
         TaskPriorityBox.ItemsSource = Enumerable.Range(1, 9).ToArray();
         TaskPriorityBox.SelectedItem = 5;
         TaskBookBox.ItemsSource = new[] { TaskBookChoice.None };
@@ -173,7 +163,7 @@ public partial class NativePlannerWindow : Window
     private async void OnRefreshTasks(object sender, RoutedEventArgs e)
         => await RefreshTasksAsync();
 
-    private async void OnTaskFilterChanged(object sender, SelectionChangedEventArgs e)
+    private async void OnTaskFilterChanged(object? sender, EventArgs e)
     {
         if (IsLoaded && !_loading)
         {
@@ -210,10 +200,10 @@ public partial class NativePlannerWindow : Window
             }
 
             TaskListStateText.Text = "正在读取任务…";
-            var status = (TaskStatusFilterBox.SelectedItem as StatusChoice)?.Status;
+            var statuses = TaskStatusFilter.SelectedStatuses;
             var workspace = await _planner.GetTaskWorkspaceAsync(
                 string.IsNullOrWhiteSpace(TaskSearchBox.Text) ? null : TaskSearchBox.Text.Trim(),
-                status);
+                statuses: statuses);
             if (_closed || !_taskUi.IsLoadCurrent(generation, account)
                 || account != CurrentAccount()
                 || !_taskUi.CommitLoad(generation, account))
@@ -710,12 +700,6 @@ public partial class NativePlannerWindow : Window
 
     private sealed record RangeChoice(string Label, int Days)
     {
-        public override string ToString() => Label;
-    }
-
-    private sealed record StatusChoice(string Label, string? Status)
-    {
-        public static StatusChoice All { get; } = new("全部状态", null);
         public override string ToString() => Label;
     }
 
