@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "repo": "2746267826/pim-api",
   "ref": "master",
-  "resolvedRef": "ae99b28a739dbec3aa2a597d39edb4cd76b18568",
+  "resolvedRef": "1dd3032d5578d9c10777bd42dc7e162b7013e89c",
   "resolvedRefSource": "git-ls-remote",
   "sourcePath": "contract/openapi.json",
-  "sourceUrl": "https://raw.githubusercontent.com/2746267826/pim-api/ae99b28a739dbec3aa2a597d39edb4cd76b18568/contract/openapi.json",
-  "bytes": 1301488,
-  "sha256": "cf04f50ff799ff51021c4842eb18f2039fbf7a844965fbbd935dc6c0fb106ddc"
+  "sourceUrl": "https://raw.githubusercontent.com/2746267826/pim-api/1dd3032d5578d9c10777bd42dc7e162b7013e89c/contract/openapi.json",
+  "bytes": 1309035,
+  "sha256": "31ebcf4c6b3a5acc4696493af1232b13e6508430a81e02d0075774fda735576e"
 }
