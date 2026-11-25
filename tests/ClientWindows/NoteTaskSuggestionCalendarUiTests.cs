@@ -9,6 +9,7 @@ using Pim.Client.Core.Contract;
 using Pim.Client.Core.Services;
 using Pim.Client.Core.Services.Notes;
 using Xunit;
+using ComboBox = System.Windows.Controls.ComboBox;
 
 namespace Pim.Client.App.Tests;
 
