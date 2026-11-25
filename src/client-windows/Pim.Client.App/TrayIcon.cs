@@ -55,11 +55,12 @@ public partial class TrayIcon : IDisposable
         menu.Items.Add("立即同步", null, async (_, _) => await TriggerSyncAsync());
         menu.Items.Add("Web 兼容：打开 Web 工作台", null, (_, _) => OpenWebWorkbench());
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-        var version = GetVersion();
+        var machineVersion = GetVersion();
+        var displayVersion = GetDisplayVersion();
         var serverUrl = ResolveServerUrl(null);
-        var trayMenu = BuildMenu(version, serverUrl);
-        menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[0].Text, null, (_, _) => ShowAboutBox(version, serverUrl)));
-        menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[1].Text, null, async (_, _) => await CheckUpdateAsync(version)));
+        var trayMenu = BuildMenu(machineVersion, serverUrl, displayVersion);
+        menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[0].Text, null, (_, _) => ShowAboutBox(displayVersion, machineVersion, serverUrl)));
+        menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[1].Text, null, async (_, _) => await CheckUpdateAsync(machineVersion)));
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         menu.Items.Add("登录...", null, (_, _) => ShowLogin());
         menu.Items.Add("退出", null, (_, _) => ConfirmAndExit());
@@ -243,10 +244,11 @@ public partial class TrayIcon : IDisposable
         catch { return ClientDefaults.DefaultServerUrl; }
     }
 
-    private static void ShowAboutBox(string version, string serverUrl)
+    private static void ShowAboutBox(string displayVersion, string machineVersion, string serverUrl)
     {
         var url = ResolveServerUrl(serverUrl);
-        System.Windows.Forms.MessageBox.Show($"PIM Daemon v{version}\nAPI: {url}", "关于");
+        var label = ClientVersion.FormatDisplayLabel(displayVersion, machineVersion);
+        System.Windows.Forms.MessageBox.Show($"PIM Daemon {label}\n机器版本 / machine: {machineVersion}\nAPI: {url}", "关于");
     }
 
     /// <summary>
@@ -255,7 +257,7 @@ public partial class TrayIcon : IDisposable
     /// <c>ClientShellLatestResponse</c> —— 不再有手写路径与手写 <c>LatestDto</c>）。
     /// 服务器地址取自同一个 <see cref="ApiClient"/>（与守护程序其余请求同源、同样规范化）。
     /// </summary>
-    private static async Task CheckUpdateAsync(string version)
+    private static async Task CheckUpdateAsync(string machineVersion)
     {
         try
         {
@@ -270,7 +272,7 @@ public partial class TrayIcon : IDisposable
                 Logger.Warn($"Daemon update check failed: {latest.Error} checkedAt={latest.CheckedAt}");
                 System.Windows.Forms.MessageBox.Show($"检查失败：{latest.Error}", "PIM");
             }
-            else if (latest?.WindowsVersion != null && UpdateChecker.IsNewer(version, latest.WindowsVersion))
+            else if (latest?.WindowsVersion != null && UpdateChecker.IsNewer(machineVersion, latest.WindowsVersion))
             {
                 System.Windows.Forms.MessageBox.Show($"发现新版 {latest.WindowsVersion}\n{latest.WindowsUrl}", "PIM");
             }
