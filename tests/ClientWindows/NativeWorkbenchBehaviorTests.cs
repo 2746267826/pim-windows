@@ -73,6 +73,9 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
                             WpfApplication.Current.Windows.OfType<NativePlannerWindow>());
                         try
                         {
+                            await planner.RefreshEventsAsync();
+                            await planner.RefreshTasksAsync();
+
                             Assert.Contains(
                                 "请先登录",
                                 Text(planner, "EventListStateText"),
