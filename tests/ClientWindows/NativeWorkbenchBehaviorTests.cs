@@ -11,6 +11,9 @@ using Pim.Client.App;
 using Pim.Client.Core.Services;
 using Xunit;
 using Forms = System.Windows.Forms;
+using WpfButton = System.Windows.Controls.Button;
+using WpfCheckBox = System.Windows.Controls.CheckBox;
+using WpfListBox = System.Windows.Controls.ListBox;
 using WpfApplication = System.Windows.Application;
 
 namespace Pim.Client.App.Tests;
@@ -62,8 +65,8 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
                             "账户状态：未登录",
                             Text(workbench, "AccountStateText"));
 
-                        var plannerButton = Assert.IsType<Button>(workbench.FindName("PlannerButton"));
-                        plannerButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                        var plannerButton = Assert.IsType<WpfButton>(workbench.FindName("PlannerButton"));
+                        plannerButton.RaiseEvent(new RoutedEventArgs(WpfButton.ClickEvent));
                         await Dispatcher.Yield(DispatcherPriority.Background);
 
                         var planner = Assert.Single(
@@ -115,7 +118,7 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
                 };
                 try
                 {
-                    Assert.IsType<ListBox>(planner.FindName("TaskBooksList")).ItemsSource =
+                    Assert.IsType<WpfListBox>(planner.FindName("TaskBooksList")).ItemsSource =
                         new object[] { "stale-task-book" };
 
                     await planner.RefreshEventsAsync();
@@ -123,7 +126,7 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
 
                     Assert.Equal("读取日程失败。", Text(planner, "EventListStateText"));
                     Assert.Equal("读取任务失败。", Text(planner, "TaskListStateText"));
-                    Assert.Null(planner.FindName("TaskBooksList") is ListBox books
+                    Assert.Null(planner.FindName("TaskBooksList") is WpfListBox books
                         ? books.ItemsSource
                         : null);
                     Assert.Equal(
@@ -218,8 +221,8 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
                 {
                     var filter = Assert.IsType<TaskStatusFilterControl>(
                         planner.FindName("TaskStatusFilter"));
-                    ((CheckBox)filter.FindName("NeedsActionCheck")!).IsChecked = true;
-                    ((CheckBox)filter.FindName("InProcessCheck")!).IsChecked = true;
+                    ((WpfCheckBox)filter.FindName("NeedsActionCheck")!).IsChecked = true;
+                    ((WpfCheckBox)filter.FindName("InProcessCheck")!).IsChecked = true;
 
                     await planner.RefreshTasksAsync();
 
@@ -266,7 +269,7 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
                         "账号或服务器已变更",
                         Text(planner, "TaskListStateText"),
                         StringComparison.Ordinal);
-                    Assert.Null(Assert.IsType<ListBox>(
+                    Assert.Null(Assert.IsType<WpfListBox>(
                         planner.FindName("TaskBooksList")).ItemsSource);
                     Assert.Contains(
                         "账号或服务器已变更",
