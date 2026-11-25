@@ -438,15 +438,13 @@ public partial class StatusWindow : Window
     private void OnSaveServerUrl(object sender, RoutedEventArgs e)
     {
         var url = ServerUrlBox.Text.Trim();
-        if (string.IsNullOrEmpty(url)) return;
-        var normalizedUrl = ApiClient.NormalizeServerUrl(url);
-
-        if (!Uri.TryCreate(normalizedUrl, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        var validation = ServerUrlPolicy.Validate(url);
+        if (!validation.IsValid)
         {
-            MessageBox.Show("请输入有效的服务器地址，例如 http://localhost:5858 或 https://example.com。", "PIM", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(validation.MessageZh, "PIM", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        var normalizedUrl = validation.NormalizedUrl;
 
         try
         {
@@ -646,9 +644,12 @@ public partial class StatusWindow : Window
         try
         {
             var config = DaemonConfig.Load();
-            var root = string.IsNullOrWhiteSpace(config.ServerUrl)
+            var requested = string.IsNullOrWhiteSpace(config.ServerUrl)
                 ? ClientDefaults.DefaultServerUrl
-                : ApiClient.NormalizeServerUrl(config.ServerUrl);
+                : config.ServerUrl;
+            var root = ServerUrlPolicy.TryNormalize(requested, out var normalized, out _)
+                ? normalized
+                : ServerUrlPolicy.LocalDevelopmentUrl;
             root = root.TrimEnd('/');
             if (root.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase))
             {

@@ -5,6 +5,7 @@ using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
 using Pim.Client.App.Services;
+using Pim.Client.Core;
 using Pim.Client.Core.Contract;
 using Pim.Client.Core.Models;
 using Pim.Client.Core.Services;
@@ -169,6 +170,7 @@ public partial class App : Application
             AutoStartManager.Set(config.AutoStart);
             var apiClient = Services.GetRequiredService<ApiClient>();
             var authService = Services.GetRequiredService<AuthService>();
+            string? startupServerUrlWarning = null;
             // 后台续期/迁移的持久化失败也必须可见（不只启动时检查一次）。
             authService.TokenSaveFailed += status =>
             {
@@ -186,15 +188,30 @@ public partial class App : Application
             };
             if (!string.IsNullOrEmpty(config.ServerUrl))
             {
-                var serverUrl = ApiClient.NormalizeServerUrl(config.ServerUrl);
-                if (!string.Equals(config.ServerUrl, serverUrl, StringComparison.Ordinal))
+                if (ServerUrlPolicy.TryNormalize(
+                        config.ServerUrl,
+                        out var serverUrl,
+                        out var serverUrlError))
                 {
-                    config.ServerUrl = serverUrl;
-                    config.Save();
-                }
+                    if (!string.Equals(config.ServerUrl, serverUrl, StringComparison.Ordinal))
+                    {
+                        config.ServerUrl = serverUrl;
+                        config.Save();
+                    }
 
-                apiClient.SetBaseUrl(serverUrl);
-                Logger.Info($"Server URL: {serverUrl}");
+                    apiClient.SetBaseUrl(serverUrl);
+                    Logger.Info($"Server URL: {serverUrl}");
+                }
+                else
+                {
+                    // 旧版本可能持久化了远程明文 HTTP。启动不能崩溃，也不能继续用它；
+                    // 回退到本机 API，并保留原配置让用户在状态页修正。
+                    apiClient.SetBaseUrl(ServerUrlPolicy.LocalDevelopmentUrl);
+                    startupServerUrlWarning =
+                        $"{serverUrlError} 已回退到本机 API {ServerUrlPolicy.LocalDevelopmentUrl}。";
+                    Logger.Warn("Stored server URL was rejected at startup: " + serverUrlError);
+                    BootstrapLog.Write(startupServerUrlWarning);
+                }
             }
 
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -204,6 +221,10 @@ public partial class App : Application
 
             _trayIcon = Services.GetRequiredService<TrayIcon>();
             _trayIcon.Show();
+            if (startupServerUrlWarning is not null)
+            {
+                _trayIcon.NotifyWarning(startupServerUrlWarning);
+            }
             Logger.Info("Tray icon shown");
             BootstrapLog.Write("Tray icon shown");
             StartGlobalHotKey();

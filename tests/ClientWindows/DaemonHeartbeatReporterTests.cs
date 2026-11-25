@@ -41,6 +41,20 @@ public class DaemonHeartbeatReporterTests
     }
 
     [Fact]
+    public void BuildHeartbeat_FallsBackToLocalDefaultForRejectedRemoteHttp()
+    {
+        var heartbeat = DaemonHeartbeatReporter.BuildHeartbeat(
+            "device-1",
+            "1.0.0",
+            "http://pim.example.test:5858",
+            null,
+            null,
+            null);
+
+        Assert.Equal("http://127.0.0.1:5858", heartbeat.ServerUrl);
+    }
+
+    [Fact]
     public void BuildHeartbeat_StatusJsonIncludesMachineAndProcess()
     {
         var heartbeat = DaemonHeartbeatReporter.BuildHeartbeat(
