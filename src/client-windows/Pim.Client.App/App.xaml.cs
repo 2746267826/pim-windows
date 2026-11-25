@@ -319,6 +319,30 @@ public partial class App : Application
         }
     }
 
+    internal static void ShowTodayWindow(Window? owner = null)
+    {
+        var existing = Current.Windows.OfType<NativeTodayWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            WindowSummoner.BringToFront(existing);
+            return;
+        }
+
+        new NativeTodayWindow { Owner = owner }.Show();
+    }
+
+    internal static void ShowPlannerWindow(Window? owner = null)
+    {
+        var existing = Current.Windows.OfType<NativePlannerWindow>().FirstOrDefault();
+        if (existing is not null)
+        {
+            WindowSummoner.BringToFront(existing);
+            return;
+        }
+
+        new NativePlannerWindow { Owner = owner }.Show();
+    }
+
     private async Task RunHeartbeatLoopAsync(CancellationToken ct)
     {
         try

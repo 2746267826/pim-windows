@@ -27,7 +27,9 @@ public sealed class CalendarTaskServiceTests
             calendarId: Guid.Parse(CalendarId));
         var workspace = await service.GetTaskWorkspaceAsync(
             search: "Windows",
-            statuses: ["NEEDS-ACTION"]);
+            statuses: ["NEEDS-ACTION"],
+            dueFrom: from,
+            dueTo: from.AddDays(1));
 
         Assert.Single(agenda.Calendars);
         Assert.Single(agenda.Events.Items);
@@ -47,6 +49,15 @@ public sealed class CalendarTaskServiceTests
         Assert.Contains("search=%E8%AF%84%E5%AE%A1", handler.Calls[1].Query, StringComparison.Ordinal);
         Assert.Contains("calendarId=" + CalendarId, handler.Calls[1].Query, StringComparison.Ordinal);
         Assert.Contains("status=NEEDS-ACTION", handler.Calls[3].Query, StringComparison.Ordinal);
+        var decodedTaskQuery = Uri.UnescapeDataString(handler.Calls[3].Query);
+        Assert.Contains(
+            "dueFrom=2026-11-01T00:00:00.0000000+00:00",
+            decodedTaskQuery,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "dueTo=2026-11-02T00:00:00.0000000+00:00",
+            decodedTaskQuery,
+            StringComparison.Ordinal);
     }
 
     [Fact]
