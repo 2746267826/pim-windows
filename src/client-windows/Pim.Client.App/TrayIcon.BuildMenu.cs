@@ -25,9 +25,18 @@ public partial class TrayIcon
         try
         {
             var asm = typeof(TrayIcon).Assembly;
-            var attr = asm.GetCustomAttributes(false).OfType<AssemblyInformationalVersionAttribute>().FirstOrDefault();
-            if (attr != null && !string.IsNullOrWhiteSpace(attr.InformationalVersion))
-                return attr.InformationalVersion;
+            // 显示版本（仓根 VERSION，由 CI 当 -p:DisplayVersion 注入）在前，
+            // 机器号在括号里便于对账/排障；更新检查仍然只认机器号。
+            var display = asm.GetCustomAttributes<AssemblyMetadataAttribute>()
+                .FirstOrDefault(a => a.Key == "DisplayVersion")?.Value;
+            var machineAttr = asm.GetCustomAttributes(false).OfType<AssemblyInformationalVersionAttribute>().FirstOrDefault();
+            var machine = machineAttr?.InformationalVersion;
+            if (!string.IsNullOrWhiteSpace(display))
+            {
+                return string.IsNullOrWhiteSpace(machine) ? $"v{display}" : $"v{display} ({machine})";
+            }
+            if (!string.IsNullOrWhiteSpace(machine))
+                return machine!;
             var appType = Type.GetType("Pim.Client.App.App, Pim.Client.App");
             if (appType != null)
             {

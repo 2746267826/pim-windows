@@ -1,0 +1,16 @@
+<Project>
+  <!--
+    显示版本（给人看的那一个号）由 CI 以 `-p:DisplayVersion=1.0.0` 注入，来源是仓根
+    VERSION 文件；本地构建没有注入时回落成 0.0.0-local，而不是一个看起来像真版本的号。
+
+    为什么不直接改 InformationalVersion：更新检查（UpdateChecker）与端上报心跳读的
+    就是它，比较的是版本号最后一段数字。把显示号塞进去会让更新判断彻底失效，所以
+    显示号单独走 AssemblyMetadata，只在界面（托盘菜单 / 关于）里出现。
+  -->
+  <PropertyGroup>
+    <DisplayVersion Condition="'$(DisplayVersion)' == ''">0.0.0-local</DisplayVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="DisplayVersion" Value="$(DisplayVersion)" />
+  </ItemGroup>
+</Project>

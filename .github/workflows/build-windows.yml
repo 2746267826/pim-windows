@@ -6,6 +6,9 @@ on:
       version:
         required: true
         type: string
+      display_version:
+        required: true
+        type: string
       version_code:
         required: true
         type: string
@@ -39,7 +42,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Display version (empty = resolve locally for debug)'
+        description: 'Machine version (empty = resolve locally for debug)'
         required: false
         default: ''
       version_code:
@@ -96,6 +99,7 @@ jobs:
         run: |
           if [ -n "${{ inputs.version }}" ]; then
             echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "display_version=${{ inputs.display_version }}" >> "$GITHUB_OUTPUT"
             echo "version_code=${{ inputs.version_code }}" >> "$GITHUB_OUTPUT"
             echo "artifact_slug=${{ inputs.artifact_slug }}" >> "$GITHUB_OUTPUT"
             echo "assembly_version=${{ inputs.assembly_version }}" >> "$GITHUB_OUTPUT"
@@ -120,6 +124,7 @@ jobs:
             -o publish/ `
             --self-contained false `
             -p:InformationalVersion=${{ steps.ver.outputs.version }} `
+            -p:DisplayVersion=${{ steps.ver.outputs.display_version }} `
             -p:Version=${{ steps.ver.outputs.assembly_version }} `
             -p:FileVersion=${{ steps.ver.outputs.assembly_version }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

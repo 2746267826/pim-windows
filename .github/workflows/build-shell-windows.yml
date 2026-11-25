@@ -4,6 +4,7 @@ on:
   workflow_call:
     inputs:
       version: { required: true, type: string }
+      display_version: { required: true, type: string }
       version_code: { required: true, type: string }
       artifact_slug: { required: true, type: string }
       assembly_version: { required: true, type: string }
@@ -11,6 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       version: { required: false, default: '' }
+      display_version: { required: false, default: '' }
       version_code: { required: false, default: '' }
       artifact_slug: { required: false, default: '' }
       assembly_version: { required: false, default: '' }
@@ -34,6 +36,7 @@ jobs:
         run: |
           if [ -n "${{ inputs.version }}" ]; then
             echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "display_version=${{ inputs.display_version }}" >> "$GITHUB_OUTPUT"
             echo "version_code=${{ inputs.version_code }}" >> "$GITHUB_OUTPUT"
             echo "artifact_slug=${{ inputs.artifact_slug }}" >> "$GITHUB_OUTPUT"
             echo "assembly_version=${{ inputs.assembly_version }}" >> "$GITHUB_OUTPUT"
@@ -52,6 +55,7 @@ jobs:
             -p:PublishSingleFile=true `
             -p:IncludeNativeLibrariesForSelfExtract=true `
             -p:InformationalVersion=${{ steps.ver.outputs.version }} `
+            -p:DisplayVersion=${{ steps.ver.outputs.display_version }} `
             -p:Version=${{ steps.ver.outputs.assembly_version }} `
             -p:FileVersion=${{ steps.ver.outputs.assembly_version }} `
             -o publish/
