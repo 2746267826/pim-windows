@@ -1,4 +1,6 @@
+using System.Net;
 using Pim.Client.Core;
+using Pim.Client.Core.Contract;
 using Pim.Client.Core.Models;
 using Pim.Client.Core.Services;
 using System.Reflection;
@@ -26,6 +28,29 @@ public class ApiClientDefaultsTests
         client.SetBaseUrl("http://localhost:5858");
 
         Assert.Equal("http://127.0.0.1:5858/api/v1", client.CurrentBaseUrl);
+    }
+
+    [Fact]
+    public async Task ApiClient_OperationScopeBlocksOldRefreshAfterServerChange()
+    {
+        var oldHandler = new CountingHandler();
+        var newHandler = new CountingHandler();
+        var handlers = new Queue<HttpMessageHandler>([oldHandler, newHandler]);
+        var client = new ApiClient(() => handlers.Dequeue());
+        client.SetAccessToken("synthetic-old-access-token");
+
+        using var scope = client.BeginOperationScope();
+        client.SetBaseUrl("https://other.example.test");
+
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.RefreshTokenAsync(new RefreshRequest
+            {
+                RefreshToken = "synthetic-old-refresh-token",
+            }));
+
+        Assert.Contains("deployment changed", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, oldHandler.RequestCount);
+        Assert.Equal(0, newHandler.RequestCount);
     }
 
     [Fact]
@@ -119,5 +144,18 @@ public class ApiClientDefaultsTests
         var attr = property.GetCustomAttribute<JsonPropertyNameAttribute>();
         Assert.NotNull(attr);
         Assert.Equal(expectedJsonName, attr.Name);
+    }
+
+    private sealed class CountingHandler : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        }
     }
 }

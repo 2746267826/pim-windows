@@ -18,6 +18,7 @@ public partial class NativePlannerWindow : Window
     private readonly NativePlannerUiState _eventUi = new();
     private readonly NativePlannerUiState _taskUi = new();
     private bool _loading;
+    private bool _suppressSelection;
     private bool _closed;
 
     public NativePlannerWindow()
@@ -83,7 +84,7 @@ public partial class NativePlannerWindow : Window
 
     private async void OnEventFilterChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (IsLoaded && !_loading)
+        if (IsLoaded && !_loading && !_suppressSelection)
         {
             await RefreshEventsAsync();
         }
@@ -91,7 +92,7 @@ public partial class NativePlannerWindow : Window
 
     private async void OnEventSearchChanged(object sender, TextChangedEventArgs e)
     {
-        if (IsLoaded && !_loading)
+        if (IsLoaded && !_loading && !_suppressSelection)
         {
             await RefreshEventsAsync();
         }
@@ -163,9 +164,7 @@ public partial class NativePlannerWindow : Window
             if (!_closed && _eventUi.IsLoadCurrent(generation, account)
                 && account == CurrentAccount())
             {
-                EventList.ItemsSource = null;
-                EventDetailText.Text = "选择日程查看详情。";
-                EventListStateText.Text = "读取日程失败。";
+                ClearEventUi("读取日程失败。");
                 ShowFailure("读取日程失败", ex);
             }
         }
@@ -565,24 +564,33 @@ public partial class NativePlannerWindow : Window
         Guid? selectedId,
         PlannerDataFence fence)
     {
-        var editable = calendars
-            .Where(calendar => calendar.CanEdit)
-            .Select(calendar => new CalendarChoice(
-                calendar.Name,
-                Guid.Parse(calendar.Id),
-                fence))
-            .ToArray();
-        var choices = new[] { CalendarChoice.All }
-            .Concat(editable)
-            .ToArray();
-        CalendarFilterBox.ItemsSource = choices;
-        CalendarFilterBox.SelectedItem = choices.FirstOrDefault(choice => choice.Id == selectedId)
-            ?? choices[0];
+        var wasSuppressed = _suppressSelection;
+        _suppressSelection = true;
+        try
+        {
+            var editable = calendars
+                .Where(calendar => calendar.CanEdit)
+                .Select(calendar => new CalendarChoice(
+                    calendar.Name,
+                    Guid.Parse(calendar.Id),
+                    fence))
+                .ToArray();
+            var choices = new[] { CalendarChoice.All }
+                .Concat(editable)
+                .ToArray();
+            CalendarFilterBox.ItemsSource = choices;
+            CalendarFilterBox.SelectedItem = choices.FirstOrDefault(choice => choice.Id == selectedId)
+                ?? choices[0];
 
-        var priorEventCalendar = (EventCalendarBox.SelectedItem as CalendarChoice)?.Id;
-        EventCalendarBox.ItemsSource = editable;
-        EventCalendarBox.SelectedItem =
-            editable.FirstOrDefault(choice => choice.Id == priorEventCalendar) ?? editable.FirstOrDefault();
+            var priorEventCalendar = (EventCalendarBox.SelectedItem as CalendarChoice)?.Id;
+            EventCalendarBox.ItemsSource = editable;
+            EventCalendarBox.SelectedItem =
+                editable.FirstOrDefault(choice => choice.Id == priorEventCalendar) ?? editable.FirstOrDefault();
+        }
+        finally
+        {
+            _suppressSelection = wasSuppressed;
+        }
     }
 
     private void ApplyTaskBooks(IReadOnlyList<TaskBookDto> books, PlannerDataFence fence)
@@ -602,12 +610,21 @@ public partial class NativePlannerWindow : Window
 
     private void ClearEventUi(string state)
     {
-        EventList.ItemsSource = null;
-        EventDetailText.Text = "选择日程查看详情。";
-        EventListStateText.Text = state;
-        CalendarFilterBox.ItemsSource = new[] { CalendarChoice.All };
-        CalendarFilterBox.SelectedIndex = 0;
-        EventCalendarBox.ItemsSource = Array.Empty<CalendarChoice>();
+        var wasSuppressed = _suppressSelection;
+        _suppressSelection = true;
+        try
+        {
+            EventList.ItemsSource = null;
+            EventDetailText.Text = "选择日程查看详情。";
+            EventListStateText.Text = state;
+            CalendarFilterBox.ItemsSource = new[] { CalendarChoice.All };
+            CalendarFilterBox.SelectedIndex = 0;
+            EventCalendarBox.ItemsSource = Array.Empty<CalendarChoice>();
+        }
+        finally
+        {
+            _suppressSelection = wasSuppressed;
+        }
     }
 
     private void ClearTaskUi(string state)

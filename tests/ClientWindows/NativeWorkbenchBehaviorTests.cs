@@ -13,6 +13,7 @@ using Xunit;
 using Forms = System.Windows.Forms;
 using WpfButton = System.Windows.Controls.Button;
 using WpfCheckBox = System.Windows.Controls.CheckBox;
+using WpfComboBox = System.Windows.Controls.ComboBox;
 using WpfListBox = System.Windows.Controls.ListBox;
 using WpfApplication = System.Windows.Application;
 
@@ -132,6 +133,10 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
 
                     Assert.Equal("读取日程失败。", Text(planner, "EventListStateText"));
                     Assert.Equal("读取任务失败。", Text(planner, "TaskListStateText"));
+                    var calendarFilter = Assert.IsType<WpfComboBox>(
+                        planner.FindName("CalendarFilterBox"));
+                    Assert.Single(calendarFilter.Items);
+                    Assert.Equal(0, calendarFilter.SelectedIndex);
                     Assert.Null(planner.FindName("TaskBooksList") is WpfListBox books
                         ? books.ItemsSource
                         : null);
@@ -213,6 +218,104 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
     }
 
     [Fact]
+    public async Task LoadedPlannerFailureClearsCalendarFilterWithoutAutomaticRetry()
+    {
+        var session = await PlannerSession.CreateAsync(
+            authenticated: true,
+            failBusinessRequests: true);
+        using (session)
+        {
+            await wpf.RunAsync(async () =>
+            {
+                var planner = new NativePlannerWindow(session.Planner, session.Auth, session.Api)
+                {
+                    FailureDialog = (_, _) => { },
+                };
+                try
+                {
+                    var calendarFilter = Assert.IsType<WpfComboBox>(
+                        planner.FindName("CalendarFilterBox"));
+                    calendarFilter.ItemsSource = new[] { "stale-calendar" };
+                    calendarFilter.SelectedIndex = 0;
+
+                    planner.Show();
+                    await WaitUntilAsync(
+                        () => Text(planner, "EventListStateText") == "读取日程失败。"
+                            && Text(planner, "TaskListStateText") == "读取任务失败。",
+                        "loaded planner failure states");
+                    await Task.Delay(150);
+
+                    Assert.Equal(2, session.Handler.BusinessRequests);
+                    Assert.Single(calendarFilter.Items);
+                    Assert.Equal(0, calendarFilter.SelectedIndex);
+                }
+                finally
+                {
+                    planner.Close();
+                }
+            });
+        }
+    }
+
+    [Fact]
+    public async Task LoadedPlannerAndWorkbenchInvalidateSessionOnServerChangeWithoutExtraRequests()
+    {
+        var session = await PlannerSession.CreateAsync(
+            authenticated: true,
+            failBusinessRequests: false);
+        using (session)
+        {
+            await wpf.RunAsync(async () =>
+            {
+                var workbench = new NativeWorkbenchWindow(session.Auth, session.Api);
+                var planner = new NativePlannerWindow(session.Planner, session.Auth, session.Api);
+                try
+                {
+                    workbench.Show();
+                    planner.Show();
+                    await WaitUntilAsync(
+                        () => Text(workbench, "AccountStateText").Contains(
+                                "已登录",
+                                StringComparison.Ordinal)
+                            && session.Handler.BusinessRequests == 4,
+                        "initial loaded planner requests");
+
+                    session.Auth.ServerUrl = "https://other.example.test";
+                    await WaitUntilAsync(
+                        () => Text(workbench, "AccountStateText") == "账户状态：未登录"
+                            && Text(planner, "EventListStateText").Contains(
+                                "账号或服务器已变更",
+                                StringComparison.Ordinal),
+                        "server change scope clear");
+                    await Task.Delay(100);
+
+                    Assert.Equal(4, session.Handler.BusinessRequests);
+                    Assert.Equal(
+                        "服务器：https://other.example.test/api/v1",
+                        Text(workbench, "ServerStateText"));
+                    Assert.Contains(
+                        "未登录",
+                        Text(workbench, "WorkspaceStateText"),
+                        StringComparison.Ordinal);
+                    Assert.Contains(
+                        "账号或服务器已变更",
+                        Text(planner, "TaskListStateText"),
+                        StringComparison.Ordinal);
+                    var calendarFilter = Assert.IsType<WpfComboBox>(
+                        planner.FindName("CalendarFilterBox"));
+                    Assert.Single(calendarFilter.Items);
+                    Assert.Equal(0, calendarFilter.SelectedIndex);
+                }
+                finally
+                {
+                    planner.Close();
+                    workbench.Close();
+                }
+            });
+        }
+    }
+
+    [Fact]
     public async Task PlannerSendsTheSharedMultiStatusSelectionToTheTypedTaskQuery()
     {
         var session = await PlannerSession.CreateAsync(
@@ -264,7 +367,7 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
                     await planner.RefreshTasksAsync();
                     await today.RefreshTodayAsync();
 
-                    session.Api.SetBaseUrl("https://other.example.test");
+                    session.Auth.ServerUrl = "https://other.example.test";
                     await Dispatcher.Yield(DispatcherPriority.Background);
 
                     Assert.Contains(
@@ -293,6 +396,22 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
 
     private static string Text(Window window, string name)
         => Assert.IsType<TextBlock>(window.FindName(name)).Text;
+
+    private static async Task WaitUntilAsync(Func<bool> condition, string description)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await Task.Delay(20);
+        }
+
+        Assert.True(condition(), $"Timed out waiting for {description}.");
+    }
 
     private static void Click(Forms.ContextMenuStrip menu, string text)
     {

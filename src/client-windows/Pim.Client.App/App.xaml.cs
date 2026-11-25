@@ -194,7 +194,6 @@ public partial class App : Application
                 }
 
                 apiClient.SetBaseUrl(serverUrl);
-                authService.ServerUrl = serverUrl;
                 Logger.Info($"Server URL: {serverUrl}");
             }
 
