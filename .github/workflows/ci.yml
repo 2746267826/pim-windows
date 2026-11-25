@@ -161,6 +161,11 @@ jobs:
           set -euo pipefail
           # 显示版本号读错了不影响编译，只能靠测试拦住
           bash scripts/ci/test-resolve-version.sh
+          # 发布守卫 / 提升来源校验都是「只在发版时才会暴露」的逻辑，
+          # 必须用离线 fixture 在 PR 上真实执行。
+          bash scripts/ci/test-release-publish-guard.sh
+          bash scripts/ci/test-validate-promote-target.sh
+          bash scripts/ci/test-release-workflow-guards.sh
           bash scripts/ci/test-validate-release-notes.sh
           bash scripts/ci/test-contract-freshness.sh
 
@@ -384,28 +389,81 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # release.yml 的 apply 作业用同一个 group：CI 自动发布（pre-release / 资产刷新）
+    # 与人工正式版提升不能并发，否则提升刚把 release 改成 formal，旧 run 重跑又把它
+    # 写回 pre-release，/releases/latest 会回退。
+    concurrency:
+      group: pim-release-mutation
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
+      # 旧 CI run 可能在这个 tag 被 release.yml 提升成正式版之后才重跑。
+      # 重跑如果照常执行 gh release create/upload，会把正式 tag 降回 pre-release，
+      # /releases/latest 也随之回退。
+      #
+      # 守卫脚本（可行为测试）的边界：
+      #   * 正式版 → 绝不改写；
+      #   * 已存在 release 的 commit / tag run 号不属于本次 run → 失败；
+      #   * 重跑只有在该 commit 仍是当前 master HEAD 时才刷新/补发；
+      #   * release / master HEAD API 错误 → 失败，不把「读不到」当成「不存在」。
+      - name: Guard existing formal release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve-version.outputs.release_tag }}
+          SHA: ${{ github.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/scripts/ci/release-publish-guard.sh" \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$TAG" \
+            --sha "$SHA" \
+            --run-number "$RUN_NUMBER" \
+            --run-attempt "$RUN_ATTEMPT"
+
+      # 跳过发布也要留下可见原因，不能变成「这次为什么没发版」的静默缺口。
+      - name: Report skipped release publication
+        if: steps.existing.outputs.publish != 'true'
+        env:
+          TAG: ${{ needs.resolve-version.outputs.release_tag }}
+          REASON: ${{ steps.existing.outputs.reason }}
+        run: |
+          {
+            echo "### Release publication skipped"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| tag | \`${TAG}\` |"
+            echo "| reason | \`${REASON}\` |"
+            echo ""
+            echo "> 这是发布守卫的明确决策（正式版保护 / 过期重跑 / 非当前 master HEAD），不是静默失败。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/download-artifact@v4
+        if: steps.existing.outputs.publish == 'true'
         with:
           path: dl
 
       - name: Normalize assets and generate version.json
+        if: steps.existing.outputs.publish == 'true'
         run: |
           bash scripts/ci/build-release-assets.sh \
             --version "${{ needs.resolve-version.outputs.version }}" \
             --tag "${{ needs.resolve-version.outputs.release_tag }}" \
             --repository "${{ github.repository }}" \
             --dist dl \
-            --out out \
-            --allow-missing-installer
+            --out out
           echo "--- version.json ---"
           cat out/version.json
 
       - name: Publish release
+        if: steps.existing.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           # 每个 step 是独立进程：上一步定义的 shell 变量不会带过来，
@@ -415,11 +473,52 @@ jobs:
           # 自动发布的一律是 dev 版（pre-release）。正式版由 release.yml 把「改版本号那次
           # 构建」提升上来（--prerelease=false）。/releases/latest 天生跳过 pre-release，
           # 所以服务端更新检查始终指向最近一个正式版，开发期不会给用户推一堆更新。
-          gh release create "$TAG" out/* \
-            --repo "${{ github.repository }}" \
-            --title "PIM Windows $TAG" \
-            --generate-notes \
-            --prerelease
+          if gh release view "$TAG" --repo "${{ github.repository }}" --json tagName >/dev/null 2>&1; then
+            # 守卫允许的 pre-release 重跑：只刷新资产，不改 tag 指向。
+            gh release upload "$TAG" out/* --repo "${{ github.repository }}" --clobber
+          else
+            # --target 把 tag 钉在这次 run 真正构建的 commit 上。不传的话 GitHub
+            # 会在建 tag 时把默认分支的当前 HEAD 指过去，慢一点的 run 可能给一个
+            # 自己从未构建过的提交打 tag。
+            gh release create "$TAG" out/* \
+              --repo "${{ github.repository }}" \
+              --target "$SHA" \
+              --title "PIM Windows $TAG" \
+              --generate-notes \
+              --prerelease
+          fi
+
+          # 不把「命令没报错」当成成功：回读 release，确认 tag、target commit、
+          # pre-release 标记和四类资产都属于这次 run。
+          REL="$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}")"
+          test "$(jq -r '.tag_name' <<<"$REL")" = "$TAG"
+          test "$(jq -r '.target_commitish' <<<"$REL")" = "$SHA"
+          test "$(jq -r '.prerelease' <<<"$REL")" = "true"
+          test "$(jq -r '.draft' <<<"$REL")" = "false"
+          # release 的 target 字段不是 tag 本身：再读 tag ref，确认它真的指向
+          # 本次构建的 commit（annotated tag 先解到 commit）。
+          TAG_REF="$(gh api "repos/${{ github.repository }}/git/ref/tags/${TAG}")"
+          TAG_TYPE="$(jq -r '.object.type // empty' <<<"$TAG_REF")"
+          TAG_SHA="$(jq -r '.object.sha // empty' <<<"$TAG_REF")"
+          if [ "$TAG_TYPE" = "tag" ]; then
+            TAG_SHA="$(gh api "repos/${{ github.repository }}/git/tags/${TAG_SHA}" \
+              --jq '.object.sha // empty')"
+          elif [ "$TAG_TYPE" != "commit" ]; then
+            echo "::error::tag ${TAG} 指向未知对象类型 ${TAG_TYPE}"
+            exit 1
+          fi
+          test "$TAG_SHA" = "$SHA" \
+            || { echo "::error::tag ${TAG} 指向 ${TAG_SHA}，不是本次构建 ${SHA}"; exit 1; }
+          ASSETS="$(jq -r '.assets[].name' <<<"$REL")"
+          for name in \
+            "pim-windows-v${V}.zip" \
+            "pim-shell-windows-v${V}.zip" \
+            "PIM-Setup-v${V}.exe" \
+            "version.json"; do
+            grep -qx -- "$name" <<<"$ASSETS" \
+              || { echo "::error::release ${TAG} 缺少资产 ${name}"; exit 1; }
+          done
+          echo "release ${TAG} 已回读确认：target=${SHA}, prerelease=true, assets=四类"
 
       - name: Summary
         if: always()
