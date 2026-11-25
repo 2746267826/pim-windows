@@ -85,7 +85,7 @@ cd browser-extension && npm install && npm run build
 ```
 
 ```powershell
-# Windows 专属：托盘 / WebView2 / 安装包相关的工程与解决方案需要 Windows 工具链
+# Windows 专属：托盘 / WPF 窗口 / 安装包相关的工程与解决方案需要 Windows 工具链
 dotnet build src/client-windows/Pim.Client.Windows.slnx
 ```
 

@@ -194,7 +194,6 @@ public partial class App : Application
                 }
 
                 apiClient.SetBaseUrl(serverUrl);
-                authService.ServerUrl = serverUrl;
                 Logger.Info($"Server URL: {serverUrl}");
             }
 
@@ -271,33 +270,18 @@ public partial class App : Application
         }
     }
 
-    internal static void ShowMainShellWindow(string? route = null)
-    {
-        var existing = Current.Windows.OfType<MainShellWindow>().FirstOrDefault();
-        if (existing is not null)
-        {
-            if (!string.IsNullOrWhiteSpace(route))
-            {
-                existing.OpenRoute(route);
-            }
-
-            existing.Activate();
-            return;
-        }
-
-        var shell = new MainShellWindow();
-        shell.Show();
-        if (!string.IsNullOrWhiteSpace(route))
-        {
-            shell.OpenRoute(route);
-        }
-    }
-
     internal static void ShowNotesWindow()
     {
         WindowSummoner.ShowOrActivate(
             Current.Windows.OfType<NativeNotesWindow>(),
             () => new NativeNotesWindow());
+    }
+
+    internal static void ShowWorkbenchWindow()
+    {
+        WindowSummoner.ShowOrActivate(
+            Current.Windows.OfType<NativeWorkbenchWindow>(),
+            () => new NativeWorkbenchWindow());
     }
 
     private void StartGlobalHotKey()

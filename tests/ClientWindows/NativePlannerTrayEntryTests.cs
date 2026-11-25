@@ -12,21 +12,28 @@ public sealed class NativePlannerTrayEntryTests
         var trayCode = ReadTrayIcon();
 
         Assert.Contains(
-            "ContextMenuStrip.Items.Add(\"原生今日\", null, (_, _) => OpenNativeTodayWindow());",
+            "menu.Items.Add(\"原生工作台\", null, (_, _) => OpenNativeWorkbenchWindow());",
             trayCode,
             StringComparison.Ordinal);
         Assert.Contains(
-            "ContextMenuStrip.Items.Add(\"原生日历与任务\", null, (_, _) => OpenNativePlannerWindow());",
+            "menu.Items.Add(\"原生今日\", null, (_, _) => OpenNativeTodayWindow());",
+            trayCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "menu.Items.Add(\"原生日历与任务\", null, (_, _) => OpenNativePlannerWindow());",
             trayCode,
             StringComparison.Ordinal);
         foreach (var command in new[]
                  {
+                     "原生工作台",
+                     "原生今日",
+                     "原生日历与任务",
                      "打开笔记",
                      "开始笔记录音",
                      "停止并保存笔记录音",
                      "打开状态中心",
                      "立即同步",
-                     "在浏览器打开 Web 工作台",
+                     "Web 兼容：打开 Web 工作台",
                      "登录...",
                      "退出",
                  })
@@ -55,6 +62,27 @@ public sealed class NativePlannerTrayEntryTests
         Assert.DoesNotContain("OpenWebWorkbench", method, StringComparison.Ordinal);
         Assert.DoesNotContain("Process.Start", method, StringComparison.Ordinal);
         Assert.DoesNotContain("WebView", method, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OpenNativeWorkbenchWindow_UsesNativeSingletonAndDoesNotFallBackToBrowser()
+    {
+        var method = ExtractMethod(ReadTrayIcon(), "private static void OpenNativeWorkbenchWindow()");
+
+        Assert.Contains("App.ShowWorkbenchWindow()", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenWebWorkbench", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("Process.Start", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("WebView", method, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExplicitWebCompatibilityEntryUsesSystemBrowserOnly()
+    {
+        var method = ExtractMethod(ReadTrayIcon(), "private static void OpenWebWorkbench()");
+
+        Assert.Contains("WebCompatibilityLinks.Open", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("WebView", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("accessToken", method, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ReadTrayIcon()

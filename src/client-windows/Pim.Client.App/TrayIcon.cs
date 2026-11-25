@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,34 +29,40 @@ public partial class TrayIcon : IDisposable
         }
 
         _notifyIcon?.Dispose();
+        var menu = new System.Windows.Forms.ContextMenuStrip();
+        BuildContextMenu(menu);
         _notifyIcon = new System.Windows.Forms.NotifyIcon
         {
             Icon = LoadIcon(),
             Text = $"PIM 守护程序 - {GlobalHotKeyGesture.NativeNotes.DisplayName} 打开笔记",
             Visible = true,
-            ContextMenuStrip = new System.Windows.Forms.ContextMenuStrip()
+            ContextMenuStrip = menu,
         };
 
-        _notifyIcon.ContextMenuStrip.Items.Add("打开笔记", null, (_, _) => App.ShowNotesWindow());
-        _notifyIcon.ContextMenuStrip.Items.Add("开始笔记录音", null, async (_, _) => await StartQuickNoteRecordingAsync());
-        _notifyIcon.ContextMenuStrip.Items.Add("停止并保存笔记录音", null, async (_, _) => await StopNoteRecordingAsync());
-        _notifyIcon.ContextMenuStrip.Items.Add("打开状态中心", null, (_, _) => ShowStatusWindow());
-        _notifyIcon.ContextMenuStrip.Items.Add("原生今日", null, (_, _) => OpenNativeTodayWindow());
-        _notifyIcon.ContextMenuStrip.Items.Add("原生日历与任务", null, (_, _) => OpenNativePlannerWindow());
-        _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-        _notifyIcon.ContextMenuStrip.Items.Add("立即同步", null, async (_, _) => await TriggerSyncAsync());
-        _notifyIcon.ContextMenuStrip.Items.Add("在浏览器打开 Web 工作台", null, (_, _) => OpenWebWorkbench());
-        _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        _notifyIcon.DoubleClick += (_, _) => OpenNativeWorkbenchWindow();
+    }
+
+    internal void BuildContextMenu(System.Windows.Forms.ContextMenuStrip menu)
+    {
+        menu.Items.Add("原生工作台", null, (_, _) => OpenNativeWorkbenchWindow());
+        menu.Items.Add("原生今日", null, (_, _) => OpenNativeTodayWindow());
+        menu.Items.Add("原生日历与任务", null, (_, _) => OpenNativePlannerWindow());
+        menu.Items.Add("打开笔记", null, (_, _) => App.ShowNotesWindow());
+        menu.Items.Add("开始笔记录音", null, async (_, _) => await StartQuickNoteRecordingAsync());
+        menu.Items.Add("停止并保存笔记录音", null, async (_, _) => await StopNoteRecordingAsync());
+        menu.Items.Add("打开状态中心", null, (_, _) => ShowStatusWindow());
+        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        menu.Items.Add("立即同步", null, async (_, _) => await TriggerSyncAsync());
+        menu.Items.Add("Web 兼容：打开 Web 工作台", null, (_, _) => OpenWebWorkbench());
+        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         var version = GetVersion();
         var serverUrl = ResolveServerUrl(null);
         var trayMenu = BuildMenu(version, serverUrl);
-        _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[0].Text, null, (_, _) => ShowAboutBox(version, serverUrl)));
-        _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[1].Text, null, async (_, _) => await CheckUpdateAsync(version)));
-        _notifyIcon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-        _notifyIcon.ContextMenuStrip.Items.Add("登录...", null, (_, _) => ShowLogin());
-        _notifyIcon.ContextMenuStrip.Items.Add("退出", null, (_, _) => ConfirmAndExit());
-
-        _notifyIcon.DoubleClick += (_, _) => ShowStatusWindow();
+        menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[0].Text, null, (_, _) => ShowAboutBox(version, serverUrl)));
+        menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(trayMenu.Items[1].Text, null, async (_, _) => await CheckUpdateAsync(version)));
+        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        menu.Items.Add("登录...", null, (_, _) => ShowLogin());
+        menu.Items.Add("退出", null, (_, _) => ConfirmAndExit());
     }
 
     private static Icon LoadIcon()
@@ -96,6 +101,9 @@ public partial class TrayIcon : IDisposable
     private static void OpenNativePlannerWindow()
         => App.ShowPlannerWindow();
 
+    private static void OpenNativeWorkbenchWindow()
+        => App.ShowWorkbenchWindow();
+
     internal static bool ActivateOrCreateWindow<T>(
         IEnumerable<T> windows,
         Action<T> activate,
@@ -113,37 +121,7 @@ public partial class TrayIcon : IDisposable
     }
 
     private static void OpenWebWorkbench()
-    {
-        try
-        {
-            var config = DaemonConfig.Load();
-            var root = string.IsNullOrWhiteSpace(config.ServerUrl)
-                ? ClientDefaults.DefaultServerUrl
-                : ApiClient.NormalizeServerUrl(config.ServerUrl);
-            root = root.TrimEnd('/');
-            if (root.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase))
-            {
-                root = root[..^"/api/v1".Length].TrimEnd('/');
-            }
-
-            if (string.IsNullOrWhiteSpace(root))
-            {
-                root = ClientDefaults.DefaultServerUrl;
-            }
-
-            var url = $"{root}/today";
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = url,
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            System.Windows.Forms.MessageBox.Show($"打开 Web 工作台失败：{ex.Message}", "PIM",
-                System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
-        }
-    }
+        => WebCompatibilityLinks.Open(DaemonConfig.Load().ServerUrl, "/");
 
     private static void ShowLogin()
     {

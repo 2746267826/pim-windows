@@ -450,7 +450,6 @@ public partial class StatusWindow : Window
 
         try
         {
-            _apiClient.SetBaseUrl(normalizedUrl);
             _authService.ServerUrl = normalizedUrl;
 
             var config = DaemonConfig.Load();

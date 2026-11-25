@@ -17,7 +17,8 @@ public class WindowsDaemonPrimaryPathTests
         Assert.Contains("打开状态中心", trayCode);
         Assert.Contains("立即同步", trayCode);
         Assert.DoesNotContain("回填最近 14 天 ActivityWatch", trayCode);
-        Assert.Contains("在浏览器打开 Web 工作台", trayCode);
+        Assert.Contains("原生工作台", trayCode);
+        Assert.Contains("Web 兼容：打开 Web 工作台", trayCode);
     }
 
     private static string RepoPath(params string[] parts)

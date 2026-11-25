@@ -102,28 +102,28 @@ public sealed class NativeTodayWindowTests
     public void TrayWorkspaceAndAppShareNativeTodayEntries()
     {
         var tray = ReadRepoFile("src", "client-windows", "Pim.Client.App", "TrayIcon.cs");
-        var shellXaml = ReadRepoFile(
+        var workbenchXaml = ReadRepoFile(
             "src",
             "client-windows",
             "Pim.Client.App",
-            "MainShellWindow.xaml");
-        var shellCode = ReadRepoFile(
+            "NativeWorkbenchWindow.xaml");
+        var workbenchCode = ReadRepoFile(
             "src",
             "client-windows",
             "Pim.Client.App",
-            "MainShellWindow.xaml.cs");
+            "NativeWorkbenchWindow.xaml.cs");
         var appCode = ReadRepoFile("src", "client-windows", "Pim.Client.App", "App.xaml.cs");
 
         Assert.Contains(
-            "ContextMenuStrip.Items.Add(\"原生今日\", null, (_, _) => OpenNativeTodayWindow());",
+            "menu.Items.Add(\"原生今日\", null, (_, _) => OpenNativeTodayWindow());",
             tray,
             StringComparison.Ordinal);
         Assert.Contains("App.ShowTodayWindow()", tray, StringComparison.Ordinal);
-        Assert.Contains("Click=\"OnOpenNativeToday\"", shellXaml, StringComparison.Ordinal);
-        Assert.Contains("今日（Web 兼容）", shellXaml, StringComparison.Ordinal);
-        Assert.Contains("OnOpenNativeToday", shellCode, StringComparison.Ordinal);
-        Assert.Contains("App.ShowTodayWindow(this)", shellCode, StringComparison.Ordinal);
-        Assert.Contains("App.ShowPlannerWindow(this)", shellCode, StringComparison.Ordinal);
+        Assert.Contains("Click=\"OnOpenToday\"", workbenchXaml, StringComparison.Ordinal);
+        Assert.Contains("今日（Web 兼容）", workbenchXaml, StringComparison.Ordinal);
+        Assert.Contains("OnOpenToday", workbenchCode, StringComparison.Ordinal);
+        Assert.Contains("App.ShowTodayWindow(this)", workbenchCode, StringComparison.Ordinal);
+        Assert.Contains("App.ShowPlannerWindow(this)", workbenchCode, StringComparison.Ordinal);
         Assert.Contains(
             "Current.Windows.OfType<NativeTodayWindow>()",
             appCode,

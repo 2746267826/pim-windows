@@ -1,0 +1,105 @@
+<Window x:Class="Pim.Client.App.NativeWorkbenchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PIM 原生工作台" Height="680" Width="980"
+        MinHeight="560" MinWidth="820"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource PimMutedSurfaceBrush}"
+        Loaded="OnLoaded" Closed="OnClosed">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Text="PIM 原生工作台" FontSize="26" FontWeight="SemiBold"
+                       Foreground="{StaticResource PimTextBrush}" />
+            <TextBlock Text="今日、日程、任务、笔记和采集诊断优先使用原生窗口；标注为 Web 兼容的入口会打开系统浏览器。"
+                       Margin="0,5,0,0" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{StaticResource PimMutedTextBrush}" />
+        </StackPanel>
+
+        <Border Grid.Row="1" Margin="0,18,0,18" Padding="14,12"
+                Background="{StaticResource PimSurfaceBrush}"
+                BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
+                CornerRadius="12">
+            <DockPanel>
+                <Button Content="状态 / 账户 / 服务器" DockPanel.Dock="Right"
+                        Style="{StaticResource PimSecondaryButton}"
+                        VerticalAlignment="Center" Click="OnOpenStatus" />
+                <StackPanel>
+                    <TextBlock x:Name="AccountStateText" Text="账户状态：检查中"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource PimTextBrush}" />
+                    <TextBlock x:Name="ServerStateText" Text="服务器：检查中"
+                               Margin="0,4,0,0" FontSize="12"
+                               Foreground="{StaticResource PimMutedTextBrush}" />
+                    <TextBlock x:Name="WorkspaceStateText" Text="原生入口已就绪。"
+                               Margin="0,4,0,0" FontSize="12"
+                               Foreground="{StaticResource PimMutedTextBrush}" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock Text="原生入口" FontSize="13" FontWeight="SemiBold"
+                           Foreground="{StaticResource PimMutedTextBrush}" />
+                <UniformGrid Columns="3" Margin="0,8,0,0">
+                    <Button x:Name="TodayButton" Content="原生今日"
+                            Height="58" Margin="0,0,8,8"
+                            Style="{StaticResource PimPrimaryButton}"
+                            Click="OnOpenToday" />
+                    <Button x:Name="PlannerButton" Content="原生日历与任务"
+                            Height="58" Margin="0,0,8,8"
+                            Style="{StaticResource PimPrimaryButton}"
+                            Click="OnOpenPlanner" />
+                    <Button x:Name="NotesButton" Content="原生笔记"
+                            Height="58" Margin="0,0,0,8"
+                            Style="{StaticResource PimPrimaryButton}"
+                            Click="OnOpenNotes" />
+                    <Button Content="电脑记录" Height="58" Margin="0,0,8,8"
+                            Style="{StaticResource PimSecondaryButton}"
+                            Click="OnOpenComputerHistory" />
+                    <Button Content="应用知识与分类" Height="58" Margin="0,0,8,8"
+                            Style="{StaticResource PimSecondaryButton}"
+                            Click="OnOpenAppKnowledge" />
+                    <Button Content="设备中心" Height="58" Margin="0,0,0,8"
+                            Style="{StaticResource PimSecondaryButton}"
+                            Click="OnOpenDeviceCenter" />
+                </UniformGrid>
+
+                <Border Height="1" Margin="0,18,0,16"
+                        Background="{StaticResource PimBorderBrush}" />
+                <TextBlock Text="Web 兼容入口（系统浏览器）" FontSize="13" FontWeight="SemiBold"
+                           Foreground="{StaticResource PimMutedTextBrush}" />
+                <TextBlock Text="仅用于尚未原生化的 Web 页面；核心日程与任务流程不需要打开这些入口。"
+                           Margin="0,4,0,10" TextWrapping="Wrap" FontSize="12"
+                           Foreground="{StaticResource PimMutedTextBrush}" />
+                <WrapPanel>
+                    <Button Content="今日（Web 兼容）" Margin="0,0,8,0"
+                            Style="{StaticResource PimSecondaryButton}"
+                            Click="OnOpenWebToday" />
+                    <Button Content="旧快速记录（Web 兼容）" Margin="0,0,8,0"
+                            Style="{StaticResource PimSecondaryButton}"
+                            Click="OnOpenWebQuickNotes" />
+                    <Button Content="完整 Web 工作台（兼容）"
+                            Style="{StaticResource PimSecondaryButton}"
+                            Click="OnOpenWebWorkbench" />
+                </WrapPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="3" Margin="0,18,0,0" Padding="12,9"
+                Background="{StaticResource PimSurfaceBrush}"
+                BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
+                CornerRadius="10">
+            <TextBlock Text="账号或服务器切换后，日程、任务、笔记与设备数据都会重新绑定当前账户；未发送的输入不会被带到新作用域。"
+                       TextWrapping="Wrap" FontSize="11"
+                       Foreground="{StaticResource PimMutedTextBrush}" />
+        </Border>
+    </Grid>
+</Window>

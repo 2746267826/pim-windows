@@ -125,6 +125,16 @@ public class ApiClient
         }
     }
 
+    internal bool IsSameDeployment(string baseUrl)
+    {
+        var normalized = NormalizeServerUrl(baseUrl);
+        var uri = new Uri(normalized.TrimEnd('/') + "/api/v1/");
+        lock (_clientSync)
+        {
+            return SameCanonicalApiRoot(_httpClient.BaseAddress, uri);
+        }
+    }
+
     public static string NormalizeServerUrl(string baseUrl)
     {
         var trimmed = baseUrl.Trim().TrimEnd('/');

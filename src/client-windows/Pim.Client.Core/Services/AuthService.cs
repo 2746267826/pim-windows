@@ -82,7 +82,16 @@ public class AuthService
     public string ServerUrl
     {
         get => _apiClient.CurrentBaseUrl;
-        set => _apiClient.SetBaseUrl(value);
+        set
+        {
+            if (_apiClient.IsSameDeployment(value))
+            {
+                return;
+            }
+
+            InvalidateSessionForServerChange();
+            _apiClient.SetBaseUrl(value);
+        }
     }
 
     public async Task<bool> LoginAsync(string username, string password)
@@ -371,6 +380,7 @@ public class AuthService
 
     private async Task<bool> RefreshCoreAsync()
     {
+        using var scope = _apiClient.BeginOperationScope();
         if (string.IsNullOrEmpty(_refreshToken)) return false;
         // 请求前在同一临界区捕获会话代数与 refresh token 快照：
         // 请求期间若发生 Logout/新登录，旧响应/旧令牌不得再复活或覆盖凭据。
@@ -427,6 +437,21 @@ public class AuthService
         {
             System.Diagnostics.Debug.WriteLine($"[AuthService] Refresh failed due to transient/network error: {ex.Message}");
             return false;
+        }
+    }
+
+    private void InvalidateSessionForServerChange()
+    {
+        lock (_saveLock)
+        {
+            Interlocked.Increment(ref _sessionEpoch);
+            _accessToken = null;
+            _refreshToken = null;
+            _accessTokenExpiry = default;
+            CurrentUserId = null;
+            CurrentUsername = null;
+            CurrentDisplayName = null;
+            try { File.Delete(_tokenPath); } catch { }
         }
     }
 
