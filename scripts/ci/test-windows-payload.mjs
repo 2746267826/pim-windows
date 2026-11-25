@@ -145,7 +145,11 @@ test('unified Windows workflow starts from an empty daemon-only publish director
 
   assert.doesNotMatch(workflow, /name:\s*Publish Shell\b/)
   assert.doesNotMatch(workflow, /client-shell-windows/)
-  assert.match(workflow, /Remove-Item -LiteralPath publish -Recurse -Force/)
+  assert.doesNotMatch(workflow, /Pim\.Shell\.App/)
+  const resetIndex = workflow.indexOf('Remove-Item -LiteralPath publish -Recurse -Force')
+  const publishIndex = workflow.indexOf('dotnet publish Pim.Client.App/Pim.Client.App.csproj')
+  assert.ok(resetIndex >= 0, 'publish directory reset is missing')
+  assert.ok(publishIndex > resetIndex, 'daemon publish must start after the publish directory reset')
   assert.match(workflow, /verify-windows-payload\.mjs/)
 })
 
