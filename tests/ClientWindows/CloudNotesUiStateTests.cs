@@ -28,6 +28,27 @@ public sealed class CloudNotesUiStateTests
     }
 
     [Fact]
+    public void HandwritingDeleteSelectionFenceRejectsClearedReselectedOrNonPreviewMaterial()
+    {
+        var preview = Material(Guid.NewGuid(), LocalNoteMaterialKind.Handwriting, "手写.png");
+        var photo = Material(Guid.NewGuid(), LocalNoteMaterialKind.Photo, "照片.png");
+        var source = Material(Guid.NewGuid(), LocalNoteMaterialKind.HandwritingSource, "手写.ink.json");
+        var state = new HandwritingMaterialSelectionState();
+        var fence = state.Capture(preview.MaterialId);
+
+        Assert.True(state.IsCurrent(fence, preview));
+        Assert.False(state.IsCurrent(fence, null));
+        Assert.False(state.IsCurrent(fence, photo));
+        Assert.False(state.IsCurrent(fence, source));
+
+        state.MarkChanged();
+        Assert.False(state.IsCurrent(fence, preview));
+
+        var reselected = state.Capture(preview.MaterialId);
+        Assert.True(state.IsCurrent(reselected, preview));
+    }
+
+    [Fact]
     public void DeclinedNoteSwitchCanRestoreTheCurrentEditorTicket()
     {
         var state = new CloudNotesUiState();
@@ -156,4 +177,20 @@ public sealed class CloudNotesUiStateTests
         Assert.False(CloudNotesUiState.IsLoadedCloudArtifactCurrent(
             fence, 3, 7, fence.NoteId, fence.ArtifactId, Guid.NewGuid(), fence.Account, 12));
     }
+
+    private static LocalNoteMaterial Material(
+        Guid materialId,
+        LocalNoteMaterialKind kind,
+        string displayName) =>
+        new()
+        {
+            MaterialId = materialId,
+            Kind = kind,
+            DisplayName = displayName,
+            ContentSha256 = new string('0', 64),
+            RelativePath = "materials/" + displayName,
+            MediaType = "application/octet-stream",
+            Length = 1,
+            AddedAt = DateTimeOffset.UnixEpoch,
+        };
 }
