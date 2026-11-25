@@ -171,9 +171,12 @@
                                 </StackPanel>
                             </Grid>
                         </StackPanel>
-                        <TextBlock Text="目标日历（任务可选；日程默认日历）" FontSize="12" Foreground="{StaticResource PimMutedTextBrush}" />
-                        <ComboBox x:Name="CalendarBox" Height="34" Margin="0,4,0,14"
+                        <TextBlock x:Name="CalendarFieldLabelText" Text="目标日历（任务可选；日程默认日历）"
+                                   FontSize="12" Foreground="{StaticResource PimMutedTextBrush}" />
+                        <ComboBox x:Name="CalendarBox" Height="34" Margin="0,4,0,4"
                                   DisplayMemberPath="Label" SelectionChanged="OnEditorChoiceChanged" />
+                        <TextBlock x:Name="CalendarHintText" Margin="0,0,0,14" FontSize="11"
+                                   Foreground="{StaticResource PimMutedTextBrush}" TextWrapping="Wrap" />
 
                         <WrapPanel>
                             <Button x:Name="SaveEditButton" Content="保存修改" Style="{StaticResource PimPrimaryButton}"

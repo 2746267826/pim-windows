@@ -51,6 +51,7 @@
     <Compile Include="../ClientWindows/NoteEntryWindowBehaviorTests.cs" />
     <Compile Include="../ClientWindows/RemoteComputerHistoryWindowTests.cs" />
     <Compile Include="../ClientWindows/NoteTaskSuggestionUiStateTests.cs" />
+    <Compile Include="../ClientWindows/NoteTaskSuggestionCalendarUiTests.cs" />
     <Compile Include="../ClientWindows/AppKnowledgeUiStateTests.cs" />
     <Compile Include="../ClientWindows/WpfApplicationFixture.cs" />
     <Compile Include="../ClientWindows/WindowsControlledProcessRunnerTests.cs" />

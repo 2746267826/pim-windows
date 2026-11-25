@@ -26,6 +26,7 @@ public partial class NoteTaskSuggestionsWindow : Window
     private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly DispatcherTimer _draftSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly SemaphoreSlim _actionGate = new(1, 1);
+    private IReadOnlyList<CalendarResponse> _calendars = [];
     private NoteTaskSuggestionLoadFence _loadFence = null!;
     private NoteTaskSuggestionSelectionFence? _selectionFence;
     private NoteTaskSuggestionDto? _selectedSuggestion;
@@ -115,12 +116,10 @@ public partial class NoteTaskSuggestionsWindow : Window
                     .Select(item => new ChoiceRow(item.Id, item.Name)))
                 .ToArray();
             TaskBookBox.SelectedIndex = 0;
-            CalendarBox.ItemsSource = new[] { new ChoiceRow(null, "不指定日历") }
-                .Concat(calendarsTask.Result
-                    .Where(item => Guid.TryParse(item.Id, out _))
-                    .Select(item => new ChoiceRow(item.Id, item.Name)))
+            _calendars = calendarsTask.Result
+                .Where(item => Guid.TryParse(item.Id, out _))
                 .ToArray();
-            CalendarBox.SelectedIndex = 0;
+            ApplyCalendarChoices(NoteTaskSuggestionKindDto.Task, preferredId: null);
             StatusText.Text = "目录已就绪；源正文为固定版本只读副本。";
             await RefreshSuggestionsAsync(selectId: null);
             UpdateActions();
@@ -883,7 +882,7 @@ public partial class NoteTaskSuggestionsWindow : Window
             EndTimeBox.IsEnabled = true;
             DueDatePicker.IsEnabled = true;
             TaskBookBox.IsEnabled = true;
-            CalendarBox.IsEnabled = true;
+            UpdateCalendarFieldState(canEdit: true);
         }
     }
 
@@ -948,7 +947,7 @@ public partial class NoteTaskSuggestionsWindow : Window
             PriorityBox.SelectedItem is int priority ? priority : selected.Priority,
             due,
             taskBookId,
-            (CalendarBox.SelectedItem as ChoiceRow)?.Id)
+            (CalendarBox.SelectedItem as NoteTaskSuggestionCalendarChoice)?.Id)
         {
             Start = start,
             End = end,
@@ -1023,7 +1022,9 @@ public partial class NoteTaskSuggestionsWindow : Window
             TitleBox.Text = draft?.Title ?? suggestion.Title;
             DescriptionBox.Text = draft?.Description ?? suggestion.Description ?? string.Empty;
             PriorityBox.SelectedItem = draft?.Priority ?? suggestion.Priority;
-            SelectChoice(CalendarBox, draft?.CalendarId ?? suggestion.CalendarId);
+            ApplyCalendarChoices(
+                suggestion.Kind,
+                preferredId: draft?.CalendarId ?? suggestion.CalendarId);
             _eventTimeError = null;
 
             if (isEvent)
@@ -1199,7 +1200,38 @@ public partial class NoteTaskSuggestionsWindow : Window
         EndTimeBox.IsEnabled = canEdit && isEvent && validTimeZone;
         DueDatePicker.IsEnabled = canEdit && !isEvent;
         TaskBookBox.IsEnabled = canEdit && !isEvent;
-        CalendarBox.IsEnabled = canEdit;
+        UpdateCalendarFieldState(canEdit);
+    }
+
+    private void ApplyCalendarChoices(NoteTaskSuggestionKindDto kind, string? preferredId)
+    {
+        var choices = NoteTaskSuggestionCalendarPolicy.BuildChoices(_calendars, kind);
+        var selectableCount = NoteTaskSuggestionCalendarPolicy
+            .SelectableCalendars(_calendars, kind)
+            .Count;
+        var selected = NoteTaskSuggestionCalendarPolicy.ResolveChoice(choices, preferredId);
+        CalendarBox.ItemsSource = choices;
+        CalendarBox.SelectedItem = selected;
+        CalendarFieldLabelText.Text = kind == NoteTaskSuggestionKindDto.Event
+            ? "目标日程日历"
+            : "目标日历（任务可选）";
+        CalendarHintText.Text = NoteTaskSuggestionCalendarPolicy.SelectionHint(
+            kind,
+            selectableCount,
+            preferredId,
+            selected);
+    }
+
+    private void UpdateCalendarFieldState(bool canEdit)
+    {
+        var kind = _selectedSuggestion?.Kind ?? NoteTaskSuggestionKindDto.Task;
+        var selectableCount = NoteTaskSuggestionCalendarPolicy
+            .SelectableCalendars(_calendars, kind)
+            .Count;
+        CalendarBox.IsEnabled = NoteTaskSuggestionCalendarPolicy.ShouldEnablePicker(
+            kind,
+            canEdit,
+            selectableCount);
     }
 
     private void SelectChoice(ComboBox box, string? id)
@@ -1241,6 +1273,7 @@ public partial class NoteTaskSuggestionsWindow : Window
         StartTimeBox.Clear();
         EndTimeBox.Clear();
         EventTimeHintText.Text = "";
+        ApplyCalendarChoices(NoteTaskSuggestionKindDto.Task, preferredId: null);
         TaskFieldsPanel.Visibility = Visibility.Visible;
         EventFieldsPanel.Visibility = Visibility.Collapsed;
         EditorTitleText.Text = "编辑建议";
