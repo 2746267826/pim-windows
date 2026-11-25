@@ -23,6 +23,23 @@ public sealed class NativeTodayWindowTests
     }
 
     [Fact]
+    public void TodayRangeUsesTheLocalDateWhenUtcIsStillThePreviousDay()
+    {
+        var earlyMorning = new DateTimeOffset(2026, 11, 26, 0, 30, 0, TimeSpan.FromHours(8));
+
+        var (start, end) = NativeTodayWindow.GetLocalDayRange(earlyMorning);
+
+        Assert.Equal(new DateTime(2026, 11, 25), earlyMorning.UtcDateTime.Date);
+        Assert.Equal(
+            new DateTimeOffset(2026, 11, 26, 0, 0, 0, TimeSpan.FromHours(8)),
+            start);
+        Assert.Equal(
+            new DateTimeOffset(2026, 11, 27, 0, 0, 0, TimeSpan.FromHours(8)),
+            end);
+        Assert.Equal(TimeSpan.FromDays(1), end - start);
+    }
+
+    [Fact]
     public void SelectOpenTasksDropsCompletedAndCancelledItemsAndSortsByDueThenPriority()
     {
         var tasks = new[]
