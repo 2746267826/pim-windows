@@ -129,7 +129,7 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
                     Assert.All(
                         failures,
                         failure => Assert.Contains(
-                            "服务器",
+                            "500",
                             failure.Message,
                             StringComparison.Ordinal));
                 }
