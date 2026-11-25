@@ -20,6 +20,8 @@ public partial class NativeNotesWindow : Window
     private readonly ObservableCollection<LocalNoteSummary> _notes = [];
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
     private readonly CloudNotesUiState _cloudUi = new();
+    private readonly HandwritingMaterialSelectionState _materialSelection = new();
+    private readonly MaterialSelectionBinding _materialBinding;
     private LocalNoteDocument? _current;
     private bool _loading;
     private bool _closing;
@@ -34,13 +36,14 @@ public partial class NativeNotesWindow : Window
     private NoteDerivedVersionSummaryDto? _selectedDerivedVersionSummary;
     private LoadedCloudArtifactFence? _loadedTaskSourceFence;
     private long _taskSourceSelectionGeneration;
-    private readonly HandwritingMaterialSelectionState _materialSelection = new();
     private long _processingStatusGeneration;
     private NoteProcessingStatusTarget? _processingStatusTarget;
 
     public NativeNotesWindow()
     {
         InitializeComponent();
+        _materialBinding = new MaterialSelectionBinding(MaterialsList, _materialSelection);
+        _materialBinding.SelectionChanged += (_, _) => UpdateDeleteHandwritingButtonState();
         _store = App.Services.GetRequiredService<LocalNoteStore>();
         _recording = App.Services.GetRequiredService<WindowsRecordingService>();
         _cloud = App.Services.GetRequiredService<CloudNoteMaterialService>();
@@ -691,9 +694,7 @@ public partial class NativeNotesWindow : Window
             return false;
         }
 
-        MaterialsList.SelectedItem = preview;
-        MaterialsList.ScrollIntoView(preview);
-        return ReferenceEquals(MaterialsList.SelectedItem, preview);
+        return _materialBinding.Select(previewMaterialId);
     }
 
     private void ShowHandwritingDeleteNotApplied(string message)
@@ -705,12 +706,6 @@ public partial class NativeNotesWindow : Window
             "删除手写",
             MessageBoxButton.OK,
             MessageBoxImage.Information);
-    }
-
-    private void OnMaterialSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        _materialSelection.MarkChanged();
-        UpdateDeleteHandwritingButtonState();
     }
 
     private bool IsHandwritingSourceCurrent(
@@ -1014,7 +1009,7 @@ public partial class NativeNotesWindow : Window
         try
         {
             _current = await _store.SaveAsync(_current.NoteId, title, markdown);
-            UpdateMaterialPresentation();
+            UpdateMaterials();
             SaveStateText.Text = "已保存为新的固定版本";
             await RefreshNotesAsync(SearchBox.Text);
             await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
@@ -1054,12 +1049,12 @@ public partial class NativeNotesWindow : Window
         if (_current is null)
         {
             MaterialsText.Text = "固定材料版本 · 尚无材料";
-            MaterialsList.ItemsSource = null;
+            _materialBinding.Bind([]);
             DeleteHandwritingButton.IsEnabled = false;
             return;
         }
 
-        MaterialsList.ItemsSource = _current.Materials;
+        _materialBinding.Bind(_current.Materials);
         UpdateMaterialPresentation();
     }
 
@@ -1118,7 +1113,7 @@ public partial class NativeNotesWindow : Window
         DeleteHandwritingButton.IsEnabled = false;
         _loading = false;
         MaterialsText.Text = "选择或新建笔记以开始";
-        MaterialsList.ItemsSource = null;
+        _materialBinding.Bind([]);
         VersionsBox.ItemsSource = null;
         CloudVersionsList.ItemsSource = null;
         CloudArtifactsList.ItemsSource = null;
