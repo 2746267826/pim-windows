@@ -21,11 +21,22 @@ public partial class NativePlannerWindow : Window
     private bool _closed;
 
     public NativePlannerWindow()
+        : this(
+            App.Services.GetRequiredService<CalendarTaskService>(),
+            App.Services.GetRequiredService<AuthService>(),
+            App.Services.GetRequiredService<ApiClient>())
+    {
+    }
+
+    internal NativePlannerWindow(
+        CalendarTaskService planner,
+        AuthService auth,
+        ApiClient api)
     {
         InitializeComponent();
-        _planner = App.Services.GetRequiredService<CalendarTaskService>();
-        _auth = App.Services.GetRequiredService<AuthService>();
-        _api = App.Services.GetRequiredService<ApiClient>();
+        _planner = planner;
+        _auth = auth;
+        _api = api;
         _api.ExternalScopeChanged += OnExternalScopeChanged;
 
         EventRangeBox.ItemsSource = new[]
@@ -86,7 +97,7 @@ public partial class NativePlannerWindow : Window
         }
     }
 
-    private async Task RefreshEventsAsync()
+    internal async Task RefreshEventsAsync()
     {
         var generation = _eventUi.BeginLoad();
         var account = CurrentAccount();
@@ -179,7 +190,7 @@ public partial class NativePlannerWindow : Window
         }
     }
 
-    private async Task RefreshTasksAsync()
+    internal async Task RefreshTasksAsync()
     {
         var generation = _taskUi.BeginLoad();
         var account = CurrentAccount();
@@ -597,6 +608,9 @@ public partial class NativePlannerWindow : Window
         TaskDetailText.Text = "选择任务查看详情。";
         TaskListStateText.Text = state;
         CompleteTaskButton.IsEnabled = false;
+        TaskBooksList.ItemsSource = null;
+        TaskBookBox.ItemsSource = new[] { TaskBookChoice.None };
+        TaskBookBox.SelectedIndex = 0;
     }
 
     private PlannerAccountIdentity? CurrentAccount()
@@ -666,8 +680,16 @@ public partial class NativePlannerWindow : Window
         var message = exception is HttpRequestException
             ? "无法连接服务器。请检查网络、服务器地址与登录状态。"
             : exception.Message;
+        if (FailureDialog is { } show)
+        {
+            show(title, message);
+            return;
+        }
+
         MessageBox.Show(this, message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
     }
+
+    internal Action<string, string>? FailureDialog { get; set; }
 
     private void OnClosed(object? sender, EventArgs e)
     {

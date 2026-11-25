@@ -1,5 +1,5 @@
 ; PIM Windows 守护程序 - Inno Setup 安装器
-; 打包来源: src/client-windows/publish/* (合包: Daemon + Shell + KeyStats + fix script + VERSION)
+; 打包来源: src/client-windows/publish/* (合包: Daemon + KeyStats + fix script + VERSION)
 ; 生成: PIM-Setup-v<artifact_slug>.exe
 ; 需求: per-machine, Program Files\PIM, 计划任务自启免 UAC
 
@@ -53,7 +53,14 @@ Name: "chinese"; MessagesFile: "compiler:Default.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 旧 Pim.Shell.App 仍由独立的 shell 发布工作流构建，但不再进入统一安装包；
+; CloseApplications/KillPimProcesses 保留旧进程清理，确保覆盖安装能升级原位旧壳。
+Source: "{#PublishDir}\*"; DestDir: "{app}"; Excludes: "Pim.Shell.App.*"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+; 覆盖安装时删除旧版开始菜单入口与旧壳文件；不触碰 Pim.Client.App 或 Web 兼容入口。
+Type: files; Name: "{group}\PIM Shell.lnk"
+Type: files; Name: "{app}\Pim.Shell.App.*"
 
 [Dirs]
 ; 预创建 WER 崩溃转储目录，并赋予标准用户修改权限，避免非提权进程崩溃时 WER 无权限写入
@@ -61,7 +68,6 @@ Name: "{commonappdata}\PIM\dumps"; Permissions: users-modify
 
 [Icons]
 Name: "{group}\PIM 守护程序"; Filename: "{app}\Pim.Client.App.exe"; IconFilename: "{app}\Pim.Client.App.exe"
-Name: "{group}\PIM Shell"; Filename: "{app}\Pim.Shell.App.exe"; IconFilename: "{app}\Pim.Shell.App.exe"
 Name: "{group}\卸载 PIM"; Filename: "{uninstallexe}"
 
 [Run]
@@ -323,8 +329,8 @@ end;
 procedure RegisterWerDumps();
 begin
   // WER LocalDumps：为 Pim.Client.App.exe 崩溃时在本机落完整转储（DumpType=2 full），保留最近 10 份；幂等。
-  // 存放于 {commonappdata}\PIM\dumps（即 C:\ProgramData\PIM\dumps）。仅对 Daemon 注册，KeyStats/Shell 不注册。
-  // 磁盘预算：完整转储含 WPF+WebView2 进程全部内存，单份通常 200~500MB，10 份峰值约 2~5GB。
+  // 存放于 {commonappdata}\PIM\dumps（即 C:\ProgramData\PIM\dumps）。仅对 Daemon 注册，KeyStats 不注册。
+  // 磁盘预算：完整转储含 WPF 进程全部内存，单份通常 200~500MB，10 份峰值约 2~5GB。
   // WER 按 DumpCount 自动滚动覆盖最旧转储，不会无限增长；如需降配可减小 DumpCount（如 5，峰值减半）
   // 或改用 DumpType=1（迷你转储，仅线程/堆栈/部分内存，单份几十 MB，但原生堆外诊断能力大减）。
   RegWriteStringValue(HKLM, WerDumpsKey, 'DumpFolder', ExpandConstant(WerDumpsDir));
