@@ -160,6 +160,7 @@ public partial class NativePlannerWindow : Window
                 && account == CurrentAccount())
             {
                 EventList.ItemsSource = null;
+                EventDetailText.Text = "选择日程查看详情。";
                 EventListStateText.Text = "读取日程失败。";
                 ShowFailure("读取日程失败", ex);
             }
@@ -244,8 +245,7 @@ public partial class NativePlannerWindow : Window
             if (!_closed && _taskUi.IsLoadCurrent(generation, account)
                 && account == CurrentAccount())
             {
-                TaskList.ItemsSource = null;
-                TaskListStateText.Text = "读取任务失败。";
+                ClearTaskUi("读取任务失败。");
                 ShowFailure("读取任务失败", ex);
             }
         }

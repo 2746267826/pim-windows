@@ -115,6 +115,9 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
                 };
                 try
                 {
+                    Assert.IsType<ListBox>(planner.FindName("TaskBooksList")).ItemsSource =
+                        new object[] { "stale-task-book" };
+
                     await planner.RefreshEventsAsync();
                     await planner.RefreshTasksAsync();
 
@@ -129,7 +132,7 @@ public sealed class NativeWorkbenchBehaviorTests(WpfApplicationFixture wpf)
                     Assert.All(
                         failures,
                         failure => Assert.Contains(
-                            "500",
+                            "无法连接服务器",
                             failure.Message,
                             StringComparison.Ordinal));
                 }
