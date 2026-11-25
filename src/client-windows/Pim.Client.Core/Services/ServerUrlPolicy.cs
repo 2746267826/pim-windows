@@ -66,8 +66,12 @@ public static class ServerUrlPolicy
         }
 
         var input = value.Trim();
-        if (input.IndexOf('\\') >= 0
-            || input.Any(char.IsControl)
+        if (input.IndexOf('\\') >= 0)
+        {
+            return Invalid(ServerUrlRejection.AmbiguousPath, AmbiguousPathMessage);
+        }
+
+        if (input.Any(char.IsControl)
             || input.Any(char.IsWhiteSpace))
         {
             return Invalid(ServerUrlRejection.Malformed, MalformedMessage);
@@ -137,7 +141,8 @@ public static class ServerUrlPolicy
             return Invalid(ServerUrlRejection.Malformed, MalformedMessage);
         }
 
-        if (!IsSafePath(uri.AbsolutePath))
+        // Uri 会先把 %2e%2e 之类的编码点段规范化掉，必须同时检查用户输入的原始路径。
+        if (!IsSafePath(ExtractRawPath(candidate)) || !IsSafePath(uri.AbsolutePath))
         {
             return Invalid(ServerUrlRejection.AmbiguousPath, AmbiguousPathMessage);
         }
@@ -276,6 +281,19 @@ public static class ServerUrlPolicy
         return current
             .Split('/', StringSplitOptions.RemoveEmptyEntries)
             .All(segment => segment is not "." and not "..");
+    }
+
+    private static string ExtractRawPath(string candidate)
+    {
+        var authorityStart = candidate.IndexOf("://", StringComparison.Ordinal) + 3;
+        var pathStart = candidate.IndexOf('/', authorityStart);
+        if (pathStart < 0)
+        {
+            return string.Empty;
+        }
+
+        var end = candidate.IndexOfAny(['?', '#'], pathStart);
+        return end < 0 ? candidate[pathStart..] : candidate[pathStart..end];
     }
 
     private static bool HasUnsafeCharacters(string value) =>
