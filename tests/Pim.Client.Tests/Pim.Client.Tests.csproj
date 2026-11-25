@@ -15,7 +15,17 @@
     <IsPackable>false</IsPackable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <RootNamespace>Pim.Client.Tests</RootNamespace>
+    <!-- 版本格式回归测试读取的是真实编译出来的程序集属性，而不是手写的假对象。 -->
+    <InformationalVersion>26.11.1234</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>DisplayVersion</_Parameter1>
+      <_Parameter2>1.1.0</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
 
   <ItemGroup>
     <!-- 显式列出用例文件：清单即范围，新增文件时必须显式加入（避免"悄悄不被执行"） -->
@@ -28,6 +38,7 @@
     <Compile Include="../ClientWindows/AwBucketSelectionTests.cs" />
     <Compile Include="../ClientWindows/BrowserBridgeServiceTests.cs" />
     <Compile Include="../ClientWindows/CloudNoteMaterialServiceTests.cs" />
+    <Compile Include="../ClientWindows/ClientVersionTests.cs" />
     <Compile Include="../ClientWindows/NoteTaskSuggestionServiceTests.cs" />
     <Compile Include="../ClientWindows/AppKnowledgeServiceTests.cs" />
     <Compile Include="../ClientWindows/NoteMaterialRestoreTests.cs" />

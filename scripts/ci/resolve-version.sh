@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 仓根（脚本在 scripts/ci/ 下）：VERSION 文件按仓根定位，不依赖调用方的 cwd。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
 DATE_OVERRIDE=""
 PRINT_ENV=false
 while [[ $# -gt 0 ]]; do
@@ -38,6 +42,26 @@ fi
 LEGACY_RUN_NUMBER_BASE=1000
 N=$((LEGACY_RUN_NUMBER_BASE + N))
 
+# ---------------------------------------------------------------------------
+# 显示版本（给人看的号），来自仓根 VERSION 文件。
+# 机器号（version / versionCode）仍是更新检查与安装降级判断的唯一依据；显示号只
+# 出现在界面上，可以长期停在 1.0.0 —— 正式版才由 release 工作流改一次。
+# 缺失或格式不对一律硬失败，别等发版时才发现写错。
+# ---------------------------------------------------------------------------
+VERSION_FILE="${PIM_VERSION_FILE:-$ROOT/VERSION}"
+DISPLAY_BASE=""
+if [[ -f "$VERSION_FILE" ]]; then
+  DISPLAY_BASE="$(head -n 1 "$VERSION_FILE" | tr -d '\r' | tr -d '[:space:]')"
+fi
+if [[ -z "$DISPLAY_BASE" ]]; then
+  echo "VERSION file missing or empty: $VERSION_FILE (expected a single line like 1.0.0)" >&2
+  exit 1
+fi
+if ! [[ "$DISPLAY_BASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Invalid display version in $VERSION_FILE: '${DISPLAY_BASE}' (expected x.y.z)" >&2
+  exit 1
+fi
+
 SHA_FULL="${GITHUB_SHA:-0000000000000000000000000000000000000000}"
 SHA7="${SHA_FULL:0:7}"
 # 对外显示的版本号用两位年份（26.10.42）；程序集版本（assembly_version）仍用四位
@@ -73,6 +97,8 @@ if [[ "$REF" == "refs/heads/master" && "$EVENT" == "push" ]]; then
   if [[ -n "$CLIENT_PATCH" ]]; then
     version="${BASE}+${CLIENT_PATCH}"
   fi
+  # master 上是干净的显示号：正式版被「提升」时，产物里带的必须就是它。
+  display_version="$DISPLAY_BASE"
 elif [[ "$EVENT" == "pull_request" ]]; then
   PR_NUMBER="${PR_NUMBER:-${GITHUB_PR_NUMBER:-}}"
   if [[ -z "$PR_NUMBER" && "$REF" =~ refs/pull/([0-9]+)/ ]]; then
@@ -83,8 +109,10 @@ elif [[ "$EVENT" == "pull_request" ]]; then
     exit 1
   fi
   version="${BASE}-pr.${PR_NUMBER}+${SHA7}"
+  display_version="${DISPLAY_BASE}-pr.${PR_NUMBER}.${SHA7}"
 else
   version="${BASE}-dev+${SHA7}"
+  display_version="${DISPLAY_BASE}-dev+${SHA7}"
 fi
 
 # filesystem-safe slug
@@ -95,6 +123,7 @@ assembly_version="${YEAR}.$((10#$MONTH)).${N}.0"
 if [[ "$PRINT_ENV" == true ]]; then
   cat <<EOF
 version=$version
+display_version=$display_version
 version_code=$VERSION_CODE
 artifact_slug=$artifact_slug
 git_sha_short=$SHA7
@@ -110,6 +139,7 @@ fi
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
     echo "version=$version"
+    echo "display_version=$display_version"
     echo "version_code=$VERSION_CODE"
     echo "artifact_slug=$artifact_slug"
     echo "git_sha_short=$SHA7"

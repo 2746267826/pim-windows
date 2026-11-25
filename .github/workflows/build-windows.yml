@@ -6,6 +6,9 @@ on:
       version:
         required: true
         type: string
+      display_version:
+        required: true
+        type: string
       version_code:
         required: true
         type: string
@@ -39,7 +42,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Display version (empty = resolve locally for debug)'
+        description: 'Machine version (empty = resolve locally for debug)'
+        required: false
+        default: ''
+      display_version:
+        description: 'Display version (empty = resolve from VERSION)'
         required: false
         default: ''
       version_code:
@@ -95,7 +102,18 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           if [ -n "${{ inputs.version }}" ]; then
+            display_version="${{ inputs.display_version }}"
+            # 手工只传 version 时仍要有显示号；空值不能被静默写成
+            # -p:DisplayVersion=，否则本地/手工构建会退回到 0.0.0-local。
+            if [ -z "$display_version" ]; then
+              display_version="$(head -n 1 "$GITHUB_WORKSPACE/VERSION" | tr -d '\r' | tr -d '[:space:]')"
+            fi
+            if [ -z "$display_version" ]; then
+              echo "::error::display_version 为空，且仓根 VERSION 缺失或为空"
+              exit 1
+            fi
             echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "display_version=$display_version" >> "$GITHUB_OUTPUT"
             echo "version_code=${{ inputs.version_code }}" >> "$GITHUB_OUTPUT"
             echo "artifact_slug=${{ inputs.artifact_slug }}" >> "$GITHUB_OUTPUT"
             echo "assembly_version=${{ inputs.assembly_version }}" >> "$GITHUB_OUTPUT"
@@ -120,6 +138,7 @@ jobs:
             -o publish/ `
             --self-contained false `
             -p:InformationalVersion=${{ steps.ver.outputs.version }} `
+            -p:DisplayVersion=${{ steps.ver.outputs.display_version }} `
             -p:Version=${{ steps.ver.outputs.assembly_version }} `
             -p:FileVersion=${{ steps.ver.outputs.assembly_version }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

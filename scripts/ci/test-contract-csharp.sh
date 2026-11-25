@@ -521,6 +521,8 @@ SB="$WORK/sb-query-binary-boundary"; mksb "$SB"
 run_generator "$SB"
 record "generator_accepts_real_query_and_binary_operations" $([ "$GEN_RC" -eq 0 ] && echo 0 || echo 1) \
   "rc=$GEN_RC for required/optional query parameters and note material octet-stream upload"
+# pim-api #598 把日历查询的 start/end 改成必填（R02 日程时区与 366 天边界），
+# 这里跟着钉成 required=true；其余断言（inbox 可选、offset/limit、octet-stream）不变。
 grep -q 'new("sha256", "plain-string", true)' "$SB/$OPS_REL" \
   && grep -q 'new("offset", "int32", false), new("limit", "int32", false)' "$SB/$OPS_REL" \
   && grep -q 'new("start", "date-time", true)' "$SB/$OPS_REL" \

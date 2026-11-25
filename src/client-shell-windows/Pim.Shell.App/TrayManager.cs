@@ -1,8 +1,8 @@
 using System;
 using System.Drawing;
 using System.IO;
-using System.Reflection;
 using System.Windows;
+using Pim.Client.Core.Services;
 
 namespace Pim.Shell.App;
 
@@ -24,8 +24,11 @@ public sealed class TrayManager : IDisposable
         _icon.ContextMenuStrip.Items.Add("快速笔记", null, (_, _) => onQuickNote());
         _icon.ContextMenuStrip.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         _icon.ContextMenuStrip.Items.Add("更换服务器", null, (_, _) => onChangeServer());
-        var version = typeof(TrayManager).Assembly.GetCustomAttributes(false).OfType<AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "0.0.0-local";
-        _icon.ContextMenuStrip.Items.Add($"关于 PIM v{version}", null, (_, _) => System.Windows.MessageBox.Show($"PIM Shell v{version}\n服务器: {serverUrl}", "关于"));
+        var asm = typeof(TrayManager).Assembly;
+        var machine = ClientVersion.ReadMachineVersion(asm);
+        var display = ClientVersion.ReadDisplayVersion(asm);
+        var label = ClientVersion.FormatDisplayLabel(display, machine);
+        _icon.ContextMenuStrip.Items.Add($"关于 PIM {label}", null, (_, _) => System.Windows.MessageBox.Show($"PIM Shell {label}\n机器版本 / machine: {machine ?? "0.0.0-local"}\n服务器: {serverUrl}", "关于"));
         _icon.ContextMenuStrip.Items.Add("退出", null, (_, _) => onExit());
         _icon.DoubleClick += (_, _) => onShowMain();
     }
