@@ -103,7 +103,7 @@ public partial class MainShellWindow : Window
 
     private void OnOpenNativeToday(object sender, RoutedEventArgs e)
     {
-        App.ShowTodayWindow();
+        App.ShowTodayWindow(this);
     }
 
     private void OnOpenAppKnowledge(object sender, RoutedEventArgs e)
@@ -144,7 +144,7 @@ public partial class MainShellWindow : Window
 
     private void OnOpenNativePlanner(object sender, RoutedEventArgs e)
     {
-        App.ShowPlannerWindow();
+        App.ShowPlannerWindow(this);
     }
 
     private void RefreshShellState()

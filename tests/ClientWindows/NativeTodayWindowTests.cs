@@ -105,13 +105,21 @@ public sealed class NativeTodayWindowTests
         Assert.Contains("Click=\"OnOpenNativeToday\"", shellXaml, StringComparison.Ordinal);
         Assert.Contains("今日（Web 兼容）", shellXaml, StringComparison.Ordinal);
         Assert.Contains("OnOpenNativeToday", shellCode, StringComparison.Ordinal);
-        Assert.Contains("App.ShowTodayWindow()", shellCode, StringComparison.Ordinal);
+        Assert.Contains("App.ShowTodayWindow(this)", shellCode, StringComparison.Ordinal);
+        Assert.Contains("App.ShowPlannerWindow(this)", shellCode, StringComparison.Ordinal);
         Assert.Contains(
             "Current.Windows.OfType<NativeTodayWindow>()",
             appCode,
             StringComparison.Ordinal);
-        Assert.Contains("internal static void ShowTodayWindow()", appCode, StringComparison.Ordinal);
-        Assert.Contains("new NativeTodayWindow().Show()", appCode, StringComparison.Ordinal);
+        Assert.Contains(
+            "internal static void ShowTodayWindow(Window? owner = null)",
+            appCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new NativeTodayWindow { Owner = owner }.Show()",
+            appCode,
+            StringComparison.Ordinal);
+        Assert.Contains("WindowSummoner.BringToFront(existing)", appCode, StringComparison.Ordinal);
     }
 
     private static TaskResponse Task(
