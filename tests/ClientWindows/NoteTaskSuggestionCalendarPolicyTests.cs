@@ -35,7 +35,7 @@ public sealed class NoteTaskSuggestionCalendarPolicyTests
 
         Assert.Equal([EventCalendarId], selectable.Select(item => item.Id).ToArray());
         Assert.Equal(
-            [null, EventCalendarId],
+            new string?[] { null, EventCalendarId },
             choices.Select(item => item.Id).ToArray());
         Assert.True(choices[0].UsesServerDefault);
         Assert.Equal(NoteTaskSuggestionCalendarPolicy.EventDefaultLabel, choices[0].Label);
@@ -64,7 +64,14 @@ public sealed class NoteTaskSuggestionCalendarPolicyTests
             NoteTaskSuggestionKindDto.Task);
 
         Assert.Equal(
-            [null, EventCalendarId, TaskCalendarId, ReadOnlyCalendarId, OutlookCalendarId],
+            new string?[]
+            {
+                null,
+                EventCalendarId,
+                TaskCalendarId,
+                ReadOnlyCalendarId,
+                OutlookCalendarId,
+            },
             choices.Select(item => item.Id).ToArray());
         Assert.Equal(NoteTaskSuggestionCalendarPolicy.TaskDefaultLabel, choices[0].Label);
         Assert.True(NoteTaskSuggestionCalendarPolicy.ShouldEnablePicker(

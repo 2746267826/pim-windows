@@ -76,7 +76,9 @@ public sealed class NoteTaskSuggestionCalendarUiTests(WpfApplicationFixture wpf)
                 calendars);
 
             var choices = window.CalendarChoices();
-            Assert.Equal([null, EventCalendarId], choices.Select(item => item.Id).ToArray());
+            Assert.Equal(
+                new string?[] { null, EventCalendarId },
+                choices.Select(item => item.Id).ToArray());
             Assert.Equal(
                 EventCalendarId,
                 Assert.IsType<NoteTaskSuggestionCalendarChoice>(window.CalendarBox.SelectedItem).Id);
@@ -88,7 +90,9 @@ public sealed class NoteTaskSuggestionCalendarUiTests(WpfApplicationFixture wpf)
                 calendars);
 
             choices = window.CalendarChoices();
-            Assert.Equal([null, EventCalendarId], choices.Select(item => item.Id).ToArray());
+            Assert.Equal(
+                new string?[] { null, EventCalendarId },
+                choices.Select(item => item.Id).ToArray());
             Assert.True(choices[0].UsesServerDefault);
             Assert.Same(choices[0], window.CalendarBox.SelectedItem);
             Assert.Contains(
@@ -120,7 +124,14 @@ public sealed class NoteTaskSuggestionCalendarUiTests(WpfApplicationFixture wpf)
 
             var choices = window.CalendarChoices();
             Assert.Equal(
-                [null, EventCalendarId, TaskCalendarId, ReadOnlyCalendarId, OutlookCalendarId],
+                new string?[]
+                {
+                    null,
+                    EventCalendarId,
+                    TaskCalendarId,
+                    ReadOnlyCalendarId,
+                    OutlookCalendarId,
+                },
                 choices.Select(item => item.Id).ToArray());
             Assert.Equal(
                 OutlookCalendarId,
@@ -197,7 +208,7 @@ public sealed class NoteTaskSuggestionCalendarUiTests(WpfApplicationFixture wpf)
         private static readonly PropertyInfo ServicesProperty = typeof(App)
             .GetProperty(nameof(App.Services), BindingFlags.Public | BindingFlags.Static)!;
 
-        private readonly IServiceProvider _provider;
+        private readonly IDisposable _provider;
         private readonly IServiceProvider? _previousServices;
         private readonly string _root;
 
