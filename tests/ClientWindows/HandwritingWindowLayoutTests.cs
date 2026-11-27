@@ -380,32 +380,57 @@ public sealed class HandwritingWindowLayoutTests(WpfApplicationFixture wpf)
             brushButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             ClickPopupButton(window, "BrushPopup", "InkColorGreenButton");
             ClickPopupButton(window, "BrushPopup", "InkWidthThinButton");
-            ClickPopupButton(window, "BrushPopup", "BrushDoneButton");
-
-            var stroke = new Stroke(
+            var first = new Stroke(
                 new StylusPointCollection(
                 [
                     new StylusPoint(40, 50),
                     new StylusPoint(140, 90),
                 ]),
-                canvas.DefaultDrawingAttributes);
-            canvas.Strokes.Add(stroke);
-            canvas.RaiseEvent(new InkCanvasStrokeCollectedEventArgs(stroke)
+                HandwritingStrokeMapper.ToDrawingAttributes(new LocalInkStyle(
+                    LocalInkPalette.GreenColor,
+                    LocalInkPalette.ThinWidth)));
+            ClickPopupButton(window, "BrushPopup", "InkColorRedButton");
+            ClickPopupButton(window, "BrushPopup", "InkWidthThickButton");
+            ClickPopupButton(window, "BrushPopup", "BrushDoneButton");
+            var second = new Stroke(
+                new StylusPointCollection(
+                [
+                    new StylusPoint(180, 120),
+                    new StylusPoint(280, 150),
+                ]),
+                HandwritingStrokeMapper.ToDrawingAttributes(new LocalInkStyle(
+                    LocalInkPalette.RedColor,
+                    LocalInkPalette.ThickWidth)));
+            canvas.Strokes.Add(first);
+            canvas.RaiseEvent(new InkCanvasStrokeCollectedEventArgs(first)
+            {
+                RoutedEvent = InkCanvas.StrokeCollectedEvent,
+            });
+            canvas.Strokes.Add(second);
+            canvas.RaiseEvent(new InkCanvasStrokeCollectedEventArgs(second)
             {
                 RoutedEvent = InkCanvas.StrokeCollectedEvent,
             });
 
-            var saved = Assert.Single(window.Editor.Strokes);
-            Assert.Equal(LocalInkPalette.GreenColor, saved.Color);
-            Assert.Equal(LocalInkPalette.ThinWidth, saved.Width);
+            Assert.Equal(
+                new[]
+                {
+                    (LocalInkPalette.GreenColor, LocalInkPalette.ThinWidth),
+                    (LocalInkPalette.RedColor, LocalInkPalette.ThickWidth),
+                },
+                window.Editor.Strokes.Select(stroke => (stroke.Color, stroke.Width)));
             Assert.True(window.Editor.CanUndo);
 
             var capture = window.TryCapture();
             Assert.NotNull(capture);
             var parsed = LocalInkDocumentCodec.Parse(capture.VectorJson);
-            var captured = Assert.Single(parsed.Strokes);
-            Assert.Equal(LocalInkPalette.GreenColor, captured.Color);
-            Assert.Equal(LocalInkPalette.ThinWidth, captured.Width);
+            Assert.Equal(
+                new[]
+                {
+                    (LocalInkPalette.GreenColor, LocalInkPalette.ThinWidth),
+                    (LocalInkPalette.RedColor, LocalInkPalette.ThickWidth),
+                },
+                parsed.Strokes.Select(stroke => (stroke.Color, stroke.Width)));
 
             window.Close();
             File.Delete(preferences.Path);

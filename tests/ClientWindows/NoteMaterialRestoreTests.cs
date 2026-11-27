@@ -108,6 +108,14 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 material.RecordingSegment!.Value,
                 material.RecordingChunkIndex!.Value,
                 material.RecordingSamples!.Value)));
+        var restoredInkSource = Assert.Single(restored.Materials, material =>
+            material.Kind == LocalNoteMaterialKind.HandwritingSource);
+        var restoredInk = LocalInkDocumentCodec.Parse(await File.ReadAllTextAsync(
+            Path.Combine(_root, restoredInkSource.RelativePath)));
+        var restoredStroke = Assert.Single(restoredInk.Strokes);
+        Assert.Equal(Guid.Parse("44444444-4444-4444-8444-444444444444"), restoredStroke.Id);
+        Assert.Equal("#b8373c", restoredStroke.Color);
+        Assert.Equal(1.8, restoredStroke.Width);
 
         var zipPath = Path.Combine(_root, "roundtrip.pimnote.zip");
         await store.ExportAsync(restored.NoteId, restored.CurrentVersionId, zipPath);
@@ -119,6 +127,14 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         Assert.Equal(
             restored.ServerSource.Blocks.Select(block => (block.Id, block.Kind, block.RawJson)),
             imported.ServerSource!.Blocks.Select(block => (block.Id, block.Kind, block.RawJson)));
+        var importedInkSource = Assert.Single(imported.Materials, material =>
+            material.Kind == LocalNoteMaterialKind.HandwritingSource);
+        var importedInk = LocalInkDocumentCodec.Parse(await File.ReadAllTextAsync(
+            Path.Combine(importedRoot, importedInkSource.RelativePath)));
+        var importedStroke = Assert.Single(importedInk.Strokes);
+        Assert.Equal(restoredStroke.Id, importedStroke.Id);
+        Assert.Equal("#b8373c", importedStroke.Color);
+        Assert.Equal(1.8, importedStroke.Width);
 
         var rebuilt = await new ServerNoteMaterialBundleBuilder(importedStore)
             .BuildAsync(imported.NoteId, imported.CurrentVersionId);
@@ -135,6 +151,14 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 chunk.GetProperty("segment").GetInt32(),
                 chunk.GetProperty("index").GetInt32(),
                 chunk.GetProperty("samples").GetInt64())));
+        var rebuiltInk = note.GetProperty("blocks").EnumerateArray()
+            .Single(block => block.GetProperty("kind").GetString() == "ink")
+            .GetProperty("ink");
+        Assert.Equal(
+            "44444444-4444-4444-8444-444444444444",
+            rebuiltInk.GetProperty("strokeIds")[0].GetString());
+        Assert.Equal("#b8373c", rebuiltInk.GetProperty("strokeStyles")[0].GetProperty("color").GetString());
+        Assert.Equal(1.8, rebuiltInk.GetProperty("strokeStyles")[0].GetProperty("width").GetDouble());
         Assert.Equal(3, rebuilt.Files.Count(file => file.Kind == "AudioChunk"));
     }
 
@@ -673,7 +697,21 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         var inkBlockId = Guid.Parse("ffffffff-ffff-4fff-8fff-ffffffffffff");
         var photoBytes = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1 };
         var inkPreview = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 2 };
-        const string ink = "{\"width\":320,\"height\":180,\"strokes\":[{\"width\":2,\"points\":[{\"x\":10,\"y\":20,\"pressure\":0.5}]}]}";
+        const string ink = """
+            {
+              "width": 320,
+              "height": 180,
+              "strokeIds": ["44444444-4444-4444-8444-444444444444"],
+              "strokeStyles": [{"color": "#b8373c", "width": 1.8}],
+              "strokes": [
+                {
+                  "color": "#b8373c",
+                  "width": 1.8,
+                  "points": [{"x": 10, "y": 20, "pressure": 0.5}]
+                }
+              ]
+            }
+            """;
         var inkHash = Hash(Encoding.UTF8.GetBytes(ink));
         var noteJson = $$"""
             {"schemaVersion":1,"id":"{{noteId:D}}","revision":7,"createdAtMillis":7,"title":"交错材料",
