@@ -17,6 +17,11 @@ public sealed record NoteTaskSuggestionEditDraft(
     public DateTimeOffset? Start { get; init; }
     public DateTimeOffset? End { get; init; }
     public string? TimeZoneId { get; init; }
+    public bool DescriptionSpecified { get; init; }
+    public bool DueSpecified { get; init; }
+    public bool TaskBookIdSpecified { get; init; }
+    public bool CalendarIdSpecified { get; init; }
+    public bool TimeZoneIdSpecified { get; init; }
 }
 
 public sealed record NoteTaskSuggestionSource(

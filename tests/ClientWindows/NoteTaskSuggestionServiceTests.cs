@@ -19,6 +19,7 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
     private const string Revision = "77777777-7777-7777-7777-777777777777";
     private const string NewRevision = "88888888-8888-8888-8888-888888888888";
     private const string CalendarId = "99999999-9999-9999-9999-999999999999";
+    private const string TaskBookId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
     private const string EventReceiptId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
@@ -331,6 +332,122 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExplicitEventTimeZoneClearSurvivesDraftReloadAndUpdateRequest()
+    {
+        var handler = new TaskSuggestionHandler { Current = EventSuggestion() };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var suggestion = handler.Current;
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "清空日程时区", null, 5, null, null, CalendarId)
+        {
+            Start = suggestion.Start,
+            End = suggestion.End,
+            TimeZoneIdSpecified = true,
+        };
+
+        await service.SaveLocalDraftAsync(Guid.Parse(SuggestionId), draft);
+        var reloaded = await service.LoadDraftAsync(Guid.Parse(SuggestionId));
+
+        Assert.NotNull(reloaded);
+        Assert.True(reloaded.TimeZoneIdSpecified);
+        Assert.Null(reloaded.TimeZoneId);
+        await service.SaveEditAsync(suggestion, reloaded);
+
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("timeZoneId").ValueKind);
+        Assert.Equal(
+            suggestion.Start,
+            body.RootElement.GetProperty("start").GetDateTimeOffset());
+        Assert.Equal(
+            suggestion.End,
+            body.RootElement.GetProperty("end").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public async Task ExplicitTaskFieldClearsSurviveDraftReloadAndUpdateRequest()
+    {
+        var due = DateTimeOffset.Parse("2026-11-20T01:00:00Z");
+        var handler = new TaskSuggestionHandler
+        {
+            Current = Suggestion(
+                description: "旧说明",
+                due: due,
+                taskBookId: TaskBookId,
+                calendarId: CalendarId),
+        };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var suggestion = handler.Current;
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "清空任务字段", null, 3, null, null, null)
+        {
+            DescriptionSpecified = true,
+            DueSpecified = true,
+            TaskBookIdSpecified = true,
+            CalendarIdSpecified = true,
+        };
+
+        await service.SaveLocalDraftAsync(Guid.Parse(SuggestionId), draft);
+        var reloaded = await service.LoadDraftAsync(Guid.Parse(SuggestionId));
+
+        Assert.NotNull(reloaded);
+        Assert.True(reloaded.DescriptionSpecified);
+        Assert.True(reloaded.DueSpecified);
+        Assert.True(reloaded.TaskBookIdSpecified);
+        Assert.True(reloaded.CalendarIdSpecified);
+        Assert.Null(reloaded.Description);
+        Assert.Null(reloaded.Due);
+        Assert.Null(reloaded.TaskBookId);
+        Assert.Null(reloaded.CalendarId);
+        await service.SaveEditAsync(suggestion, reloaded);
+
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("description").ValueKind);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("due").ValueKind);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("taskBookId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("calendarId").ValueKind);
+    }
+
+    [Fact]
+    public async Task AbsentDraftFieldsFallBackToServerSuggestionOnUpdate()
+    {
+        var due = DateTimeOffset.Parse("2026-11-20T01:00:00Z");
+        var handler = new TaskSuggestionHandler
+        {
+            Current = Suggestion(
+                description: "服务器说明",
+                due: due,
+                taskBookId: TaskBookId,
+                calendarId: CalendarId),
+        };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var suggestion = handler.Current;
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "只改标题", null, 3, null, null, null);
+
+        await service.SaveLocalDraftAsync(Guid.Parse(SuggestionId), draft);
+        var reloaded = await service.LoadDraftAsync(Guid.Parse(SuggestionId));
+
+        Assert.NotNull(reloaded);
+        Assert.False(reloaded.DescriptionSpecified);
+        Assert.False(reloaded.DueSpecified);
+        Assert.False(reloaded.TaskBookIdSpecified);
+        Assert.False(reloaded.CalendarIdSpecified);
+        await service.SaveEditAsync(suggestion, reloaded);
+
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal("服务器说明", body.RootElement.GetProperty("description").GetString());
+        Assert.Equal(due, body.RootElement.GetProperty("due").GetDateTimeOffset());
+        Assert.Equal(TaskBookId, body.RootElement.GetProperty("taskBookId").GetString());
+        Assert.Equal(CalendarId, body.RootElement.GetProperty("calendarId").GetString());
+    }
+
+    [Fact]
     public async Task PendingEventConfirmationReconcilesUsingEventId()
     {
         var handler = new TaskSuggestionHandler
@@ -402,12 +519,18 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
         DateTimeOffset? start = null,
         DateTimeOffset? end = null,
         string? timeZoneId = null,
-        string? eventId = null)
+        string? eventId = null,
+        string? description = null,
+        DateTimeOffset? due = null,
+        string? taskBookId = null,
+        string? calendarId = null)
         => new()
         {
             ArtifactId = artifactId ?? ArtifactId,
-            CalendarId = kind == NoteTaskSuggestionKindDto.Event ? CalendarId : null,
+            CalendarId = calendarId ?? (kind == NoteTaskSuggestionKindDto.Event ? CalendarId : null),
             CreatedAt = DateTimeOffset.Parse("2026-11-02T00:00:00Z"),
+            Description = description,
+            Due = due,
             End = end,
             EventId = eventId,
             ExtractionId = "99999999-9999-9999-9999-999999999999",
@@ -423,6 +546,7 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
             SourceManifestSha256 = new string('c', 64),
             Start = start,
             Status = NoteTaskSuggestionStatusDto.Draft,
+            TaskBookId = taskBookId,
             TimeZoneId = timeZoneId,
             Title = "准备评审材料",
             UpdatedAt = DateTimeOffset.Parse("2026-11-02T00:00:00Z"),
