@@ -12,6 +12,7 @@ using Pim.Client.Core.Services;
 using Pim.Client.Core.Services.Notes;
 using Xunit;
 using ComboBox = System.Windows.Controls.ComboBox;
+using TextBox = System.Windows.Controls.TextBox;
 
 namespace Pim.Client.App.Tests;
 
