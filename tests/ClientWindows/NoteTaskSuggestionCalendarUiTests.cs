@@ -439,7 +439,7 @@ public sealed class NoteTaskSuggestionCalendarUiTests(WpfApplicationFixture wpf)
                 .GetNestedType("ChoiceRow", BindingFlags.NonPublic)!;
             var constructor = choiceType
                 .GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-                .Single();
+                .Single(candidate => candidate.GetParameters().Length == 2);
             var items = Array.CreateInstance(choiceType, choices.Length);
             for (var index = 0; index < choices.Length; index++)
             {
