@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Pim.Client.Core.Services.Notes;
 using Xunit;
@@ -140,26 +141,29 @@ public sealed class LocalNoteStoreTests : IDisposable
               "schemaVersion": 1,
               "width": 320,
               "height": 180,
+              "futureRoot": {"owner": "windows-ink-v1"},
               "strokeIds": ["{{redId:D}}", "{{blueId:D}}"],
               "strokeStyles": [
-                {"color": "#b8373c", "width": 1.8},
-                {"color": "#245fba", "width": 6}
+                {"color": "#b8373c", "width": 1.8, "futureStyle": "red-thin"},
+                {"color": "#245fba", "width": 6, "futureStyle": "blue-thick"}
               ],
               "strokes": [
                 {
                   "color": "#b8373c",
                   "width": 1.8,
+                  "futureStroke": 1,
                   "points": [
-                    {"x": 10, "y": 20, "pressure": 0.2},
-                    {"x": 30, "y": 40, "pressure": 0.8}
+                    {"x": 10, "y": 20, "pressure": 0.2, "futurePoint": [1, 1]},
+                    {"x": 30, "y": 40, "pressure": 0.8, "futurePoint": [1, 2]}
                   ]
                 },
                 {
                   "color": "#245fba",
                   "width": 6,
+                  "futureStroke": 2,
                   "points": [
-                    {"x": 50, "y": 60, "pressure": 0.5},
-                    {"x": 90, "y": 100, "pressure": 0.5}
+                    {"x": 50, "y": 60, "pressure": 0.5, "futurePoint": [2, 1]},
+                    {"x": 90, "y": 100, "pressure": 0.5, "futurePoint": [2, 2]}
                   ]
                 }
               ]
@@ -174,8 +178,10 @@ public sealed class LocalNoteStoreTests : IDisposable
             180);
         var localSource = withInk.Materials.Single(material =>
             material.Kind == LocalNoteMaterialKind.HandwritingSource);
-        var localParsed = LocalInkDocumentCodec.Parse(await File.ReadAllTextAsync(
-            Path.Combine(_root, localSource.RelativePath)));
+        var localSourceJson = await File.ReadAllTextAsync(
+            Path.Combine(_root, localSource.RelativePath));
+        var localParsed = LocalInkDocumentCodec.Parse(localSourceJson);
+        AssertInkUnknownFields(localSourceJson);
         Assert.Equal(new[] { redId, blueId }, localParsed.Strokes.Select(stroke => stroke.Id));
         Assert.Equal(
             new[] { LocalInkPalette.RedColor, LocalInkPalette.BlueColor },
@@ -194,8 +200,9 @@ public sealed class LocalNoteStoreTests : IDisposable
             imported.VersionId);
         var importedSource = importedFiles.Single(file =>
             file.Material.Kind == LocalNoteMaterialKind.HandwritingSource);
-        var importedParsed = LocalInkDocumentCodec.Parse(
-            await File.ReadAllTextAsync(importedSource.AbsolutePath));
+        var importedSourceJson = await File.ReadAllTextAsync(importedSource.AbsolutePath);
+        var importedParsed = LocalInkDocumentCodec.Parse(importedSourceJson);
+        AssertInkUnknownFields(importedSourceJson);
 
         Assert.Equal(new[] { redId, blueId }, importedParsed.Strokes.Select(stroke => stroke.Id));
         Assert.Equal(
@@ -840,5 +847,27 @@ public sealed class LocalNoteStoreTests : IDisposable
             ?? throw new InvalidOperationException("测试包 JSON 为空。");
         modify(root);
         await ReplaceZipEntryAsync(packagePath, entryName, root.ToJsonString());
+    }
+
+    private static void AssertInkUnknownFields(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal(
+            "windows-ink-v1",
+            root.GetProperty("futureRoot").GetProperty("owner").GetString());
+        Assert.Equal(
+            "red-thin",
+            root.GetProperty("strokeStyles")[0].GetProperty("futureStyle").GetString());
+        Assert.Equal(
+            "blue-thick",
+            root.GetProperty("strokeStyles")[1].GetProperty("futureStyle").GetString());
+        Assert.Equal(1, root.GetProperty("strokes")[0].GetProperty("futureStroke").GetInt32());
+        Assert.Equal(2, root.GetProperty("strokes")[1].GetProperty("futureStroke").GetInt32());
+        Assert.Equal(
+            new[] { 1, 2 },
+            root.GetProperty("strokes")[0].GetProperty("points")[1]
+                .GetProperty("futurePoint").EnumerateArray()
+                .Select(value => value.GetInt32()));
     }
 }

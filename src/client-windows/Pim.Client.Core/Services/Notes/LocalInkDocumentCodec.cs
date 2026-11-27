@@ -1,9 +1,15 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Pim.Client.Core.Services.Notes;
 
-public sealed record LocalInkPoint(double X, double Y, double Pressure);
+public sealed record LocalInkUnknownProperty(string Name, JsonElement Value);
+
+public sealed record LocalInkPoint(double X, double Y, double Pressure)
+{
+    public IReadOnlyList<LocalInkUnknownProperty>? UnknownProperties { get; init; }
+}
 
 public sealed record LocalInkStroke(
     Guid Id,
@@ -11,21 +17,70 @@ public sealed record LocalInkStroke(
     string Color = LocalInkPalette.LegacyColor,
     double Width = LocalInkPalette.LegacyWidth)
 {
-    public LocalInkStyle Style => new(Color, Width);
+    public LocalInkStyle Style => new(Color, Width, StyleUnknownProperties);
+
+    public IReadOnlyList<LocalInkUnknownProperty>? UnknownProperties { get; init; }
+    public IReadOnlyList<LocalInkUnknownProperty>? StyleUnknownProperties { get; init; }
 }
 
 public sealed record LocalInkDocument(
     int SchemaVersion,
     int Width,
     int Height,
-    IReadOnlyList<LocalInkStroke> Strokes);
+    IReadOnlyList<LocalInkStroke> Strokes)
+{
+    public IReadOnlyList<LocalInkUnknownProperty>? UnknownProperties { get; init; }
+}
 
 public static class LocalInkDocumentCodec
 {
     public const int MaxDocumentBytes = 16 * 1024 * 1024;
+    public const int MinCanvasWidth = 80;
+    public const int MaxCanvasWidth = 2048;
+    public const int MinCanvasHeight = 80;
+    public const int MaxCanvasHeight = 4096;
     private const int MaxStrokes = 10_000;
-    private const int MaxPoints = 500_000;
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const int MaxPoints = 50_000;
+    private static readonly string[] RootKnownProperties =
+    [
+        "schemaVersion",
+        "SchemaVersion",
+        "width",
+        "Width",
+        "height",
+        "Height",
+        "strokeIds",
+        "StrokeIds",
+        "strokeStyles",
+        "StrokeStyles",
+        "strokes",
+        "Strokes",
+    ];
+    private static readonly string[] StrokeKnownProperties =
+    [
+        "color",
+        "Color",
+        "width",
+        "Width",
+        "points",
+        "Points",
+    ];
+    private static readonly string[] PointKnownProperties =
+    [
+        "x",
+        "X",
+        "y",
+        "Y",
+        "pressure",
+        "Pressure",
+    ];
+    private static readonly string[] StyleKnownProperties =
+    [
+        "color",
+        "Color",
+        "width",
+        "Width",
+    ];
 
     public static LocalInkDocument Parse(string json)
     {
@@ -50,6 +105,7 @@ public static class LocalInkDocumentCodec
                 throw InvalidInk();
             }
 
+            var unknownRootProperties = ReadUnknownProperties(root, RootKnownProperties);
             if (TryReadProperty(root, "schemaVersion", "SchemaVersion", out var schemaElement)
                 && (!schemaElement.TryGetInt32(out var schemaVersion) || schemaVersion != 1))
             {
@@ -58,7 +114,8 @@ public static class LocalInkDocumentCodec
 
             var width = ReadCanvasDimension(root, "width", "Width");
             var height = ReadCanvasDimension(root, "height", "Height");
-            if (width is < 1 or > 16_384 || height is < 1 or > 16_384)
+            if (width is < MinCanvasWidth or > MaxCanvasWidth
+                || height is < MinCanvasHeight or > MaxCanvasHeight)
             {
                 throw InvalidInk();
             }
@@ -103,6 +160,9 @@ public static class LocalInkDocumentCodec
                     throw InvalidInk();
                 }
 
+                var unknownStrokeProperties = isObject
+                    ? ReadUnknownProperties(rawStroke, StrokeKnownProperties)
+                    : null;
                 var rawPoints = isObject
                     ? ReadProperty(rawStroke, "points", "Points")
                     : rawStroke;
@@ -197,6 +257,7 @@ public static class LocalInkDocumentCodec
                     double x;
                     double y;
                     double pressure;
+                    IReadOnlyList<LocalInkUnknownProperty>? unknownPointProperties = null;
                     if (rawPoint.ValueKind == JsonValueKind.Array && rawPoint.GetArrayLength() == 3)
                     {
                         x = ReadFiniteNumber(rawPoint[0]);
@@ -214,6 +275,9 @@ public static class LocalInkDocumentCodec
                             out var pressureElement)
                             ? ReadFiniteNumber(pressureElement)
                             : 1;
+                        unknownPointProperties = ReadUnknownProperties(
+                            rawPoint,
+                            PointKnownProperties);
                     }
                     else
                     {
@@ -225,14 +289,24 @@ public static class LocalInkDocumentCodec
                         throw InvalidInk();
                     }
 
-                    points.Add(new LocalInkPoint(x, y, pressure));
+                    points.Add(new LocalInkPoint(x, y, pressure)
+                    {
+                        UnknownProperties = unknownPointProperties,
+                    });
                 }
 
-                strokes.Add(new LocalInkStroke(strokeId, points, style.Color, style.Width));
+                strokes.Add(new LocalInkStroke(strokeId, points, style.Color, style.Width)
+                {
+                    UnknownProperties = unknownStrokeProperties,
+                    StyleUnknownProperties = style.UnknownProperties,
+                });
                 strokeIndex++;
             }
 
-            return new LocalInkDocument(1, width, height, strokes);
+            return new LocalInkDocument(1, width, height, strokes)
+            {
+                UnknownProperties = unknownRootProperties,
+            };
         }
         catch (JsonException ex)
         {
@@ -251,53 +325,82 @@ public static class LocalInkDocumentCodec
     public static string Serialize(LocalInkDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var normalized = Parse(JsonSerializer.Serialize(new
-        {
-            schemaVersion = document.SchemaVersion,
-            width = document.Width,
-            height = document.Height,
-            strokeIds = document.Strokes.Select(stroke => stroke.Id.ToString("D")).ToArray(),
-            strokeStyles = document.Strokes.Select(stroke => new
-            {
-                color = stroke.Color,
-                width = stroke.Width,
-            }).ToArray(),
-            strokes = document.Strokes.Select(stroke => new
-            {
-                color = stroke.Color,
-                width = stroke.Width,
-                points = stroke.Points.Select(point => new
-                {
-                    x = point.X,
-                    y = point.Y,
-                    pressure = point.Pressure,
-                }).ToArray(),
-            }).ToArray(),
-        }, JsonOptions));
+        var normalized = Parse(WriteDocument(document));
+        return WriteDocument(normalized);
+    }
 
-        return JsonSerializer.Serialize(new
+    private static string WriteDocument(LocalInkDocument document)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
         {
-            schemaVersion = normalized.SchemaVersion,
-            width = normalized.Width,
-            height = normalized.Height,
-            strokeIds = normalized.Strokes.Select(stroke => stroke.Id.ToString("D")).ToArray(),
-            strokeStyles = normalized.Strokes.Select(stroke => new
+            writer.WriteStartObject();
+            writer.WriteNumber("schemaVersion", document.SchemaVersion);
+            writer.WriteNumber("width", document.Width);
+            writer.WriteNumber("height", document.Height);
+
+            writer.WriteStartArray("strokeIds");
+            foreach (var stroke in document.Strokes)
             {
-                color = stroke.Color,
-                width = stroke.Width,
-            }).ToArray(),
-            strokes = normalized.Strokes.Select(stroke => new
+                writer.WriteStringValue(stroke.Id.ToString("D"));
+            }
+
+            writer.WriteEndArray();
+            writer.WriteStartArray("strokeStyles");
+            foreach (var stroke in document.Strokes)
             {
-                color = stroke.Color,
-                width = stroke.Width,
-                points = stroke.Points.Select(point => new
+                writer.WriteStartObject();
+                writer.WriteString("color", stroke.Color);
+                writer.WriteNumber("width", stroke.Width);
+                WriteUnknownProperties(writer, stroke.StyleUnknownProperties);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            writer.WriteStartArray("strokes");
+            foreach (var stroke in document.Strokes)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("color", stroke.Color);
+                writer.WriteNumber("width", stroke.Width);
+                writer.WriteStartArray("points");
+                foreach (var point in stroke.Points)
                 {
-                    x = point.X,
-                    y = point.Y,
-                    pressure = point.Pressure,
-                }).ToArray(),
-            }).ToArray(),
-        }, JsonOptions);
+                    writer.WriteStartObject();
+                    writer.WriteNumber("x", point.X);
+                    writer.WriteNumber("y", point.Y);
+                    writer.WriteNumber("pressure", point.Pressure);
+                    WriteUnknownProperties(writer, point.UnknownProperties);
+                    writer.WriteEndObject();
+                }
+
+                writer.WriteEndArray();
+                WriteUnknownProperties(writer, stroke.UnknownProperties);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            WriteUnknownProperties(writer, document.UnknownProperties);
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    private static void WriteUnknownProperties(
+        Utf8JsonWriter writer,
+        IReadOnlyList<LocalInkUnknownProperty>? properties)
+    {
+        if (properties is null)
+        {
+            return;
+        }
+
+        foreach (var property in properties)
+        {
+            writer.WritePropertyName(property.Name);
+            property.Value.WriteTo(writer);
+        }
     }
 
     private static int ReadCanvasDimension(JsonElement element, string camelCase, string pascalCase)
@@ -340,7 +443,30 @@ public static class LocalInkDocumentCodec
     {
         var color = ReadColor(ReadProperty(element, "color", "Color"));
         var width = ReadFiniteNumber(ReadProperty(element, "width", "Width"));
-        return new LocalInkStyle(color, width);
+        return new LocalInkStyle(
+            color,
+            width,
+            ReadUnknownProperties(element, StyleKnownProperties));
+    }
+
+    private static IReadOnlyList<LocalInkUnknownProperty>? ReadUnknownProperties(
+        JsonElement element,
+        string[] knownProperties)
+    {
+        List<LocalInkUnknownProperty>? unknown = null;
+        foreach (var property in element.EnumerateObject())
+        {
+            if (Array.IndexOf(knownProperties, property.Name) >= 0)
+            {
+                continue;
+            }
+
+            (unknown ??= []).Add(new LocalInkUnknownProperty(
+                property.Name,
+                property.Value.Clone()));
+        }
+
+        return unknown;
     }
 
     private static JsonElement ReadProperty(JsonElement element, string camelCase, string pascalCase)

@@ -34,7 +34,10 @@ public static class LocalInkPalette
 
 public sealed record LocalInkStyle
 {
-    public LocalInkStyle(string color, double width)
+    public LocalInkStyle(
+        string color,
+        double width,
+        IReadOnlyList<LocalInkUnknownProperty>? unknownProperties = null)
     {
         Color = NormalizeColor(color);
         if (!double.IsFinite(width)
@@ -45,10 +48,12 @@ public sealed record LocalInkStyle
         }
 
         Width = width;
+        UnknownProperties = unknownProperties;
     }
 
     public string Color { get; }
     public double Width { get; }
+    public IReadOnlyList<LocalInkUnknownProperty>? UnknownProperties { get; }
 
     public static LocalInkStyle Legacy { get; } =
         new(LocalInkPalette.LegacyColor, LocalInkPalette.LegacyWidth);

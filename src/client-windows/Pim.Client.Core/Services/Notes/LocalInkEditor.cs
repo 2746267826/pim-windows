@@ -12,6 +12,7 @@ public sealed class LocalInkEditor
     private readonly List<LocalInkStroke> _strokes = [];
     private readonly List<LocalInkDocument> _undo = [];
     private readonly List<LocalInkDocument> _redo = [];
+    private IReadOnlyList<LocalInkUnknownProperty>? _unknownProperties;
     private List<LocalInkPoint>? _activePoints;
     private LocalInkStyle? _activeStyle;
     private double _activeLength;
@@ -30,6 +31,7 @@ public sealed class LocalInkEditor
             document.Height,
             document.Strokes)
     {
+        _unknownProperties = document.UnknownProperties;
     }
 
     public LocalInkEditor(int width, int height, IEnumerable<LocalInkStroke>? strokes)
@@ -198,15 +200,15 @@ public sealed class LocalInkEditor
                 throw new InvalidDataException("笔迹更新数据不能为空。");
             }
 
-            ValidateLoadedStroke(stroke, _width, _height);
-            if (!updates.TryAdd(stroke.Id, stroke))
-            {
-                throw new InvalidDataException("同一次笔迹更新包含重复标识。");
-            }
-
             if (!existingById.TryGetValue(stroke.Id, out var existing))
             {
                 throw new InvalidOperationException("所选笔迹不属于当前手写窗口。");
+            }
+
+            ValidateLoadedStroke(stroke, _width, _height);
+            if (!updates.TryAdd(stroke.Id, PreserveUnknownProperties(existing, stroke)))
+            {
+                throw new InvalidDataException("同一次笔迹更新包含重复标识。");
             }
 
             if (stroke.Points.Count != existing.Points.Count)
@@ -395,10 +397,11 @@ public sealed class LocalInkEditor
         var pasted = clipboard.Strokes.Select(stroke => CopyStroke(stroke) with
         {
             Id = Guid.NewGuid(),
-            Points = stroke.Points.Select(point => new LocalInkPoint(
-                point.X + offsetX,
-                point.Y + offsetY,
-                point.Pressure)).ToArray(),
+            Points = stroke.Points.Select(point => point with
+            {
+                X = point.X + offsetX,
+                Y = point.Y + offsetY,
+            }).ToArray(),
         }).ToArray();
         PushUndoSnapshot();
         _strokes.AddRange(pasted);
@@ -418,7 +421,10 @@ public sealed class LocalInkEditor
             }
         }
 
-        return new LocalInkDocument(1, _width, _height, _strokes.Select(CopyStroke).ToArray());
+        return new LocalInkDocument(1, _width, _height, _strokes.Select(CopyStroke).ToArray())
+        {
+            UnknownProperties = _unknownProperties,
+        };
     }
 
     public string Serialize() => LocalInkDocumentCodec.Serialize(CreateDocument());
@@ -453,16 +459,19 @@ public sealed class LocalInkEditor
 
         _strokes.Clear();
         _strokes.AddRange(document.Strokes.Select(CopyStroke));
+        _unknownProperties = document.UnknownProperties;
     }
 
     private static void ValidateCanvas(int width, int height)
     {
-        if (width is < 1 or > 16_384)
+        if (width is < LocalInkDocumentCodec.MinCanvasWidth
+            or > LocalInkDocumentCodec.MaxCanvasWidth)
         {
             throw new ArgumentOutOfRangeException(nameof(width), "画布宽度无效。");
         }
 
-        if (height is < 1 or > 16_384)
+        if (height is < LocalInkDocumentCodec.MinCanvasHeight
+            or > LocalInkDocumentCodec.MaxCanvasHeight)
         {
             throw new ArgumentOutOfRangeException(nameof(height), "画布高度无效。");
         }
@@ -581,7 +590,26 @@ public sealed class LocalInkEditor
         => stroke with
         {
             Points = stroke.Points
-                .Select(point => new LocalInkPoint(point.X, point.Y, point.Pressure))
+                .Select(point => new LocalInkPoint(point.X, point.Y, point.Pressure)
+                {
+                    UnknownProperties = point.UnknownProperties,
+                })
                 .ToArray(),
+        };
+
+    private static LocalInkStroke PreserveUnknownProperties(
+        LocalInkStroke existing,
+        LocalInkStroke updated)
+        => updated with
+        {
+            Points = updated.Points
+                .Select((point, index) => point.UnknownProperties is null
+                    && index < existing.Points.Count
+                    ? point with { UnknownProperties = existing.Points[index].UnknownProperties }
+                    : point)
+                .ToArray(),
+            UnknownProperties = updated.UnknownProperties ?? existing.UnknownProperties,
+            StyleUnknownProperties = updated.StyleUnknownProperties
+                ?? existing.StyleUnknownProperties,
         };
 }

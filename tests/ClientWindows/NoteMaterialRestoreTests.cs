@@ -110,8 +110,10 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 material.RecordingSamples!.Value)));
         var restoredInkSource = Assert.Single(restored.Materials, material =>
             material.Kind == LocalNoteMaterialKind.HandwritingSource);
-        var restoredInk = LocalInkDocumentCodec.Parse(await File.ReadAllTextAsync(
-            Path.Combine(_root, restoredInkSource.RelativePath)));
+        var restoredInkJson = await File.ReadAllTextAsync(
+            Path.Combine(_root, restoredInkSource.RelativePath));
+        var restoredInk = LocalInkDocumentCodec.Parse(restoredInkJson);
+        AssertInkUnknownFields(restoredInkJson);
         var restoredStroke = Assert.Single(restoredInk.Strokes);
         Assert.Equal(Guid.Parse("44444444-4444-4444-8444-444444444444"), restoredStroke.Id);
         Assert.Equal("#b8373c", restoredStroke.Color);
@@ -129,8 +131,10 @@ public sealed class NoteMaterialRestoreTests : IDisposable
             imported.ServerSource!.Blocks.Select(block => (block.Id, block.Kind, block.RawJson)));
         var importedInkSource = Assert.Single(imported.Materials, material =>
             material.Kind == LocalNoteMaterialKind.HandwritingSource);
-        var importedInk = LocalInkDocumentCodec.Parse(await File.ReadAllTextAsync(
-            Path.Combine(importedRoot, importedInkSource.RelativePath)));
+        var importedInkJson = await File.ReadAllTextAsync(
+            Path.Combine(importedRoot, importedInkSource.RelativePath));
+        var importedInk = LocalInkDocumentCodec.Parse(importedInkJson);
+        AssertInkUnknownFields(importedInkJson);
         var importedStroke = Assert.Single(importedInk.Strokes);
         Assert.Equal(restoredStroke.Id, importedStroke.Id);
         Assert.Equal("#b8373c", importedStroke.Color);
@@ -159,6 +163,19 @@ public sealed class NoteMaterialRestoreTests : IDisposable
             rebuiltInk.GetProperty("strokeIds")[0].GetString());
         Assert.Equal("#b8373c", rebuiltInk.GetProperty("strokeStyles")[0].GetProperty("color").GetString());
         Assert.Equal(1.8, rebuiltInk.GetProperty("strokeStyles")[0].GetProperty("width").GetDouble());
+        Assert.Equal(
+            "server",
+            rebuiltInk.GetProperty("futureRoot").GetProperty("from").GetString());
+        Assert.Equal(
+            "red",
+            rebuiltInk.GetProperty("strokeStyles")[0].GetProperty("futureStyle").GetString());
+        Assert.Equal(
+            "pen",
+            rebuiltInk.GetProperty("strokes")[0].GetProperty("futureStroke").GetString());
+        Assert.Equal(
+            5,
+            rebuiltInk.GetProperty("strokes")[0].GetProperty("points")[0]
+                .GetProperty("futurePoint").GetInt32());
         Assert.Equal(3, rebuilt.Files.Count(file => file.Kind == "AudioChunk"));
     }
 
@@ -687,6 +704,25 @@ public sealed class NoteMaterialRestoreTests : IDisposable
             files));
     }
 
+    private static void AssertInkUnknownFields(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal(
+            "server",
+            root.GetProperty("futureRoot").GetProperty("from").GetString());
+        Assert.Equal(
+            "red",
+            root.GetProperty("strokeStyles")[0].GetProperty("futureStyle").GetString());
+        Assert.Equal(
+            "pen",
+            root.GetProperty("strokes")[0].GetProperty("futureStroke").GetString());
+        Assert.Equal(
+            5,
+            root.GetProperty("strokes")[0].GetProperty("points")[0]
+                .GetProperty("futurePoint").GetInt32());
+    }
+
     private static async Task<RestoreFixture> CreateMixedRecordingFixtureAsync()
     {
         var noteId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
@@ -701,13 +737,15 @@ public sealed class NoteMaterialRestoreTests : IDisposable
             {
               "width": 320,
               "height": 180,
+              "futureRoot": {"from": "server"},
               "strokeIds": ["44444444-4444-4444-8444-444444444444"],
-              "strokeStyles": [{"color": "#b8373c", "width": 1.8}],
+              "strokeStyles": [{"color": "#b8373c", "width": 1.8, "futureStyle": "red"}],
               "strokes": [
                 {
                   "color": "#b8373c",
                   "width": 1.8,
-                  "points": [{"x": 10, "y": 20, "pressure": 0.5}]
+                  "futureStroke": "pen",
+                  "points": [{"x": 10, "y": 20, "pressure": 0.5, "futurePoint": 5}]
                 }
               ]
             }

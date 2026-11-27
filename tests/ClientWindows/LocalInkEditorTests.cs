@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Pim.Client.Core.Services.Notes;
 using Xunit;
 
@@ -447,6 +448,12 @@ public sealed class LocalInkEditorTests : IDisposable
     public void InvalidOrOutOfBoundsInputIsRejectedWithoutChangingTheDocument()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new LocalInkEditor(0, 420));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new LocalInkEditor(79, 420));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new LocalInkEditor(2049, 420));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new LocalInkEditor(320, 79));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new LocalInkEditor(320, 4097));
+        _ = new LocalInkEditor(80, 80);
+        _ = new LocalInkEditor(2048, 4096);
         var editor = new LocalInkEditor(320, 180);
 
         Assert.Throws<ArgumentOutOfRangeException>(() =>
@@ -471,6 +478,58 @@ public sealed class LocalInkEditorTests : IDisposable
         Assert.NotNull(accepted);
         Assert.Equal(accepted.Id, Assert.Single(editor.Strokes).Id);
         Assert.False(editor.CanRedo);
+    }
+
+    [Fact]
+    public void EditingAndMovingStrokesPreservesUnknownFields()
+    {
+        const string json = """
+            {
+              "schemaVersion": 1,
+              "width": 320,
+              "height": 180,
+              "futureRoot": "root",
+              "strokeIds": ["11111111-1111-4111-8111-111111111111"],
+              "strokeStyles": [{"color": "#b8373c", "width": 1.8, "futureStyle": 7}],
+              "strokes": [
+                {
+                  "color": "#b8373c",
+                  "width": 1.8,
+                  "futureStroke": "stroke",
+                  "points": [
+                    {"x": 10, "y": 20, "pressure": 0.5, "futurePoint": 1},
+                    {"x": 30, "y": 40, "pressure": 0.5, "futurePoint": 2}
+                  ]
+                }
+              ]
+            }
+            """;
+        var editor = new LocalInkEditor(LocalInkDocumentCodec.Parse(json));
+        var moved = editor.Strokes[0] with
+        {
+            Points = editor.Strokes[0].Points
+                .Select(point => new LocalInkPoint(point.X + 5, point.Y, point.Pressure))
+                .ToArray(),
+        };
+
+        Assert.Equal(1, editor.UpdateStrokeGeometry([moved]));
+        editor.BeginStroke(new LocalInkPoint(60, 80, 0.5));
+        editor.AppendPoint(new LocalInkPoint(100, 120, 0.5));
+        Assert.NotNull(editor.EndStroke());
+
+        using var saved = JsonDocument.Parse(
+            LocalInkDocumentCodec.Serialize(editor.CreateDocument()));
+        var root = saved.RootElement;
+        Assert.Equal("root", root.GetProperty("futureRoot").GetString());
+        Assert.Equal(7, root.GetProperty("strokeStyles")[0].GetProperty("futureStyle").GetInt32());
+        var stroke = root.GetProperty("strokes")[0];
+        Assert.Equal("stroke", stroke.GetProperty("futureStroke").GetString());
+        Assert.Equal(
+            new[] { 1, 2 },
+            stroke.GetProperty("points").EnumerateArray()
+                .Select(point => point.GetProperty("futurePoint").GetInt32()));
+        Assert.Equal(15d, stroke.GetProperty("points")[0].GetProperty("x").GetDouble());
+        Assert.Equal(2, root.GetProperty("strokes").GetArrayLength());
     }
 
     [Fact]

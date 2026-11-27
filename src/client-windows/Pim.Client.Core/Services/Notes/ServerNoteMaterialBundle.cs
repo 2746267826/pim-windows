@@ -681,10 +681,8 @@ public sealed class ServerNoteMaterialBundleBuilder
                 throw new LocalNoteStoreException($"手写源尺寸或版本无效：{source.DisplayName}");
             }
 
-            var strokes = new JsonArray();
             foreach (var stroke in ink.Strokes)
             {
-                var points = new JsonArray();
                 foreach (var point in stroke.Points)
                 {
                     if (point.X < 0 || point.X > ink.Width
@@ -693,43 +691,13 @@ public sealed class ServerNoteMaterialBundleBuilder
                     {
                         throw new LocalNoteStoreException($"手写笔迹超出固定画布：{source.DisplayName}");
                     }
-
-                    points.Add(new JsonObject
-                    {
-                        ["x"] = point.X,
-                        ["y"] = point.Y,
-                        ["pressure"] = point.Pressure,
-                    });
                 }
-
-                if (points.Count == 0)
-                {
-                    throw new LocalNoteStoreException($"手写笔迹包含空笔画：{source.DisplayName}");
-                }
-
-                strokes.Add(new JsonObject
-                {
-                    ["color"] = stroke.Color,
-                    ["width"] = stroke.Width,
-                    ["points"] = points,
-                });
             }
 
-            return new JsonObject
-            {
-                ["width"] = ink.Width,
-                ["height"] = ink.Height,
-                ["strokeIds"] = new JsonArray(
-                    ink.Strokes.Select(stroke => (JsonNode)JsonValue.Create(stroke.Id.ToString("D")))
-                        .ToArray()),
-                ["strokeStyles"] = new JsonArray(
-                    ink.Strokes.Select(stroke => (JsonNode)new JsonObject
-                    {
-                        ["color"] = stroke.Color,
-                        ["width"] = stroke.Width,
-                    }).ToArray()),
-                ["strokes"] = strokes,
-            };
+            var normalized = JsonNode.Parse(LocalInkDocumentCodec.Serialize(ink)) as JsonObject
+                ?? throw new LocalNoteStoreException($"手写源 JSON 损坏：{source.DisplayName}");
+            normalized.Remove("schemaVersion");
+            return normalized;
         }
         catch (InvalidDataException ex)
         {
