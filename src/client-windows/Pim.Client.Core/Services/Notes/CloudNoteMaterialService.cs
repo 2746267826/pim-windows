@@ -1188,6 +1188,12 @@ public sealed class CloudNoteMaterialService
             throw new InvalidDataException("服务器手写块尺寸、样式或笔迹无效。", ex);
         }
 
+        if (ink.Strokes.Any(stroke => stroke.Points.Any(point =>
+                point.X < 0 || point.X > ink.Width || point.Y < 0 || point.Y > ink.Height)))
+        {
+            throw new InvalidDataException("服务器手写笔迹点超出画布范围。");
+        }
+
         if (blockWidth is { } expectedWidth && Math.Abs(ink.Width - expectedWidth) > 1
             || blockHeight is { } expectedHeight && Math.Abs(ink.Height - expectedHeight) > 1)
         {

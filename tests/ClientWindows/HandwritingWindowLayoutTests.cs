@@ -270,10 +270,12 @@ public sealed class HandwritingWindowLayoutTests(WpfApplicationFixture wpf)
             window.Show();
             window.UpdateLayout();
 
+            var canvas = Assert.IsType<InkCanvas>(window.FindName("Canvas"));
             var brushButton = Assert.IsType<Button>(window.FindName("InkModeButton"));
             brushButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var brushPopup = Assert.IsType<Popup>(window.FindName("BrushPopup"));
             Assert.True(brushPopup.IsOpen);
+            Assert.Equal(InkCanvasEditingMode.Ink, canvas.EditingMode);
 
             Assert.Equal(LocalInkStyle.Default, window.Editor.Brush);
             var colorOptions = new[]
@@ -308,7 +310,6 @@ public sealed class HandwritingWindowLayoutTests(WpfApplicationFixture wpf)
             ClickPopupButton(window, "BrushPopup", "BrushDoneButton");
             Assert.False(brushPopup.IsOpen);
 
-            var canvas = Assert.IsType<InkCanvas>(window.FindName("Canvas"));
             Assert.Equal(
                 LocalInkPalette.RedColor,
                 $"#{canvas.DefaultDrawingAttributes.Color.R:X2}{canvas.DefaultDrawingAttributes.Color.G:X2}{canvas.DefaultDrawingAttributes.Color.B:X2}".ToLowerInvariant());
@@ -340,6 +341,8 @@ public sealed class HandwritingWindowLayoutTests(WpfApplicationFixture wpf)
             var reopened = new HandwritingWindow(preferences, parsed);
             reopened.Show();
             reopened.UpdateLayout();
+            Assert.Equal(LocalInkPalette.BlueColor, reopened.Editor.Brush.Color);
+            Assert.Equal(LocalInkPalette.ThinWidth, reopened.Editor.Brush.Width);
             var reopenedCanvas = Assert.IsType<InkCanvas>(reopened.FindName("Canvas"));
             Assert.Equal(2, reopenedCanvas.Strokes.Count);
             var reopenedAttributes = reopenedCanvas.Strokes.Select(stroke => (
@@ -388,6 +391,11 @@ public sealed class HandwritingWindowLayoutTests(WpfApplicationFixture wpf)
             var canvas = Assert.IsType<InkCanvas>(window.FindName("Canvas"));
             Assert.Equal(2, canvas.Strokes.Count);
             var eraserButton = Assert.IsType<Button>(window.FindName("EraserButton"));
+            eraserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(InkCanvasEditingMode.None, canvas.EditingMode);
+            var selectButton = Assert.IsType<Button>(window.FindName("SelectModeButton"));
+            selectButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(InkCanvasEditingMode.Select, canvas.EditingMode);
             eraserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Equal(InkCanvasEditingMode.None, canvas.EditingMode);
             ClickPopupButton(window, "EraserPopup", "PartialEraserButton");

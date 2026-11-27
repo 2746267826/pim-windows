@@ -176,6 +176,25 @@ public sealed class CloudNoteMaterialServiceTests : IDisposable
     }
 
     [Fact]
+    public void ServerInkRestoreRejectsPointsOutsideCanvas()
+    {
+        const string serverInk = """
+            {
+              "width": 320,
+              "height": 180,
+              "strokes": [
+                {
+                  "points": [{"x": -0.5, "y": 20, "pressure": 0.5}]
+                }
+              ]
+            }
+            """;
+
+        Assert.Throws<InvalidDataException>(() =>
+            CloudNoteMaterialService.ConvertServerInkToLocalSource(serverInk, 320, 180));
+    }
+
+    [Fact]
     public async Task UploadRecoversStableVersionSkipsPartsAndEstablishesHead()
     {
         var store = new LocalNoteStore(_root);

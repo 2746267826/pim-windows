@@ -98,11 +98,8 @@ public partial class HandwritingWindow : Window
             return null;
         }
 
+        ClearCanvasSelection();
         Canvas.EditingMode = InkCanvasEditingMode.Ink;
-        if (Canvas.GetSelectedStrokes().Count > 0)
-        {
-            Canvas.Select(new StrokeCollection());
-        }
 
         Canvas.UpdateLayout();
         var width = _editor.Width;
@@ -241,10 +238,10 @@ public partial class HandwritingWindow : Window
 
     private void OnBrushSettings(object sender, RoutedEventArgs e)
     {
+        ClearCanvasSelection();
         Canvas.EditingMode = InkCanvasEditingMode.Ink;
         _eraserToolActive = false;
         _eraserPoints.Clear();
-        Canvas.Select(new StrokeCollection());
         EraserPopup.IsOpen = false;
         BrushPopup.IsOpen = true;
         ApplyBrushToCanvas();
@@ -316,12 +313,20 @@ public partial class HandwritingWindow : Window
     {
         _eraserToolActive = true;
         _eraserPoints.Clear();
+        ClearCanvasSelection();
         Canvas.EditingMode = InkCanvasEditingMode.None;
-        Canvas.Select(new StrokeCollection());
         BrushPopup.IsOpen = false;
         EraserPopup.IsOpen = true;
         UpdateToolUi();
         StatusText.Text = EraserStatusText();
+    }
+
+    private void ClearCanvasSelection()
+    {
+        if (Canvas.GetSelectedStrokes().Count > 0)
+        {
+            Canvas.Select(new StrokeCollection());
+        }
     }
 
     private void OnPartialEraser(object sender, RoutedEventArgs e)
