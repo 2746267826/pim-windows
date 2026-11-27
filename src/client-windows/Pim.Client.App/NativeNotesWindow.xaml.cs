@@ -1994,7 +1994,7 @@ public partial class NativeNotesWindow : Window
             MessageBox.Show(
                 this,
                 "请先选择一个已加载的云端结果固定版本。",
-                "从笔记提取任务",
+                "从笔记提取任务与日程",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
             return;
@@ -2006,13 +2006,13 @@ public partial class NativeNotesWindow : Window
             || versionId != summaryVersionId
             || _selectedDerivedVersion.Kind != _selectedArtifact.Kind)
         {
-            CloudResultStateText.Text = "所选结果身份不完整或不匹配；未打开任务提取。";
+            CloudResultStateText.Text = "所选结果身份不完整或不匹配；未打开任务与日程提取。";
             return;
         }
 
         if (_cloud.CurrentAccountScope is null)
         {
-            CloudResultStateText.Text = "请先登录云端账号，再从固定结果提取任务。";
+            CloudResultStateText.Text = "请先登录云端账号，再从固定结果提取任务与日程。";
             return;
         }
 
@@ -2067,7 +2067,7 @@ public partial class NativeNotesWindow : Window
         }
         catch (InvalidOperationException)
         {
-            CloudResultStateText.Text = "账号或服务器刚刚切换；请刷新登录状态后重新打开任务提取。";
+            CloudResultStateText.Text = "账号或服务器刚刚切换；请刷新登录状态后重新打开任务与日程提取。";
         }
     }
 
