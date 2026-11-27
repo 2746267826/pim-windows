@@ -176,7 +176,9 @@ public sealed class LocalInkEditorTests : IDisposable
         Assert.Single(editor.Strokes);
         Assert.True(editor.Undo());
         Assert.Empty(editor.Strokes);
-        Assert.False(editor.CanRedo);
+        Assert.True(editor.CanRedo);
+        Assert.True(editor.Redo());
+        Assert.Single(editor.Strokes);
     }
 
     [Fact]

@@ -15,7 +15,8 @@ internal static class HandwritingStrokeMapper
         ArgumentNullException.ThrowIfNull(style);
         return new DrawingAttributes
         {
-            Color = (Color)ColorConverter.ConvertFromString(style.Color),
+            Color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter
+                .ConvertFromString(style.Color),
             Width = style.Width,
             Height = style.Width,
             StylusTip = StylusTip.Ellipse,

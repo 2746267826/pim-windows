@@ -98,6 +98,11 @@ public static class LocalInkDocumentCodec
             foreach (var rawStroke in rawStrokes.EnumerateArray())
             {
                 var isObject = rawStroke.ValueKind == JsonValueKind.Object;
+                if (suppliedStyles && !isObject)
+                {
+                    throw InvalidInk();
+                }
+
                 var rawPoints = isObject
                     ? ReadProperty(rawStroke, "points", "Points")
                     : rawStroke;
