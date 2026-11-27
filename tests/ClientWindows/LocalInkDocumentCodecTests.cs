@@ -6,6 +6,110 @@ namespace Pim.Client.Tests;
 public sealed class LocalInkDocumentCodecTests
 {
     [Fact]
+    public void D04PerStrokeStylesRoundTripAndLegacyPayloadsKeepFrozenDefaults()
+    {
+        var redId = Guid.Parse("11111111-1111-4111-8111-111111111111");
+        var blueId = Guid.Parse("22222222-2222-4222-8222-222222222222");
+        var shared = $$"""
+            {
+              "width": 320,
+              "height": 180,
+              "strokeIds": ["{{redId:D}}", "{{blueId:D}}"],
+              "strokeStyles": [
+                {"color": "#b8373c", "width": 1.8},
+                {"color": "#245fba", "width": 6}
+              ],
+              "strokes": [
+                {
+                  "color": "#b8373c",
+                  "width": 1.8,
+                  "points": [
+                    {"x": 10, "y": 20, "pressure": 0.25},
+                    {"x": 30, "y": 40, "pressure": 0.75}
+                  ]
+                },
+                {
+                  "color": "#245fba",
+                  "width": 6,
+                  "points": [{"x": 50, "y": 60, "pressure": 0.5}]
+                }
+              ]
+            }
+            """;
+
+        var parsed = LocalInkDocumentCodec.Parse(shared);
+
+        Assert.Equal(new[] { redId, blueId }, parsed.Strokes.Select(stroke => stroke.Id));
+        Assert.Equal(new[] { "#b8373c", "#245fba" }, parsed.Strokes.Select(stroke => stroke.Color));
+        Assert.Equal(new[] { 1.8, 6d }, parsed.Strokes.Select(stroke => stroke.Width));
+
+        var saved = LocalInkDocumentCodec.Serialize(parsed);
+        var reopened = LocalInkDocumentCodec.Parse(saved);
+        Assert.Equal(new[] { "#b8373c", "#245fba" }, reopened.Strokes.Select(stroke => stroke.Color));
+        Assert.Equal(new[] { 1.8, 6d }, reopened.Strokes.Select(stroke => stroke.Width));
+        Assert.Equal(new[] { redId, blueId }, reopened.Strokes.Select(stroke => stroke.Id));
+        Assert.Contains("\"schemaVersion\":1", saved, StringComparison.Ordinal);
+        Assert.Contains("\"strokeStyles\"", saved, StringComparison.Ordinal);
+        Assert.Contains("\"color\":\"#b8373c\"", saved, StringComparison.Ordinal);
+
+        const string legacyWindows =
+            """{"schemaVersion":1,"width":320,"height":180,"strokes":[[[10,20,0.5],[30,40,0.5]]]}""";
+        var legacy = LocalInkDocumentCodec.Parse(legacyWindows);
+        Assert.Equal(LocalInkPalette.LegacyColor, legacy.Strokes.Single().Color);
+        Assert.Equal(LocalInkPalette.LegacyWidth, legacy.Strokes.Single().Width);
+    }
+
+    [Fact]
+    public void SharedInkWithoutPressureUsesTheCrossEndDefault()
+    {
+        const string shared = """
+            {
+              "width": 320,
+              "height": 180,
+              "strokes": [
+                {"points": [{"x": 10, "y": 20}, {"x": 30, "y": 40}]}
+              ]
+            }
+            """;
+
+        var parsed = LocalInkDocumentCodec.Parse(shared);
+
+        Assert.All(parsed.Strokes.Single().Points, point => Assert.Equal(1, point.Pressure));
+        Assert.Equal(LocalInkPalette.LegacyColor, parsed.Strokes.Single().Color);
+        Assert.Equal(LocalInkPalette.LegacyWidth, parsed.Strokes.Single().Width);
+    }
+
+    [Fact]
+    public void SharedInkStylesMayReplaceInlineStylesForAndroidAndWebPayloads()
+    {
+        const string shared = """
+            {
+              "width": 320.0,
+              "height": 180.0,
+              "strokeStyles": [
+                {"color": "#B8373C", "width": 1.8},
+                {"color": "#216e4e", "width": 6.0}
+              ],
+              "strokes": [
+                {"points": [{"x": 10, "y": 20}]},
+                {"points": [{"x": 30, "y": 40, "pressure": 0.5}]}
+              ]
+            }
+            """;
+
+        var parsed = LocalInkDocumentCodec.Parse(shared);
+
+        Assert.Equal(320, parsed.Width);
+        Assert.Equal(180, parsed.Height);
+        Assert.Equal(
+            new[] { LocalInkPalette.RedColor, LocalInkPalette.GreenColor },
+            parsed.Strokes.Select(stroke => stroke.Color));
+        Assert.Equal(
+            new[] { LocalInkPalette.ThinWidth, 6d },
+            parsed.Strokes.Select(stroke => stroke.Width));
+    }
+
+    [Fact]
     public void LegacyInkReopensInOrderAndSavesStableIdsWithoutChangingPressure()
     {
         var json = "{\"schemaVersion\":1,\"width\":320,\"height\":180,\"strokes\":["
@@ -70,6 +174,13 @@ public sealed class LocalInkDocumentCodecTests
     [InlineData("{\"schemaVersion\":1,\"SchemaVersion\":1,\"width\":320,\"height\":180,\"strokes\":[[[1,2,0.5]]]}")]
     [InlineData("{\"schemaVersion\":1,\"width\":320,\"height\":180,\"strokeIds\":[17],\"strokes\":[[[1,2,0.5]]]}")]
     [InlineData("{\"schemaVersion\":1,\"width\":320,\"height\":180,\"strokes\":[{\"points\":[[1,2,0.5]],\"Points\":[[3,4,0.5]]}]}")]
+    [InlineData("{\"schemaVersion\":1,\"width\":320,\"height\":180,\"strokes\":[[[1,2,0.5]]],\"strokeStyles\":[{\"color\":\"#b8373c\",\"width\":1.8}]}")]
+    [InlineData("{\"schemaVersion\":1,\"width\":320,\"height\":180,\"strokes\":[{\"color\":\"#245fba\",\"width\":6,\"points\":[{\"x\":1,\"y\":2}]}],\"strokeStyles\":[{\"color\":\"#b8373c\",\"width\":1.8}]}")]
+    [InlineData("{\"schemaVersion\":1,\"width\":320,\"height\":180,\"strokes\":[{\"points\":[{\"x\":1,\"y\":2}]}],\"strokeStyles\":[{\"color\":\"red\",\"width\":1.8}]}")]
+    [InlineData("{\"schemaVersion\":1,\"width\":320,\"height\":180,\"strokes\":[{\"points\":[{\"x\":1,\"y\":2}]}],\"strokeStyles\":[{\"color\":\"#b8373c\",\"width\":0.4}]}")]
+    [InlineData("{\"schemaVersion\":1,\"width\":320,\"height\":180,\"strokes\":[{\"points\":[{\"x\":1,\"y\":2}]}],\"strokeStyles\":[{\"color\":\"#b8373c\",\"color\":\"#245fba\",\"width\":1.8}]}")]
+    [InlineData("{\"schemaVersion\":2,\"width\":320,\"height\":180,\"strokes\":[[[1,2,0.5]]]}")]
+    [InlineData("{\"schemaVersion\":1,\"width\":320.5,\"height\":180,\"strokes\":[[[1,2,0.5]]]}")]
     public void CorruptInkIsRejectedWithoutProducingAnEditableDocument(string json)
     {
         Assert.Throws<InvalidDataException>(() => LocalInkDocumentCodec.Parse(json));

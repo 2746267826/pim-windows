@@ -1,4 +1,5 @@
 using System.IO;
+using System.Globalization;
 using Pim.Client.Core.Services.Notes;
 using System.Windows;
 using System.Windows.Controls;
@@ -17,31 +18,78 @@ public sealed record HandwritingCapture(
 
 public partial class HandwritingWindow : Window
 {
+    private static readonly IReadOnlyList<(string Color, string Label)> BrushColorLabels =
+    [
+        (LocalInkPalette.InkColor, "墨色"),
+        (LocalInkPalette.RedColor, "红"),
+        (LocalInkPalette.BlueColor, "蓝"),
+        (LocalInkPalette.GreenColor, "绿"),
+    ];
+
+    private static readonly IReadOnlyList<(double Width, string Label)> BrushWidthLabels =
+    [
+        (LocalInkPalette.ThinWidth, "细"),
+        (LocalInkPalette.MediumWidth, "中"),
+        (LocalInkPalette.ThickWidth, "粗"),
+    ];
+
     private readonly LocalInkEditor _editor;
+    private readonly LocalInkPreferenceStore? _preferences;
     private LocalInkClipboard? _clipboard;
+    private LocalInkStyle _brush;
+    private LocalInkEraserMode _eraserMode = LocalInkEraserMode.Partial;
+    private bool _eraserToolActive;
+    private bool _eraserDrawing;
+    private readonly List<LocalInkPoint> _eraserPoints = [];
     private bool _refreshingCanvas;
 
     public HandwritingWindow()
+        : this(
+            new LocalInkPreferenceStore(LocalInkPreferenceStore.DefaultPath),
+            null)
     {
-        InitializeComponent();
-        _editor = new LocalInkEditor(680, 420);
-        InitializeEditor();
     }
 
     public HandwritingWindow(LocalInkDocument document)
+        : this(
+            new LocalInkPreferenceStore(LocalInkPreferenceStore.DefaultPath),
+            document)
     {
-        ArgumentNullException.ThrowIfNull(document);
-        var validated = LocalInkDocumentCodec.Parse(LocalInkDocumentCodec.Serialize(document));
+    }
+
+    internal HandwritingWindow(
+        LocalInkPreferenceStore? preferences,
+        LocalInkDocument? document)
+    {
+        var validated = document is null
+            ? null
+            : LocalInkDocumentCodec.Parse(LocalInkDocumentCodec.Serialize(document));
         InitializeComponent();
-        _editor = new LocalInkEditor(validated);
+        _preferences = preferences;
+        _brush = preferences?.Load() ?? LocalInkStyle.Default;
+        _editor = validated is null
+            ? new LocalInkEditor(680, 420)
+            : new LocalInkEditor(validated);
+        _editor.Brush = _brush;
+        BrushPopup.PlacementTarget = InkModeButton;
+        EraserPopup.PlacementTarget = EraserButton;
         InitializeEditor();
-        HandwritingTitle.Text = "编辑手写";
-        SaveButton.Content = "保存新版本";
+        if (validated is not null)
+        {
+            HandwritingTitle.Text = "编辑手写";
+            SaveButton.Content = "保存新版本";
+        }
     }
 
     public HandwritingCapture? Capture { get; private set; }
 
     internal LocalInkEditor Editor => _editor;
+    internal LocalInkEraserMode EraserModeForTest => _eraserMode;
+
+    internal int ApplyEraserForTest(
+        IReadOnlyList<LocalInkPoint> points,
+        LocalInkEraserMode mode)
+        => ApplyEraserGesture(points, mode);
 
     internal HandwritingCapture? TryCapture()
     {
@@ -86,7 +134,15 @@ public partial class HandwritingWindow : Window
     {
         Canvas.Width = _editor.Width;
         Canvas.Height = _editor.Height;
+        ApplyBrushToCanvas();
         RefreshCanvasFromEditor();
+        UpdateToolUi();
+    }
+
+    private void ApplyBrushToCanvas()
+    {
+        _editor.Brush = _brush;
+        Canvas.DefaultDrawingAttributes = HandwritingStrokeMapper.ToDrawingAttributes(_brush);
     }
 
     private void RefreshCanvasFromEditor()
@@ -181,16 +237,257 @@ public partial class HandwritingWindow : Window
     }
 
     private void OnInkMode(object sender, RoutedEventArgs e)
+        => OnBrushSettings(sender, e);
+
+    private void OnBrushSettings(object sender, RoutedEventArgs e)
     {
         Canvas.EditingMode = InkCanvasEditingMode.Ink;
+        _eraserToolActive = false;
+        _eraserPoints.Clear();
+        Canvas.Select(new StrokeCollection());
+        EraserPopup.IsOpen = false;
+        BrushPopup.IsOpen = true;
+        ApplyBrushToCanvas();
+        UpdateToolUi();
         StatusText.Text = "画笔模式：鼠标按下、移动、抬起形成独立笔迹。";
+    }
+
+    private void OnBrushColorSelected(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string color })
+        {
+            return;
+        }
+
+        try
+        {
+            _brush = new LocalInkStyle(color, _brush.Width);
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        ApplyBrushChoice();
+    }
+
+    private void OnBrushWidthSelected(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string rawWidth }
+            || !double.TryParse(
+                rawWidth,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var width))
+        {
+            return;
+        }
+
+        try
+        {
+            _brush = new LocalInkStyle(_brush.Color, width);
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        ApplyBrushChoice();
+    }
+
+    private void ApplyBrushChoice()
+    {
+        Canvas.EditingMode = InkCanvasEditingMode.Ink;
+        _eraserToolActive = false;
+        _eraserPoints.Clear();
+        ApplyBrushToCanvas();
+        _preferences?.Save(_brush);
+        UpdateToolUi();
+        StatusText.Text = $"画笔：{ColorLabel(_brush.Color)} · {WidthLabel(_brush.Width)}；只影响之后的新笔。";
+    }
+
+    private void OnBrushDone(object sender, RoutedEventArgs e)
+    {
+        BrushPopup.IsOpen = false;
+        Canvas.Focus();
+    }
+
+    private void OnEraserSettings(object sender, RoutedEventArgs e)
+    {
+        _eraserToolActive = true;
+        _eraserPoints.Clear();
+        Canvas.EditingMode = InkCanvasEditingMode.None;
+        Canvas.Select(new StrokeCollection());
+        BrushPopup.IsOpen = false;
+        EraserPopup.IsOpen = true;
+        UpdateToolUi();
+        StatusText.Text = EraserStatusText();
+    }
+
+    private void OnPartialEraser(object sender, RoutedEventArgs e)
+    {
+        _eraserMode = LocalInkEraserMode.Partial;
+        _eraserToolActive = true;
+        _eraserPoints.Clear();
+        Canvas.EditingMode = InkCanvasEditingMode.None;
+        EraserPopup.IsOpen = false;
+        UpdateToolUi();
+        StatusText.Text = EraserStatusText();
+    }
+
+    private void OnWholeEraser(object sender, RoutedEventArgs e)
+    {
+        _eraserMode = LocalInkEraserMode.WholeStroke;
+        _eraserToolActive = true;
+        _eraserPoints.Clear();
+        Canvas.EditingMode = InkCanvasEditingMode.None;
+        EraserPopup.IsOpen = false;
+        UpdateToolUi();
+        StatusText.Text = EraserStatusText();
     }
 
     private void OnSelectMode(object sender, RoutedEventArgs e)
     {
+        _eraserToolActive = false;
+        _eraserPoints.Clear();
         Canvas.EditingMode = InkCanvasEditingMode.Select;
+        BrushPopup.IsOpen = false;
+        EraserPopup.IsOpen = false;
+        UpdateToolUi();
         StatusText.Text = "选择模式：点击笔迹后可删除、复制或粘贴。";
     }
+
+    private void OnCanvasPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!_eraserToolActive || e.ChangedButton != MouseButton.Left)
+        {
+            return;
+        }
+
+        var point = ToInkPoint(e.GetPosition(Canvas));
+        e.Handled = true;
+        _eraserDrawing = true;
+        _eraserPoints.Clear();
+        _eraserPoints.Add(point);
+        Canvas.CaptureMouse();
+        Canvas.Focus();
+    }
+
+    private void OnCanvasPreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_eraserDrawing)
+        {
+            return;
+        }
+
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            FinishEraserGesture();
+            return;
+        }
+
+        AddEraserPoint(ToInkPoint(e.GetPosition(Canvas)));
+        e.Handled = true;
+    }
+
+    private void OnCanvasPreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_eraserDrawing)
+        {
+            return;
+        }
+
+        AddEraserPoint(ToInkPoint(e.GetPosition(Canvas)));
+        e.Handled = true;
+        FinishEraserGesture();
+    }
+
+    private void OnCanvasLostMouseCapture(object sender, MouseEventArgs e)
+    {
+        if (_eraserDrawing)
+        {
+            FinishEraserGesture();
+        }
+    }
+
+    private void AddEraserPoint(LocalInkPoint point)
+    {
+        if (_eraserPoints.Count == 0)
+        {
+            _eraserPoints.Add(point);
+            return;
+        }
+
+        var previous = _eraserPoints[^1];
+        var distance = Math.Sqrt(
+            Math.Pow(point.X - previous.X, 2)
+            + Math.Pow(point.Y - previous.Y, 2));
+        if (distance >= 0.5)
+        {
+            _eraserPoints.Add(point);
+        }
+    }
+
+    private void FinishEraserGesture()
+    {
+        if (!_eraserDrawing)
+        {
+            return;
+        }
+
+        _eraserDrawing = false;
+        if (Canvas.IsMouseCaptured)
+        {
+            Canvas.ReleaseMouseCapture();
+        }
+
+        var points = _eraserPoints.ToArray();
+        _eraserPoints.Clear();
+        if (points.Length == 0)
+        {
+            return;
+        }
+
+        ApplyEraserGesture(points, _eraserMode);
+    }
+
+    private int ApplyEraserGesture(
+        IReadOnlyList<LocalInkPoint> points,
+        LocalInkEraserMode mode)
+    {
+        try
+        {
+            var changed = _editor.Erase(points, mode);
+            if (changed > 0)
+            {
+                RefreshCanvasFromEditor();
+                StatusText.Text = $"已擦除 {changed} 笔的触碰范围；一次拖动可一步撤销。";
+            }
+            else
+            {
+                StatusText.Text = "橡皮未碰到笔迹，画布未修改。";
+            }
+
+            UpdateCommandState();
+            return changed;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
+        {
+            StatusText.Text = ex.Message;
+            return 0;
+        }
+    }
+
+    private LocalInkPoint ToInkPoint(System.Windows.Point point)
+        => new(
+            Math.Clamp(point.X, 0, Math.Max(0, Canvas.Width)),
+            Math.Clamp(point.Y, 0, Math.Max(0, Canvas.Height)),
+            1);
+
+    private string EraserStatusText()
+        => _eraserMode == LocalInkEraserMode.Partial
+            ? "橡皮：局部擦除。拖过笔迹中段会保留两侧，一次拖动可一步撤销。"
+            : "橡皮：整笔擦除。碰到任意部分即删除整笔，一次拖动可一步撤销。";
 
     private void OnUndo(object sender, RoutedEventArgs e)
     {
@@ -406,4 +703,25 @@ public partial class HandwritingWindow : Window
         CopyButton.IsEnabled = hasSelection;
         DeleteSelectionButton.IsEnabled = hasSelection;
     }
+
+    private void UpdateToolUi()
+    {
+        var colorLabel = ColorLabel(_brush.Color);
+        var widthLabel = WidthLabel(_brush.Width);
+        InkModeButton.Content = $"画笔 · {colorLabel} · {widthLabel}";
+        BrushStateText.Text = $"画笔 · {colorLabel} · {widthLabel}";
+        EraserButton.Content = _eraserMode == LocalInkEraserMode.Partial
+            ? "橡皮 · 局部"
+            : "橡皮 · 整笔";
+    }
+
+    private static string ColorLabel(string color)
+        => BrushColorLabels.FirstOrDefault(option =>
+                string.Equals(option.Color, color, StringComparison.OrdinalIgnoreCase))
+            .Label ?? "墨色";
+
+    private static string WidthLabel(double width)
+        => BrushWidthLabels.FirstOrDefault(option =>
+                Math.Abs(option.Width - width) <= 1e-9)
+            .Label ?? "中";
 }

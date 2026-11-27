@@ -13,7 +13,9 @@ public sealed class LocalInkEditor
     private readonly List<LocalInkDocument> _undo = [];
     private readonly List<LocalInkDocument> _redo = [];
     private List<LocalInkPoint>? _activePoints;
+    private LocalInkStyle? _activeStyle;
     private double _activeLength;
+    private LocalInkStyle _brush = LocalInkStyle.Default;
 
     public LocalInkEditor(int width, int height)
     {
@@ -55,6 +57,15 @@ public sealed class LocalInkEditor
     public bool IsDrawing => _activePoints is not null;
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
+    public LocalInkStyle Brush
+    {
+        get => _brush;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _brush = value;
+        }
+    }
 
     public void BeginStroke(LocalInkPoint point)
     {
@@ -65,6 +76,7 @@ public sealed class LocalInkEditor
 
         ValidateInputPoint(point, _width, _height);
         _activePoints = [point];
+        _activeStyle = _brush;
         _activeLength = 0;
     }
 
@@ -101,15 +113,21 @@ public sealed class LocalInkEditor
         }
 
         var points = _activePoints;
+        var style = _activeStyle ?? LocalInkStyle.Legacy;
         var length = _activeLength;
         _activePoints = null;
+        _activeStyle = null;
         _activeLength = 0;
         if (points.Count < 2 || length < MinStrokeLength)
         {
             return null;
         }
 
-        var stroke = new LocalInkStroke(Guid.NewGuid(), points.ToArray());
+        var stroke = new LocalInkStroke(
+            Guid.NewGuid(),
+            points.ToArray(),
+            style.Color,
+            style.Width);
         AddConfirmedStroke(stroke);
         return stroke;
     }
@@ -117,6 +135,7 @@ public sealed class LocalInkEditor
     public void CancelStroke()
     {
         _activePoints = null;
+        _activeStyle = null;
         _activeLength = 0;
     }
 
@@ -223,6 +242,45 @@ public sealed class LocalInkEditor
 
         _redo.Clear();
         return changedIds.Count;
+    }
+
+    public int Erase(
+        IReadOnlyList<LocalInkPoint> eraserPoints,
+        LocalInkEraserMode mode,
+        double radius = LocalInkPalette.EraserRadius)
+    {
+        ArgumentNullException.ThrowIfNull(eraserPoints);
+        if (IsDrawing)
+        {
+            throw new InvalidOperationException("正在书写时不能擦除。");
+        }
+
+        if (!double.IsFinite(radius) || radius <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(radius), "橡皮半径无效。");
+        }
+
+        if (eraserPoints.Count == 0)
+        {
+            return 0;
+        }
+
+        foreach (var point in eraserPoints)
+        {
+            ValidateInputPoint(point, _width, _height);
+        }
+
+        var result = LocalInkEraser.Erase(_strokes, eraserPoints, mode, radius);
+        if (!result.Changed)
+        {
+            return 0;
+        }
+
+        PushUndoSnapshot();
+        _strokes.Clear();
+        _strokes.AddRange(result.Strokes.Select(CopyStroke));
+        _redo.Clear();
+        return result.ChangedStrokeCount;
     }
 
     public bool Clear()
@@ -432,6 +490,7 @@ public sealed class LocalInkEditor
             throw new InvalidDataException("手写笔迹字段无效。");
         }
 
+        ValidateStrokeStyle(stroke);
         foreach (var point in stroke.Points)
         {
             if (!double.IsFinite(point.X)
@@ -461,6 +520,18 @@ public sealed class LocalInkEditor
         }
 
         ValidateLoadedStroke(stroke, width, height);
+    }
+
+    private static void ValidateStrokeStyle(LocalInkStroke stroke)
+    {
+        try
+        {
+            _ = stroke.Style;
+        }
+        catch (Exception ex) when (ex is ArgumentException or ArgumentOutOfRangeException)
+        {
+            throw new InvalidDataException("手写笔迹颜色或笔宽无效。", ex);
+        }
     }
 
     private static bool IsDegenerate(LocalInkStroke stroke)

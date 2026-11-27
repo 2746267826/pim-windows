@@ -32,6 +32,40 @@ public sealed class HandwritingStrokeMapperTests
     }
 
     [Fact]
+    public void WpfStrokeRoundTripPreservesPerStrokeColorAndWidth()
+    {
+        var redId = Guid.NewGuid();
+        var greenId = Guid.NewGuid();
+        var source = new[]
+        {
+            new LocalInkStroke(
+                redId,
+                [new LocalInkPoint(12.5, 33.25, 0.2), new LocalInkPoint(61, 79, 0.85)],
+                LocalInkPalette.RedColor,
+                LocalInkPalette.ThinWidth),
+            new LocalInkStroke(
+                greenId,
+                [new LocalInkPoint(90, 110, 0.5), new LocalInkPoint(120, 140, 0.5)],
+                LocalInkPalette.GreenColor,
+                LocalInkPalette.ThickWidth),
+        };
+
+        var reopened = source
+            .Select(HandwritingStrokeMapper.ToStroke)
+            .Select(HandwritingStrokeMapper.FromStroke)
+            .ToArray();
+
+        Assert.Equal(
+            new[]
+            {
+                (LocalInkPalette.RedColor, LocalInkPalette.ThinWidth),
+                (LocalInkPalette.GreenColor, LocalInkPalette.ThickWidth),
+            },
+            reopened.Select(stroke => (stroke.Color, stroke.Width)));
+        Assert.Equal(new[] { redId, greenId }, reopened.Select(stroke => stroke.Id));
+    }
+
+    [Fact]
     public void WpfEraseResultSplitsStrokeAndCopiesItsIdentityProperty()
     {
         var originalId = Guid.NewGuid();
