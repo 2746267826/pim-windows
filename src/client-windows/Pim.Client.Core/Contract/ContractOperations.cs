@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 5f5bffc67f26d70a15507d093d526c62c27270f4627a5feaba97b79be6eb73e7)
+//   契约快照      : contract/openapi.json (sha256 24247adff46bd399af2e93db7aeeb43c279323ee5529a384f745ec32751d0d10)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -405,7 +405,7 @@ public sealed class ContractOperation
     public static readonly ContractOperation CreateCalendarEvent =
         new("POST", "/api/v1/calendar/events", "calendar/events",
             new ContractHeader[] {  },
-            new ContractQueryParameter[] {  },
+            new ContractQueryParameter[] { new("clientOperationId", "uuid", false) },
             new ContractHeader[] {  },
             "application/json",
             "application/json",
@@ -829,7 +829,7 @@ public sealed class ContractOperation
     public static readonly ContractOperation GetNoteDerivedDestinations =
         new("GET", "/api/v1/native-notes/derived-tasks/destinations", "native-notes/derived-tasks/destinations",
             new ContractHeader[] {  },
-            new ContractQueryParameter[] {  },
+            new ContractQueryParameter[] { new("purpose", "plain-string", false) },
             new ContractHeader[] {  },
             null,
             "application/json",
