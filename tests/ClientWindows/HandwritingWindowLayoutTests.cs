@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Ink;
+using System.Windows.Input;
 using Pim.Client.App;
 using Pim.Client.Core.Services.Notes;
 using Button = System.Windows.Controls.Button;
@@ -363,6 +364,55 @@ public sealed class HandwritingWindowLayoutTests(WpfApplicationFixture wpf)
     }
 
     [Fact]
+    public void CollectedCanvasStrokeUsesSelectedBrushStyle()
+    {
+        wpf.Run(() =>
+        {
+            var preferences = new LocalInkPreferenceStore(Path.Combine(
+                Path.GetTempPath(),
+                "pim-handwriting-preferences-" + Guid.NewGuid().ToString("N") + ".json"));
+            var window = new HandwritingWindow(preferences, null);
+            window.Show();
+            window.UpdateLayout();
+
+            var canvas = Assert.IsType<InkCanvas>(window.FindName("Canvas"));
+            var brushButton = Assert.IsType<Button>(window.FindName("InkModeButton"));
+            brushButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            ClickPopupButton(window, "BrushPopup", "InkColorGreenButton");
+            ClickPopupButton(window, "BrushPopup", "InkWidthThinButton");
+            ClickPopupButton(window, "BrushPopup", "BrushDoneButton");
+
+            var stroke = new Stroke(
+                new StylusPointCollection(
+                [
+                    new StylusPoint(40, 50),
+                    new StylusPoint(140, 90),
+                ]),
+                canvas.DefaultDrawingAttributes);
+            canvas.Strokes.Add(stroke);
+            canvas.RaiseEvent(new InkCanvasStrokeCollectedEventArgs(stroke)
+            {
+                RoutedEvent = InkCanvas.StrokeCollectedEvent,
+            });
+
+            var saved = Assert.Single(window.Editor.Strokes);
+            Assert.Equal(LocalInkPalette.GreenColor, saved.Color);
+            Assert.Equal(LocalInkPalette.ThinWidth, saved.Width);
+            Assert.True(window.Editor.CanUndo);
+
+            var capture = window.TryCapture();
+            Assert.NotNull(capture);
+            var parsed = LocalInkDocumentCodec.Parse(capture.VectorJson);
+            var captured = Assert.Single(parsed.Strokes);
+            Assert.Equal(LocalInkPalette.GreenColor, captured.Color);
+            Assert.Equal(LocalInkPalette.ThinWidth, captured.Width);
+
+            window.Close();
+            File.Delete(preferences.Path);
+        });
+    }
+
+    [Fact]
     public void EraserToolSelectionGroupsOneGestureIntoOneUndoAndRedoStep()
     {
         wpf.Run(() =>
@@ -390,9 +440,18 @@ public sealed class HandwritingWindowLayoutTests(WpfApplicationFixture wpf)
 
             var canvas = Assert.IsType<InkCanvas>(window.FindName("Canvas"));
             Assert.Equal(2, canvas.Strokes.Count);
+            var brushButton = Assert.IsType<Button>(window.FindName("InkModeButton"));
+            canvas.Select(new StrokeCollection(canvas.Strokes));
+            Assert.Equal(2, canvas.GetSelectedStrokes().Count);
+            brushButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(InkCanvasEditingMode.Ink, canvas.EditingMode);
+            Assert.Empty(canvas.GetSelectedStrokes());
+
             var eraserButton = Assert.IsType<Button>(window.FindName("EraserButton"));
+            canvas.Select(new StrokeCollection(canvas.Strokes));
             eraserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Equal(InkCanvasEditingMode.None, canvas.EditingMode);
+            Assert.Empty(canvas.GetSelectedStrokes());
             var selectButton = Assert.IsType<Button>(window.FindName("SelectModeButton"));
             selectButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Equal(InkCanvasEditingMode.Select, canvas.EditingMode);
