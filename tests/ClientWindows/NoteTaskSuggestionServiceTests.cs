@@ -366,6 +366,35 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task AbsentEventTimeZoneFallsBackToServerSuggestionOnUpdate()
+    {
+        var handler = new TaskSuggestionHandler { Current = EventSuggestion() };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var suggestion = handler.Current;
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "只改日程标题", null, 5, null, null, CalendarId)
+        {
+            Start = suggestion.Start,
+            End = suggestion.End,
+        };
+
+        await service.SaveLocalDraftAsync(Guid.Parse(SuggestionId), draft);
+        var reloaded = await service.LoadDraftAsync(Guid.Parse(SuggestionId));
+
+        Assert.NotNull(reloaded);
+        Assert.False(reloaded.TimeZoneIdSpecified);
+        Assert.Null(reloaded.TimeZoneId);
+        await service.SaveEditAsync(suggestion, reloaded);
+
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal(
+            "Asia/Shanghai",
+            body.RootElement.GetProperty("timeZoneId").GetString());
+    }
+
+    [Fact]
     public async Task ExplicitTaskFieldClearsSurviveDraftReloadAndUpdateRequest()
     {
         var due = DateTimeOffset.Parse("2026-11-20T01:00:00Z");
