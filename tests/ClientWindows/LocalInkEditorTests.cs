@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Pim.Client.Core.Services.Notes;
 using Xunit;
 
@@ -37,6 +38,148 @@ public sealed class LocalInkEditorTests : IDisposable
         Assert.Equal(2, editor.Strokes.Count);
         Assert.NotEqual(first.Id, second.Id);
         Assert.Equal(new[] { first.Id, second.Id }, editor.Strokes.Select(stroke => stroke.Id));
+    }
+
+    [Fact]
+    public void PerStrokeBrushStyleIsCapturedAtStrokeStartAndSurvivesUndoRedoAndReload()
+    {
+        var editor = new LocalInkEditor(320, 180)
+        {
+            Brush = new LocalInkStyle(LocalInkPalette.RedColor, LocalInkPalette.ThinWidth),
+        };
+        editor.BeginStroke(new LocalInkPoint(10, 20, 0.5));
+        editor.AppendPoint(new LocalInkPoint(40, 50, 0.5));
+        editor.Brush = new LocalInkStyle(LocalInkPalette.BlueColor, LocalInkPalette.ThickWidth);
+        var first = editor.EndStroke();
+
+        editor.BeginStroke(new LocalInkPoint(80, 90, 0.5));
+        editor.AppendPoint(new LocalInkPoint(120, 130, 0.5));
+        var second = editor.EndStroke();
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal(LocalInkPalette.RedColor, first.Color);
+        Assert.Equal(LocalInkPalette.ThinWidth, first.Width);
+        Assert.Equal(LocalInkPalette.BlueColor, second.Color);
+        Assert.Equal(LocalInkPalette.ThickWidth, second.Width);
+
+        Assert.True(editor.Undo());
+        Assert.Equal(
+            new[] { (LocalInkPalette.RedColor, LocalInkPalette.ThinWidth) },
+            editor.Strokes.Select(stroke => (stroke.Color, stroke.Width)));
+        Assert.True(editor.Redo());
+        Assert.Equal(
+            new[]
+            {
+                (LocalInkPalette.RedColor, LocalInkPalette.ThinWidth),
+                (LocalInkPalette.BlueColor, LocalInkPalette.ThickWidth),
+            },
+            editor.Strokes.Select(stroke => (stroke.Color, stroke.Width)));
+
+        var reopened = new LocalInkEditor(
+            LocalInkDocumentCodec.Parse(LocalInkDocumentCodec.Serialize(editor.CreateDocument())));
+        Assert.Equal(
+            editor.Strokes.Select(stroke => (stroke.Id, stroke.Color, stroke.Width)),
+            reopened.Strokes.Select(stroke => (stroke.Id, stroke.Color, stroke.Width)));
+    }
+
+    [Fact]
+    public void PartialEraserSplitsOneStrokeAsOneUndoStepAndPreservesStyles()
+    {
+        var editor = new LocalInkEditor(320, 180)
+        {
+            Brush = new LocalInkStyle(LocalInkPalette.RedColor, LocalInkPalette.ThickWidth),
+        };
+        DrawStroke(editor, 20, 100, 300, 100);
+        var crossed = editor.Strokes.Single();
+        editor.Brush = new LocalInkStyle(LocalInkPalette.BlueColor, LocalInkPalette.ThinWidth);
+        DrawStroke(editor, 20, 150, 300, 150);
+        var untouched = editor.Strokes[1];
+
+        var changed = editor.Erase(
+        [
+            new LocalInkPoint(150, 70, 1),
+            new LocalInkPoint(150, 130, 1),
+        ],
+            LocalInkEraserMode.Partial);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(3, editor.Strokes.Count);
+        var left = editor.Strokes[0];
+        var right = editor.Strokes[1];
+        Assert.Equal(crossed.Id, left.Id);
+        Assert.NotEqual(crossed.Id, right.Id);
+        Assert.NotEqual(left.Id, right.Id);
+        Assert.Equal(20, left.Points[0].X);
+        Assert.True(left.Points[^1].X < 150);
+        Assert.Equal(300, right.Points[^1].X);
+        Assert.True(right.Points[0].X > 150);
+        Assert.All([left, right], stroke =>
+        {
+            Assert.Equal(LocalInkPalette.RedColor, stroke.Color);
+            Assert.Equal(LocalInkPalette.ThickWidth, stroke.Width);
+        });
+        Assert.Equal(untouched.Id, editor.Strokes[2].Id);
+        Assert.Equal(LocalInkPalette.BlueColor, editor.Strokes[2].Color);
+
+        Assert.True(editor.Undo());
+        Assert.Equal(new[] { crossed.Id, untouched.Id }, editor.Strokes.Select(stroke => stroke.Id));
+        Assert.True(editor.Redo());
+        Assert.Equal(3, editor.Strokes.Count);
+        Assert.Equal(
+            editor.Strokes.Select(stroke => stroke.Id).Distinct().Count(),
+            editor.Strokes.Count);
+    }
+
+    [Fact]
+    public void WholeStrokeEraserRemovesOnlyTouchedStrokesAndRedoReapplies()
+    {
+        var editor = new LocalInkEditor(320, 180)
+        {
+            Brush = new LocalInkStyle(LocalInkPalette.RedColor, LocalInkPalette.ThickWidth),
+        };
+        DrawStroke(editor, 20, 100, 300, 100);
+        var crossed = editor.Strokes.Single();
+        editor.Brush = new LocalInkStyle(LocalInkPalette.BlueColor, LocalInkPalette.ThinWidth);
+        DrawStroke(editor, 20, 150, 300, 150);
+        var untouched = editor.Strokes[1];
+
+        var changed = editor.Erase(
+        [
+            new LocalInkPoint(150, 80, 1),
+            new LocalInkPoint(150, 120, 1),
+        ],
+            LocalInkEraserMode.WholeStroke);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(untouched.Id, Assert.Single(editor.Strokes).Id);
+        Assert.Equal(LocalInkPalette.BlueColor, editor.Strokes.Single().Color);
+        Assert.True(editor.Undo());
+        Assert.Equal(new[] { crossed.Id, untouched.Id }, editor.Strokes.Select(stroke => stroke.Id));
+        Assert.True(editor.Redo());
+        Assert.Equal(untouched.Id, Assert.Single(editor.Strokes).Id);
+    }
+
+    [Fact]
+    public void EraserMissIsANoOpWithoutAnExtraUndoStep()
+    {
+        var editor = new LocalInkEditor(320, 180);
+        DrawStroke(editor, 20, 20, 80, 80);
+
+        var changed = editor.Erase(
+        [
+            new LocalInkPoint(250, 150, 1),
+            new LocalInkPoint(280, 160, 1),
+        ],
+            LocalInkEraserMode.Partial);
+
+        Assert.Equal(0, changed);
+        Assert.Single(editor.Strokes);
+        Assert.True(editor.Undo());
+        Assert.Empty(editor.Strokes);
+        Assert.True(editor.CanRedo);
+        Assert.True(editor.Redo());
+        Assert.Single(editor.Strokes);
     }
 
     [Fact]
@@ -305,6 +448,12 @@ public sealed class LocalInkEditorTests : IDisposable
     public void InvalidOrOutOfBoundsInputIsRejectedWithoutChangingTheDocument()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new LocalInkEditor(0, 420));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new LocalInkEditor(79, 420));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new LocalInkEditor(2049, 420));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new LocalInkEditor(320, 79));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new LocalInkEditor(320, 4097));
+        _ = new LocalInkEditor(80, 80);
+        _ = new LocalInkEditor(2048, 4096);
         var editor = new LocalInkEditor(320, 180);
 
         Assert.Throws<ArgumentOutOfRangeException>(() =>
@@ -329,6 +478,58 @@ public sealed class LocalInkEditorTests : IDisposable
         Assert.NotNull(accepted);
         Assert.Equal(accepted.Id, Assert.Single(editor.Strokes).Id);
         Assert.False(editor.CanRedo);
+    }
+
+    [Fact]
+    public void EditingAndMovingStrokesPreservesUnknownFields()
+    {
+        const string json = """
+            {
+              "schemaVersion": 1,
+              "width": 320,
+              "height": 180,
+              "futureRoot": "root",
+              "strokeIds": ["11111111-1111-4111-8111-111111111111"],
+              "strokeStyles": [{"color": "#b8373c", "width": 1.8, "futureStyle": 7}],
+              "strokes": [
+                {
+                  "color": "#b8373c",
+                  "width": 1.8,
+                  "futureStroke": "stroke",
+                  "points": [
+                    {"x": 10, "y": 20, "pressure": 0.5, "futurePoint": 1},
+                    {"x": 30, "y": 40, "pressure": 0.5, "futurePoint": 2}
+                  ]
+                }
+              ]
+            }
+            """;
+        var editor = new LocalInkEditor(LocalInkDocumentCodec.Parse(json));
+        var moved = editor.Strokes[0] with
+        {
+            Points = editor.Strokes[0].Points
+                .Select(point => new LocalInkPoint(point.X + 5, point.Y, point.Pressure))
+                .ToArray(),
+        };
+
+        Assert.Equal(1, editor.UpdateStrokeGeometry([moved]));
+        editor.BeginStroke(new LocalInkPoint(60, 80, 0.5));
+        editor.AppendPoint(new LocalInkPoint(100, 120, 0.5));
+        Assert.NotNull(editor.EndStroke());
+
+        using var saved = JsonDocument.Parse(
+            LocalInkDocumentCodec.Serialize(editor.CreateDocument()));
+        var root = saved.RootElement;
+        Assert.Equal("root", root.GetProperty("futureRoot").GetString());
+        Assert.Equal(7, root.GetProperty("strokeStyles")[0].GetProperty("futureStyle").GetInt32());
+        var stroke = root.GetProperty("strokes")[0];
+        Assert.Equal("stroke", stroke.GetProperty("futureStroke").GetString());
+        Assert.Equal(
+            new[] { 1, 2 },
+            stroke.GetProperty("points").EnumerateArray()
+                .Select(point => point.GetProperty("futurePoint").GetInt32()));
+        Assert.Equal(15d, stroke.GetProperty("points")[0].GetProperty("x").GetDouble());
+        Assert.Equal(2, root.GetProperty("strokes").GetArrayLength());
     }
 
     [Fact]

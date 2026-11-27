@@ -32,10 +32,31 @@ public sealed class CloudNoteMaterialServiceTests : IDisposable
 
         using (var inkPreview = new MemoryStream(OnePixelPng))
         {
+            var strokeId = Guid.Parse("33333333-3333-4333-8333-333333333333");
             note = await store.AddHandwritingAsync(
                 note.NoteId,
                 inkPreview,
-                """{"SchemaVersion":1,"Width":320,"Height":180,"Strokes":[[{"X":10,"Y":20,"Pressure":0.5},{"X":30,"Y":40,"Pressure":0.7}]]}""",
+                $$"""
+                {
+                  "schemaVersion": 1,
+                  "width": 320,
+                  "height": 180,
+                  "futureRoot": "bundle-root",
+                  "strokeIds": ["{{strokeId:D}}"],
+                  "strokeStyles": [{"color": "#b8373c", "width": 1.8, "futureStyle": 9}],
+                  "strokes": [
+                    {
+                      "color": "#b8373c",
+                      "width": 1.8,
+                      "futureStroke": "pen",
+                      "points": [
+                        {"x": 10, "y": 20, "pressure": 0.5, "futurePoint": 3},
+                        {"x": 30, "y": 40, "pressure": 0.7, "futurePoint": 4}
+                      ]
+                    }
+                  ]
+                }
+                """,
                 "手写 1",
                 320,
                 180);
@@ -71,6 +92,21 @@ public sealed class CloudNoteMaterialServiceTests : IDisposable
         var ink = serverNote.RootElement.GetProperty("blocks")[2].GetProperty("ink");
         Assert.Equal(320, ink.GetProperty("width").GetDouble());
         Assert.Equal(2, ink.GetProperty("strokes")[0].GetProperty("points").GetArrayLength());
+        Assert.Equal(
+            "33333333-3333-4333-8333-333333333333",
+            ink.GetProperty("strokeIds")[0].GetString());
+        Assert.Equal("#b8373c", ink.GetProperty("strokeStyles")[0].GetProperty("color").GetString());
+        Assert.Equal(1.8, ink.GetProperty("strokeStyles")[0].GetProperty("width").GetDouble());
+        Assert.Equal("#b8373c", ink.GetProperty("strokes")[0].GetProperty("color").GetString());
+        Assert.Equal(1.8, ink.GetProperty("strokes")[0].GetProperty("width").GetDouble());
+        Assert.False(ink.TryGetProperty("schemaVersion", out _));
+        Assert.Equal("bundle-root", ink.GetProperty("futureRoot").GetString());
+        Assert.Equal(9, ink.GetProperty("strokeStyles")[0].GetProperty("futureStyle").GetInt32());
+        Assert.Equal("pen", ink.GetProperty("strokes")[0].GetProperty("futureStroke").GetString());
+        Assert.Equal(
+            3,
+            ink.GetProperty("strokes")[0].GetProperty("points")[0]
+                .GetProperty("futurePoint").GetInt32());
 
         var recordings = input.RootElement.GetProperty("recordings");
         Assert.Single(recordings.EnumerateArray());
@@ -100,6 +136,90 @@ public sealed class CloudNoteMaterialServiceTests : IDisposable
             Assert.Equal(file.SizeBytes, stream.Length);
             Assert.Equal(file.Sha256, await HashAsync(stream));
         }
+    }
+
+    [Fact]
+    public void ServerInkRestoreKeepsPerStrokeStyleAndIdentity()
+    {
+        const string serverInk = """
+            {
+              "width": 320,
+              "height": 180,
+              "futureRoot": "server-root",
+              "strokeIds": [
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222"
+              ],
+              "strokeStyles": [
+                {"color": "#245fba", "width": 6, "futureStyle": "blue"},
+                {"color": "#216e4e", "width": 1.8, "futureStyle": "green"}
+              ],
+              "strokes": [
+                {
+                  "color": "#245fba",
+                  "width": 6,
+                  "futureStroke": "first",
+                  "points": [{"x": 10, "y": 20, "pressure": 0.5, "futurePoint": 11}]
+                },
+                {
+                  "color": "#216e4e",
+                  "width": 1.8,
+                  "futureStroke": "second",
+                  "points": [{"x": 30, "y": 40, "pressure": 0.5, "futurePoint": 12}]
+                }
+              ]
+            }
+            """;
+
+        var localSource = CloudNoteMaterialService.ConvertServerInkToLocalSource(
+            serverInk,
+            320,
+            180);
+        var parsed = LocalInkDocumentCodec.Parse(localSource);
+
+        using var restored = JsonDocument.Parse(localSource);
+        var restoredRoot = restored.RootElement;
+        Assert.Equal(1, restoredRoot.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("server-root", restoredRoot.GetProperty("futureRoot").GetString());
+        Assert.Equal(
+            "blue",
+            restoredRoot.GetProperty("strokeStyles")[0].GetProperty("futureStyle").GetString());
+        Assert.Equal(
+            "first",
+            restoredRoot.GetProperty("strokes")[0].GetProperty("futureStroke").GetString());
+        Assert.Equal(
+            11,
+            restoredRoot.GetProperty("strokes")[0].GetProperty("points")[0]
+                .GetProperty("futurePoint").GetInt32());
+
+        Assert.Equal(
+            new[]
+            {
+                Guid.Parse("11111111-1111-4111-8111-111111111111"),
+                Guid.Parse("22222222-2222-4222-8222-222222222222"),
+            },
+            parsed.Strokes.Select(stroke => stroke.Id));
+        Assert.Equal(new[] { "#245fba", "#216e4e" }, parsed.Strokes.Select(stroke => stroke.Color));
+        Assert.Equal(new[] { 6d, 1.8 }, parsed.Strokes.Select(stroke => stroke.Width));
+    }
+
+    [Fact]
+    public void ServerInkRestoreRejectsPointsOutsideCanvas()
+    {
+        const string serverInk = """
+            {
+              "width": 320,
+              "height": 180,
+              "strokes": [
+                {
+                  "points": [{"x": -0.5, "y": 20, "pressure": 0.5}]
+                }
+              ]
+            }
+            """;
+
+        Assert.Throws<InvalidDataException>(() =>
+            CloudNoteMaterialService.ConvertServerInkToLocalSource(serverInk, 320, 180));
     }
 
     [Fact]

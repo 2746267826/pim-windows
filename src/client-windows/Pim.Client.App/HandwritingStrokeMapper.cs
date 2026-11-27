@@ -2,12 +2,26 @@ using System.IO;
 using Pim.Client.Core.Services.Notes;
 using System.Windows.Ink;
 using System.Windows.Input;
+using System.Windows.Media;
 
 namespace Pim.Client.App;
 
 internal static class HandwritingStrokeMapper
 {
     private static readonly Guid StrokeIdProperty = new("a2c08a04-765b-4bb2-9b06-c7cf9c41ea02");
+
+    public static DrawingAttributes ToDrawingAttributes(LocalInkStyle style)
+    {
+        ArgumentNullException.ThrowIfNull(style);
+        return new DrawingAttributes
+        {
+            Color = (System.Windows.Media.Color)System.Windows.Media.ColorConverter
+                .ConvertFromString(style.Color),
+            Width = style.Width,
+            Height = style.Width,
+            StylusTip = StylusTip.Ellipse,
+        };
+    }
 
     public static Stroke ToStroke(LocalInkStroke source)
     {
@@ -18,7 +32,7 @@ internal static class HandwritingStrokeMapper
             points.Add(new StylusPoint(point.X, point.Y, (float)point.Pressure));
         }
 
-        var stroke = new Stroke(points);
+        var stroke = new Stroke(points, ToDrawingAttributes(source.Style));
         stroke.AddPropertyData(StrokeIdProperty, source.Id.ToString("D"));
         return stroke;
     }
@@ -41,11 +55,22 @@ internal static class HandwritingStrokeMapper
             stroke.AddPropertyData(StrokeIdProperty, id.ToString("D"));
         }
 
+        var attributes = stroke.DrawingAttributes;
+        var color = $"#{attributes.Color.R:X2}{attributes.Color.G:X2}{attributes.Color.B:X2}"
+            .ToLowerInvariant();
+        var width = double.IsFinite(attributes.Width)
+            ? Math.Clamp(
+                attributes.Width,
+                LocalInkPalette.MinimumWidth,
+                LocalInkPalette.MaximumWidth)
+            : LocalInkPalette.LegacyWidth;
         return new LocalInkStroke(
             id,
             stroke.StylusPoints
                 .Select(point => new LocalInkPoint(point.X, point.Y, point.PressureFactor))
-                .ToArray());
+                .ToArray(),
+            color,
+            width);
     }
 
     public static IReadOnlyList<LocalInkStroke> FromStrokes(StrokeCollection strokes)
