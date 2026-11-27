@@ -22,6 +22,31 @@ public sealed record NoteTaskSuggestionEditDraft(
     public bool TaskBookIdSpecified { get; init; }
     public bool CalendarIdSpecified { get; init; }
     public bool TimeZoneIdSpecified { get; init; }
+
+    public string? ResolveDescription(NoteTaskSuggestionDto suggestion)
+        => DescriptionSpecified || Description is not null
+            ? Description
+            : suggestion.Description;
+
+    public DateTimeOffset? ResolveDue(NoteTaskSuggestionDto suggestion)
+        => DueSpecified || Due is not null
+            ? Due
+            : suggestion.Due;
+
+    public string? ResolveTaskBookId(NoteTaskSuggestionDto suggestion)
+        => TaskBookIdSpecified || TaskBookId is not null
+            ? TaskBookId
+            : suggestion.TaskBookId;
+
+    public string? ResolveCalendarId(NoteTaskSuggestionDto suggestion)
+        => CalendarIdSpecified || CalendarId is not null
+            ? CalendarId
+            : suggestion.CalendarId;
+
+    public string? ResolveTimeZoneId(NoteTaskSuggestionDto suggestion)
+        => TimeZoneIdSpecified || TimeZoneId is not null
+            ? TimeZoneId
+            : suggestion.TimeZoneId;
 }
 
 public sealed record NoteTaskSuggestionSource(
@@ -638,8 +663,8 @@ public sealed class NoteTaskSuggestionService
         if (draft.TaskBookId is not null)
             throw new ArgumentException("日程建议不能写入任务本，请选择日程日历。", nameof(draft));
 
-        var timeZoneId = NoteTaskSuggestionEventTime.NormalizeTimeZoneId(draft.TimeZoneId)
-            ?? NoteTaskSuggestionEventTime.NormalizeTimeZoneId(suggestion.TimeZoneId);
+        var timeZoneId = NoteTaskSuggestionEventTime.NormalizeTimeZoneId(
+            draft.ResolveTimeZoneId(suggestion));
         if (timeZoneId is not null && !NoteTaskSuggestionEventTime.IsIanaTimeZone(timeZoneId))
             throw new ArgumentException("日程时区必须是有效的 IANA 时区。", nameof(draft));
 
@@ -657,22 +682,22 @@ public sealed class NoteTaskSuggestionService
     {
         var isEvent = suggestion.Kind == NoteTaskSuggestionKindDto.Event;
         var timeZoneId = isEvent
-            ? NoteTaskSuggestionEventTime.NormalizeTimeZoneId(draft.TimeZoneId)
-              ?? NoteTaskSuggestionEventTime.NormalizeTimeZoneId(suggestion.TimeZoneId)
+            ? NoteTaskSuggestionEventTime.NormalizeTimeZoneId(
+                draft.ResolveTimeZoneId(suggestion))
             : null;
         if (timeZoneId is not null && !NoteTaskSuggestionEventTime.IsIanaTimeZone(timeZoneId))
             throw new ArgumentException("日程时区必须是有效的 IANA 时区。", nameof(draft));
 
         return new UpdateNoteTaskSuggestionRequest
         {
-            CalendarId = draft.CalendarId,
-            Description = draft.Description,
-            Due = isEvent ? null : draft.Due,
+            CalendarId = draft.ResolveCalendarId(suggestion),
+            Description = draft.ResolveDescription(suggestion),
+            Due = isEvent ? null : draft.ResolveDue(suggestion),
             End = isEvent ? draft.End ?? suggestion.End : null,
             ExpectedRevision = draft.ExpectedRevision,
             Priority = draft.Priority,
             Start = isEvent ? draft.Start ?? suggestion.Start : null,
-            TaskBookId = isEvent ? null : draft.TaskBookId,
+            TaskBookId = isEvent ? null : draft.ResolveTaskBookId(suggestion),
             TimeZoneId = timeZoneId,
             Title = draft.Title,
         };

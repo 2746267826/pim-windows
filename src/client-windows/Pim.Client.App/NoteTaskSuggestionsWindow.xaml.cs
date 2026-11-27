@@ -952,15 +952,20 @@ public partial class NoteTaskSuggestionsWindow : Window
             Start = start,
             End = end,
             TimeZoneId = timeZoneId,
+            DescriptionSpecified = true,
+            DueSpecified = !isEvent,
+            TaskBookIdSpecified = !isEvent,
+            CalendarIdSpecified = true,
+            TimeZoneIdSpecified = isEvent,
         };
     }
 
     private static bool DraftDiffers(NoteTaskSuggestionDto suggestion, NoteTaskSuggestionEditDraft draft)
     {
         if (suggestion.Title != draft.Title
-            || suggestion.Description != draft.Description
+            || suggestion.Description != draft.ResolveDescription(suggestion)
             || suggestion.Priority != draft.Priority
-            || suggestion.CalendarId != draft.CalendarId)
+            || suggestion.CalendarId != draft.ResolveCalendarId(suggestion))
             return true;
 
         if (suggestion.Kind == NoteTaskSuggestionKindDto.Event)
@@ -969,12 +974,14 @@ public partial class NoteTaskSuggestionsWindow : Window
                 || suggestion.End != draft.End
                 || !string.Equals(
                     NoteTaskSuggestionEventTime.NormalizeTimeZoneId(suggestion.TimeZoneId),
-                    NoteTaskSuggestionEventTime.NormalizeTimeZoneId(draft.TimeZoneId),
+                    NoteTaskSuggestionEventTime.NormalizeTimeZoneId(
+                        draft.ResolveTimeZoneId(suggestion)),
                     StringComparison.Ordinal);
         }
 
-        return suggestion.Due?.LocalDateTime.Date != draft.Due?.LocalDateTime.Date
-            || suggestion.TaskBookId != draft.TaskBookId;
+        return suggestion.Due?.LocalDateTime.Date
+               != draft.ResolveDue(suggestion)?.LocalDateTime.Date
+            || suggestion.TaskBookId != draft.ResolveTaskBookId(suggestion);
     }
 
     private DateTimeOffset? ReadEventTime(
@@ -1020,11 +1027,15 @@ public partial class NoteTaskSuggestionsWindow : Window
             EventFieldsPanel.Visibility = isEvent ? Visibility.Visible : Visibility.Collapsed;
 
             TitleBox.Text = draft?.Title ?? suggestion.Title;
-            DescriptionBox.Text = draft?.Description ?? suggestion.Description ?? string.Empty;
+            DescriptionBox.Text = (draft is null
+                ? suggestion.Description
+                : draft.ResolveDescription(suggestion)) ?? string.Empty;
             PriorityBox.SelectedItem = draft?.Priority ?? suggestion.Priority;
             ApplyCalendarChoices(
                 suggestion.Kind,
-                preferredId: draft?.CalendarId ?? suggestion.CalendarId);
+                preferredId: draft is null
+                    ? suggestion.CalendarId
+                    : draft.ResolveCalendarId(suggestion));
             _eventTimeError = null;
 
             if (isEvent)
@@ -1032,7 +1043,9 @@ public partial class NoteTaskSuggestionsWindow : Window
                 DueDatePicker.SelectedDate = null;
                 SelectChoice(TaskBookBox, null);
                 var timeZoneId = NoteTaskSuggestionEventTime.NormalizeTimeZoneId(
-                    draft?.TimeZoneId ?? suggestion.TimeZoneId);
+                    draft is null
+                        ? suggestion.TimeZoneId
+                        : draft.ResolveTimeZoneId(suggestion));
                 TimeZoneBox.Text = timeZoneId ?? string.Empty;
                 SetEventTime(
                     draft?.Start ?? suggestion.Start,
@@ -1047,8 +1060,14 @@ public partial class NoteTaskSuggestionsWindow : Window
             }
             else
             {
-                DueDatePicker.SelectedDate = (draft?.Due ?? suggestion.Due)?.LocalDateTime.Date;
-                SelectChoice(TaskBookBox, draft?.TaskBookId ?? suggestion.TaskBookId);
+                DueDatePicker.SelectedDate = (draft is null
+                    ? suggestion.Due
+                    : draft.ResolveDue(suggestion))?.LocalDateTime.Date;
+                SelectChoice(
+                    TaskBookBox,
+                    draft is null
+                        ? suggestion.TaskBookId
+                        : draft.ResolveTaskBookId(suggestion));
                 TimeZoneBox.Clear();
                 StartDatePicker.SelectedDate = null;
                 EndDatePicker.SelectedDate = null;
