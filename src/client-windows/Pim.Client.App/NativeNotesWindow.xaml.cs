@@ -145,22 +145,31 @@ public partial class NativeNotesWindow : Window
     {
         try
         {
-            if (!await SavePendingAsync())
+            if (!await TryRunNoteOperationAsync(
+                    async () =>
+                    {
+                        if (!await SavePendingCoreAsync())
+                        {
+                            return;
+                        }
+
+                        var note = await _store.CreateAsync();
+                        ClearNotice();
+                        if (!string.IsNullOrEmpty(SearchBox.Text))
+                        {
+                            _loading = true;
+                            SearchBox.Text = string.Empty;
+                            _loading = false;
+                        }
+
+                        await RefreshNotesAsync();
+                        NotesList.SelectedItem = _notes.FirstOrDefault(
+                            summary => summary.NoteId == note.NoteId);
+                    },
+                    "正在结束并保存当前笔记，新建未开始。"))
             {
                 return;
             }
-
-            var note = await _store.CreateAsync();
-            ClearNotice();
-            if (!string.IsNullOrEmpty(SearchBox.Text))
-            {
-                _loading = true;
-                SearchBox.Text = string.Empty;
-                _loading = false;
-            }
-
-            await RefreshNotesAsync();
-            NotesList.SelectedItem = _notes.FirstOrDefault(summary => summary.NoteId == note.NoteId);
         }
         catch (Exception ex)
         {
@@ -517,11 +526,6 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        if (!await SavePendingAsync())
-        {
-            return;
-        }
-
         var dialog = new OpenFileDialog
         {
             Title = "导入 PIM 笔记包",
@@ -532,29 +536,28 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        var lease = _operations.TryBeginOperation();
-        if (lease is null)
-        {
-            ShowNotice("正在结束并保存当前笔记，笔记包导入未开始。");
-            return;
-        }
-
-        await lease.EnterSerializedAsync();
         try
         {
-            var imported = await _store.ImportAsync(dialog.FileName);
-            await RefreshNotesAsync();
-            NotesList.SelectedItem = _notes.FirstOrDefault(summary => summary.NoteId == imported.NoteId);
-            SaveStateText.Text = $"已导入固定版本，{imported.Materials.Count} 项材料已校验 SHA-256";
+            await TryRunNoteOperationAsync(
+                async () =>
+                {
+                    if (!await SavePendingCoreAsync())
+                    {
+                        return;
+                    }
+
+                    var imported = await _store.ImportAsync(dialog.FileName);
+                    await RefreshNotesAsync();
+                    NotesList.SelectedItem = _notes.FirstOrDefault(
+                        summary => summary.NoteId == imported.NoteId);
+                    SaveStateText.Text =
+                        $"已导入固定版本，{imported.Materials.Count} 项材料已校验 SHA-256";
+                },
+                "正在结束并保存当前笔记，笔记包导入未开始。");
         }
         catch (Exception ex)
         {
             ShowFailure("导入笔记包失败；原笔记库未切换", ex);
-        }
-        finally
-        {
-            lease.ExitSerialized();
-            lease.Dispose();
         }
     }
 
@@ -571,101 +574,94 @@ public partial class NativeNotesWindow : Window
         var accountGeneration = _cloud.AccountGeneration;
         try
         {
-            if (!await SavePendingAsync())
-            {
-                return;
-            }
-
-            if (!IsHandwritingSourceCurrent(noteId, noteGeneration, account, accountGeneration))
-            {
-                return;
-            }
-
-            var note = _current!;
-            var fence = new HandwritingEditFence(note.NoteId, note.CurrentVersionId, noteGeneration, account, accountGeneration);
-
-            var dialog = new HandwritingWindow { Owner = this };
-            if (dialog.ShowDialog() != true || dialog.Capture is null)
-            {
-                return;
-            }
-
-            if (!IsHandwritingFenceCurrent(fence))
-            {
-                return;
-            }
-
-            var lease = _operations.TryBeginOperation();
-            if (lease is null)
-            {
-                ShowNotice("正在结束并保存当前笔记，手写材料未写入。");
-                return;
-            }
-
-            await lease.EnterSerializedAsync();
-            try
-            {
-                var beforeIds = note.Materials
-                    .Select(material => material.MaterialId)
-                    .ToHashSet();
-                using var png = new MemoryStream(dialog.Capture.PngBytes, writable: false);
-                var saved = await _store.AddHandwritingAsync(
-                    note.NoteId,
-                    png,
-                    dialog.Capture.VectorJson,
-                    $"手写 {DateTime.Now:MM-dd HHmmss}",
-                    dialog.Capture.Width,
-                    dialog.Capture.Height,
-                    expectedCurrentVersionId: fence.VersionId);
-                if (!IsHandwritingFenceCurrent(fence))
+            await TryRunNoteOperationAsync(
+                async () =>
                 {
-                    return;
-                }
-
-                _current = saved;
-                var handwritingId = saved.Materials
-                    .Where(material => !beforeIds.Contains(material.MaterialId))
-                    .Where(material => material.Kind == LocalNoteMaterialKind.Handwriting)
-                    .Select(material => material.MaterialId)
-                    .LastOrDefault();
-                if (handwritingId != Guid.Empty)
-                {
-                    SetMarkdownWithInsertedMarkers([handwritingId]);
-                    if (!await SavePendingCoreAsync())
+                    if (!await SavePendingCoreAsync()
+                        || !IsHandwritingSourceCurrent(
+                            noteId,
+                            noteGeneration,
+                            account,
+                            accountGeneration))
                     {
                         return;
                     }
-                }
 
-                var savedFence = fence with { VersionId = _current!.CurrentVersionId };
-                if (!IsHandwritingFenceCurrent(savedFence))
-                {
-                    return;
-                }
+                    var note = _current!;
+                    var fence = new HandwritingEditFence(
+                        note.NoteId,
+                        note.CurrentVersionId,
+                        noteGeneration,
+                        account,
+                        accountGeneration);
 
-                UpdateMaterials();
-                await RefreshNotesAsync(SearchBox.Text, () => IsHandwritingFenceCurrent(savedFence));
-                if (!IsHandwritingFenceCurrent(savedFence))
-                {
-                    return;
-                }
+                    var dialog = new HandwritingWindow { Owner = this };
+                    if (dialog.ShowDialog() != true
+                        || dialog.Capture is null
+                        || !IsHandwritingFenceCurrent(fence))
+                    {
+                        return;
+                    }
 
-                await RefreshVersionsAsync(
-                    _current.NoteId,
-                    _current.CurrentVersionId,
-                    () => IsHandwritingFenceCurrent(savedFence));
-                if (!IsHandwritingFenceCurrent(savedFence))
-                {
-                    return;
-                }
+                    var beforeIds = note.Materials
+                        .Select(material => material.MaterialId)
+                        .ToHashSet();
+                    using var png = new MemoryStream(dialog.Capture.PngBytes, writable: false);
+                    var saved = await _store.AddHandwritingAsync(
+                        note.NoteId,
+                        png,
+                        dialog.Capture.VectorJson,
+                        $"手写 {DateTime.Now:MM-dd HHmmss}",
+                        dialog.Capture.Width,
+                        dialog.Capture.Height,
+                        expectedCurrentVersionId: fence.VersionId);
+                    if (!IsHandwritingFenceCurrent(fence))
+                    {
+                        return;
+                    }
 
-                SaveStateText.Text = "手写墨迹与 PNG 已保存为新的固定版本";
-            }
-            finally
-            {
-                lease.ExitSerialized();
-                lease.Dispose();
-            }
+                    _current = saved;
+                    var handwritingId = saved.Materials
+                        .Where(material => !beforeIds.Contains(material.MaterialId))
+                        .Where(material => material.Kind == LocalNoteMaterialKind.Handwriting)
+                        .Select(material => material.MaterialId)
+                        .LastOrDefault();
+                    if (handwritingId != Guid.Empty)
+                    {
+                        SetMarkdownWithInsertedMarkers([handwritingId]);
+                        if (!await SavePendingCoreAsync())
+                        {
+                            return;
+                        }
+                    }
+
+                    var savedFence = fence with { VersionId = _current!.CurrentVersionId };
+                    if (!IsHandwritingFenceCurrent(savedFence))
+                    {
+                        return;
+                    }
+
+                    UpdateMaterials();
+                    await RefreshNotesAsync(
+                        SearchBox.Text,
+                        () => IsHandwritingFenceCurrent(savedFence));
+                    if (!IsHandwritingFenceCurrent(savedFence))
+                    {
+                        return;
+                    }
+
+                    await RefreshVersionsAsync(
+                        _current.NoteId,
+                        _current.CurrentVersionId,
+                        () => IsHandwritingFenceCurrent(savedFence));
+                    if (!IsHandwritingFenceCurrent(savedFence))
+                    {
+                        return;
+                    }
+
+                    SaveStateText.Text = "手写墨迹与 PNG 已保存为新的固定版本";
+                },
+                "正在结束并保存当前笔记，手写材料未写入。");
         }
         catch (Exception ex)
         {
@@ -699,136 +695,154 @@ public partial class NativeNotesWindow : Window
         var accountGeneration = _cloud.AccountGeneration;
         try
         {
-            if (!await SavePendingAsync()
-                || !IsHandwritingSourceCurrent(noteId, selectionGeneration, account, accountGeneration)
-                || MaterialsList.SelectedItem is not LocalNoteMaterial currentSelection
-                || currentSelection.MaterialId != selected.MaterialId)
-            {
-                return;
-            }
-
-            var note = _current!;
-            var fence = new HandwritingEditFence(note.NoteId, note.CurrentVersionId, selectionGeneration, account, accountGeneration);
-            var versionFiles = await _store.ResolveVersionMaterialsAsync(note.NoteId, note.CurrentVersionId);
-            if (!IsHandwritingFenceCurrent(fence))
-            {
-                return;
-            }
-
-            var previewFile = versionFiles.SingleOrDefault(file => file.Material.MaterialId == selected.MaterialId);
-            if (previewFile is null || previewFile.Material.Kind != LocalNoteMaterialKind.Handwriting)
-            {
-                throw new InvalidDataException("所选手写预览不属于当前固定版本。");
-            }
-
-            var sourceMaterial = LocalInkMaterialPairing.ResolveSource(
-                previewFile.Material.MaterialId,
-                versionFiles.Select(file => file.Material).ToArray());
-            var sourceFile = versionFiles.Single(file => file.Material.MaterialId == sourceMaterial.MaterialId);
-            var previewStem = RemoveMaterialExtension(previewFile.Material.DisplayName, ".png");
-
-            await VerifyMaterialAsync(previewFile, 64L * 1024 * 1024);
-            if (!IsHandwritingFenceCurrent(fence)
-                || MaterialsList.SelectedItem is not LocalNoteMaterial verifiedSelection
-                || verifiedSelection.MaterialId != selected.MaterialId)
-            {
-                return;
-            }
-
-            var vectorBytes = await ReadVerifiedMaterialAsync(sourceFile, LocalInkDocumentCodec.MaxDocumentBytes);
-            var ink = LocalInkDocumentCodec.Parse(new UTF8Encoding(false, true).GetString(vectorBytes));
-            if (sourceMaterial.Width != ink.Width || sourceMaterial.Height != ink.Height
-                || previewFile.Material.Width != ink.Width || previewFile.Material.Height != ink.Height)
-            {
-                throw new InvalidDataException("手写源尺寸与材料清单不一致。");
-            }
-
-            if (!IsHandwritingFenceCurrent(fence)
-                || MaterialsList.SelectedItem is not LocalNoteMaterial currentSourceSelection
-                || currentSourceSelection.MaterialId != selected.MaterialId)
-            {
-                return;
-            }
-
-            var dialog = new HandwritingWindow(ink) { Owner = this, Title = "编辑手写材料" };
-            if (dialog.ShowDialog() != true || dialog.Capture is null)
-            {
-                return;
-            }
-
-            if (!IsHandwritingFenceCurrent(fence)
-                || MaterialsList.SelectedItem is not LocalNoteMaterial stillSelected
-                || stillSelected.MaterialId != selected.MaterialId)
-            {
-                return;
-            }
-
-            var lease = _operations.TryBeginOperation();
-            if (lease is null)
-            {
-                ShowNotice("正在结束并保存当前笔记，编辑后的手写未写入。");
-                return;
-            }
-
-            await lease.EnterSerializedAsync();
-            try
-            {
-                var beforeIds = note.Materials
-                    .Select(material => material.MaterialId)
-                    .ToHashSet();
-                using var png = new MemoryStream(dialog.Capture.PngBytes, writable: false);
-                var saved = await _store.AddHandwritingAsync(
-                    note.NoteId, png, dialog.Capture.VectorJson, previewStem,
-                    dialog.Capture.Width, dialog.Capture.Height, expectedCurrentVersionId: fence.VersionId);
-                if (!IsHandwritingFenceCurrent(fence))
+            await TryRunNoteOperationAsync(
+                async () =>
                 {
-                    return;
-                }
-
-                _current = saved;
-                var handwritingId = saved.Materials
-                    .Where(material => !beforeIds.Contains(material.MaterialId))
-                    .Where(material => material.Kind == LocalNoteMaterialKind.Handwriting)
-                    .Select(material => material.MaterialId)
-                    .LastOrDefault();
-                if (handwritingId != Guid.Empty)
-                {
-                    SetMarkdownWithInsertedMarkers([handwritingId]);
-                    if (!await SavePendingCoreAsync())
+                    if (!await SavePendingCoreAsync()
+                        || !IsHandwritingSourceCurrent(
+                            noteId,
+                            selectionGeneration,
+                            account,
+                            accountGeneration)
+                        || MaterialsList.SelectedItem is not LocalNoteMaterial currentSelection
+                        || currentSelection.MaterialId != selected.MaterialId)
                     {
                         return;
                     }
-                }
 
-                var savedFence = fence with { VersionId = _current!.CurrentVersionId };
-                if (!IsHandwritingFenceCurrent(savedFence))
-                {
-                    return;
-                }
+                    var note = _current!;
+                    var fence = new HandwritingEditFence(
+                        note.NoteId,
+                        note.CurrentVersionId,
+                        selectionGeneration,
+                        account,
+                        accountGeneration);
+                    var versionFiles = await _store.ResolveVersionMaterialsAsync(
+                        note.NoteId,
+                        note.CurrentVersionId);
+                    if (!IsHandwritingFenceCurrent(fence))
+                    {
+                        return;
+                    }
 
-                UpdateMaterials();
-                await RefreshNotesAsync(SearchBox.Text, () => IsHandwritingFenceCurrent(savedFence));
-                if (!IsHandwritingFenceCurrent(savedFence))
-                {
-                    return;
-                }
+                    var previewFile = versionFiles.SingleOrDefault(
+                        file => file.Material.MaterialId == selected.MaterialId);
+                    if (previewFile is null
+                        || previewFile.Material.Kind != LocalNoteMaterialKind.Handwriting)
+                    {
+                        throw new InvalidDataException("所选手写预览不属于当前固定版本。");
+                    }
 
-                await RefreshVersionsAsync(
-                    _current.NoteId,
-                    _current.CurrentVersionId,
-                    () => IsHandwritingFenceCurrent(savedFence));
-                if (!IsHandwritingFenceCurrent(savedFence))
-                {
-                    return;
-                }
+                    var sourceMaterial = LocalInkMaterialPairing.ResolveSource(
+                        previewFile.Material.MaterialId,
+                        versionFiles.Select(file => file.Material).ToArray());
+                    var sourceFile = versionFiles.Single(
+                        file => file.Material.MaterialId == sourceMaterial.MaterialId);
+                    var previewStem = RemoveMaterialExtension(
+                        previewFile.Material.DisplayName,
+                        ".png");
 
-                SaveStateText.Text = "已将编辑后的笔迹追加为新固定版本；原材料仍保留";
-            }
-            finally
-            {
-                lease.ExitSerialized();
-                lease.Dispose();
-            }
+                    await VerifyMaterialAsync(previewFile, 64L * 1024 * 1024);
+                    if (!IsHandwritingFenceCurrent(fence)
+                        || MaterialsList.SelectedItem is not LocalNoteMaterial verifiedSelection
+                        || verifiedSelection.MaterialId != selected.MaterialId)
+                    {
+                        return;
+                    }
+
+                    var vectorBytes = await ReadVerifiedMaterialAsync(
+                        sourceFile,
+                        LocalInkDocumentCodec.MaxDocumentBytes);
+                    var ink = LocalInkDocumentCodec.Parse(
+                        new UTF8Encoding(false, true).GetString(vectorBytes));
+                    if (sourceMaterial.Width != ink.Width
+                        || sourceMaterial.Height != ink.Height
+                        || previewFile.Material.Width != ink.Width
+                        || previewFile.Material.Height != ink.Height)
+                    {
+                        throw new InvalidDataException("手写源尺寸与材料清单不一致。");
+                    }
+
+                    if (!IsHandwritingFenceCurrent(fence)
+                        || MaterialsList.SelectedItem is not LocalNoteMaterial currentSourceSelection
+                        || currentSourceSelection.MaterialId != selected.MaterialId)
+                    {
+                        return;
+                    }
+
+                    var dialog = new HandwritingWindow(ink)
+                    {
+                        Owner = this,
+                        Title = "编辑手写材料",
+                    };
+                    if (dialog.ShowDialog() != true
+                        || dialog.Capture is null
+                        || !IsHandwritingFenceCurrent(fence)
+                        || MaterialsList.SelectedItem is not LocalNoteMaterial stillSelected
+                        || stillSelected.MaterialId != selected.MaterialId)
+                    {
+                        return;
+                    }
+
+                    var beforeIds = note.Materials
+                        .Select(material => material.MaterialId)
+                        .ToHashSet();
+                    using var png = new MemoryStream(dialog.Capture.PngBytes, writable: false);
+                    var saved = await _store.AddHandwritingAsync(
+                        note.NoteId,
+                        png,
+                        dialog.Capture.VectorJson,
+                        previewStem,
+                        dialog.Capture.Width,
+                        dialog.Capture.Height,
+                        expectedCurrentVersionId: fence.VersionId);
+                    if (!IsHandwritingFenceCurrent(fence))
+                    {
+                        return;
+                    }
+
+                    _current = saved;
+                    var handwritingId = saved.Materials
+                        .Where(material => !beforeIds.Contains(material.MaterialId))
+                        .Where(material => material.Kind == LocalNoteMaterialKind.Handwriting)
+                        .Select(material => material.MaterialId)
+                        .LastOrDefault();
+                    if (handwritingId != Guid.Empty)
+                    {
+                        SetMarkdownWithInsertedMarkers([handwritingId]);
+                        if (!await SavePendingCoreAsync())
+                        {
+                            return;
+                        }
+                    }
+
+                    var savedFence = fence with { VersionId = _current!.CurrentVersionId };
+                    if (!IsHandwritingFenceCurrent(savedFence))
+                    {
+                        return;
+                    }
+
+                    UpdateMaterials();
+                    await RefreshNotesAsync(
+                        SearchBox.Text,
+                        () => IsHandwritingFenceCurrent(savedFence));
+                    if (!IsHandwritingFenceCurrent(savedFence))
+                    {
+                        return;
+                    }
+
+                    await RefreshVersionsAsync(
+                        _current.NoteId,
+                        _current.CurrentVersionId,
+                        () => IsHandwritingFenceCurrent(savedFence));
+                    if (!IsHandwritingFenceCurrent(savedFence))
+                    {
+                        return;
+                    }
+
+                    SaveStateText.Text = "已将编辑后的笔迹追加为新固定版本；原材料仍保留";
+                },
+                "正在结束并保存当前笔记，编辑后的手写未写入。");
         }
         catch (Exception ex)
         {
@@ -1105,11 +1119,6 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        if (!await SavePendingAsync())
-        {
-            return;
-        }
-
         var dialog = new SaveFileDialog
         {
             Title = "导出固定笔记版本",
@@ -1125,12 +1134,25 @@ public partial class NativeNotesWindow : Window
 
         try
         {
-            var result = await _store.ExportAsync(_current.NoteId, _current.CurrentVersionId, dialog.FileName);
-            MessageBox.Show(
-                $"已导出固定版本，包含 {result.Materials.Count} 项材料。\nSHA-256：{result.Sha256}",
-                "笔记包已导出",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+            await TryRunNoteOperationAsync(
+                async () =>
+                {
+                    if (!await SavePendingCoreAsync() || _current is null)
+                    {
+                        return;
+                    }
+
+                    var result = await _store.ExportAsync(
+                        _current.NoteId,
+                        _current.CurrentVersionId,
+                        dialog.FileName);
+                    MessageBox.Show(
+                        $"已导出固定版本，包含 {result.Materials.Count} 项材料。\nSHA-256：{result.Sha256}",
+                        "笔记包已导出",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                },
+                "正在结束并保存当前笔记，导出未开始。");
         }
         catch (Exception ex)
         {
@@ -1363,6 +1385,19 @@ public partial class NativeNotesWindow : Window
             lease.ExitSerialized();
             lease.Dispose();
         }
+    }
+
+    private async Task<bool> TryRunNoteOperationAsync(
+        Func<Task> operation,
+        string busyMessage)
+    {
+        var started = await _operations.TryRunExclusiveAsync(operation);
+        if (!started)
+        {
+            ShowNotice(busyMessage);
+        }
+
+        return started;
     }
 
     private async Task<bool> SavePendingAsync()
@@ -1993,11 +2028,20 @@ public partial class NativeNotesWindow : Window
 
         try
         {
-            var resolved = await _store.ResolveMaterialFileAsync(_current.NoteId, material.MaterialId);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(resolved.AbsolutePath)
-            {
-                UseShellExecute = true,
-            });
+            var noteId = _current.NoteId;
+            await TryRunNoteOperationAsync(
+                async () =>
+                {
+                    var resolved = await _store.ResolveMaterialFileAsync(
+                        noteId,
+                        material.MaterialId);
+                    System.Diagnostics.Process.Start(
+                        new System.Diagnostics.ProcessStartInfo(resolved.AbsolutePath)
+                        {
+                            UseShellExecute = true,
+                        });
+                },
+                "正在结束并保存当前笔记，材料未打开。");
         }
         catch (Exception ex)
         {
@@ -2047,10 +2091,16 @@ public partial class NativeNotesWindow : Window
 
     private void SetMarkdownWithInsertedMarkers(IEnumerable<Guid> materialIds)
     {
-        var insertion = NativeNoteDocumentLayout.InsertMarkers(
-            MarkdownBox.Text,
-            MarkdownBox.CaretIndex,
-            materialIds);
+        var insertion = _current is { } current
+            ? NativeNoteDocumentLayout.InsertMarkers(
+                MarkdownBox.Text,
+                MarkdownBox.CaretIndex,
+                current.Materials,
+                materialIds)
+            : NativeNoteDocumentLayout.InsertMarkers(
+                MarkdownBox.Text,
+                MarkdownBox.CaretIndex,
+                materialIds);
         if (string.Equals(insertion.Markdown, MarkdownBox.Text, StringComparison.Ordinal))
         {
             return;
@@ -2425,20 +2475,28 @@ public partial class NativeNotesWindow : Window
 
         try
         {
-            if (!await SavePendingAsync())
-            {
-                return;
-            }
+            var noteId = _current.NoteId;
+            var versionId = selected.VersionId;
+            await TryRunNoteOperationAsync(
+                async () =>
+                {
+                    if (!await SavePendingCoreAsync()
+                        || _current?.NoteId != noteId)
+                    {
+                        return;
+                    }
 
-            _current = await _store.RestoreVersionAsync(_current.NoteId, selected.VersionId);
-            _loading = true;
-            TitleBox.Text = _current.Title;
-            MarkdownBox.Text = _current.Markdown;
-            _loading = false;
-            UpdateMaterials();
-            await RefreshNotesAsync(SearchBox.Text);
-            await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
-            SaveStateText.Text = "历史正文与材料引用已恢复为一个新的固定版本";
+                    _current = await _store.RestoreVersionAsync(noteId, versionId);
+                    _loading = true;
+                    TitleBox.Text = _current.Title;
+                    MarkdownBox.Text = _current.Markdown;
+                    _loading = false;
+                    UpdateMaterials();
+                    await RefreshNotesAsync(SearchBox.Text);
+                    await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
+                    SaveStateText.Text = "历史正文与材料引用已恢复为一个新的固定版本";
+                },
+                "正在结束并保存当前笔记，历史版本未恢复。");
         }
         catch (Exception ex)
         {
@@ -2455,11 +2513,20 @@ public partial class NativeNotesWindow : Window
 
         try
         {
-            var resolved = await _store.ResolveMaterialFileAsync(_current.NoteId, material.MaterialId);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(resolved.AbsolutePath)
-            {
-                UseShellExecute = true,
-            });
+            var noteId = _current.NoteId;
+            await TryRunNoteOperationAsync(
+                async () =>
+                {
+                    var resolved = await _store.ResolveMaterialFileAsync(
+                        noteId,
+                        material.MaterialId);
+                    System.Diagnostics.Process.Start(
+                        new System.Diagnostics.ProcessStartInfo(resolved.AbsolutePath)
+                        {
+                            UseShellExecute = true,
+                        });
+                },
+                "正在结束并保存当前笔记，材料未打开。");
         }
         catch (Exception ex)
         {
@@ -2492,11 +2559,6 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        if (!await SavePendingAsync())
-        {
-            return;
-        }
-
         if (MessageBox.Show(
                 this,
                 $"仅将当前固定版本 {_current.CurrentVersionId.ToString("N")[..8]} 上传到已登录服务器？\n\n"
@@ -2508,18 +2570,28 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
-        CloudStatusText.Text = "正在校验并上传当前固定版本…";
         try
         {
-            var result = await _cloud.UploadVersionAsync(
-                _current.NoteId,
-                _current.CurrentVersionId,
-                userConfirmedStorage: true);
-            CloudStatusText.Text = result.Upload.HasConflict
-                ? $"已上传 {result.Upload.VersionId[..8]}，但服务器当前版本已被另一端更新；双方版本均保留。"
-                : $"已上传并完成固定版本 {result.Upload.VersionId[..8]}。";
-            await RefreshCloudVersionsAsync(showErrors: false);
-            await RefreshCloudResultsAsync(showErrors: false);
+            await TryRunNoteOperationAsync(
+                async () =>
+                {
+                    if (!await SavePendingCoreAsync() || _current is null)
+                    {
+                        return;
+                    }
+
+                    CloudStatusText.Text = "正在校验并上传当前固定版本…";
+                    var result = await _cloud.UploadVersionAsync(
+                        _current.NoteId,
+                        _current.CurrentVersionId,
+                        userConfirmedStorage: true);
+                    CloudStatusText.Text = result.Upload.HasConflict
+                        ? $"已上传 {result.Upload.VersionId[..8]}，但服务器当前版本已被另一端更新；双方版本均保留。"
+                        : $"已上传并完成固定版本 {result.Upload.VersionId[..8]}。";
+                    await RefreshCloudVersionsAsync(showErrors: false);
+                    await RefreshCloudResultsAsync(showErrors: false);
+                },
+                "正在结束并保存当前笔记，云端上传未开始。");
         }
         catch (Exception ex)
         {
@@ -2529,21 +2601,50 @@ public partial class NativeNotesWindow : Window
     }
 
     private async void OnRefreshCloud(object sender, RoutedEventArgs e)
-        => await RefreshCloudVersionsAsync(showErrors: true);
+    {
+        if (_current is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await TryRunNoteOperationAsync(
+                () => RefreshCloudVersionsAsync(showErrors: true),
+                "正在结束并保存当前笔记，云端版本未刷新。");
+        }
+        catch (Exception ex)
+        {
+            ShowFailure("读取云端固定版本失败", ex);
+        }
+    }
 
     private async void OnOpenCloudSources(object sender, RoutedEventArgs e)
     {
-        var dialog = new CloudNoteSourcesWindow { Owner = this };
+        var dialog = new CloudNoteSourcesWindow(_operations) { Owner = this };
         if (dialog.ShowDialog() != true || dialog.SelectedNoteId is not { } noteId)
         {
             return;
         }
 
-        _loading = true;
-        SearchBox.Text = string.Empty;
-        _loading = false;
-        await RefreshNotesAsync();
-        NotesList.SelectedItem = _notes.FirstOrDefault(item => item.NoteId == noteId);
+        try
+        {
+            await TryRunNoteOperationAsync(
+                async () =>
+                {
+                    _loading = true;
+                    SearchBox.Text = string.Empty;
+                    _loading = false;
+                    await RefreshNotesAsync();
+                    NotesList.SelectedItem = _notes.FirstOrDefault(
+                        item => item.NoteId == noteId);
+                },
+                "正在结束并保存当前笔记，云端来源切换未生效。");
+        }
+        catch (Exception ex)
+        {
+            ShowFailure("打开云端来源失败", ex);
+        }
     }
 
     private async Task RefreshCloudVersionsAsync(bool showErrors, long? expectedSelectionGeneration = null)
@@ -2642,12 +2743,22 @@ public partial class NativeNotesWindow : Window
 
         try
         {
-            var promoted = await _cloud.PromoteVersionAsync(
-                _current.NoteId,
-                Guid.Parse(selected.Version.VersionId),
-                current is null ? null : Guid.Parse(current.Version.VersionId));
-            CloudStatusText.Text = $"服务器当前版本已切换为 {promoted.VersionId[..8]}。";
-            await RefreshCloudVersionsAsync(showErrors: false);
+            await TryRunNoteOperationAsync(
+                async () =>
+                {
+                    if (_current is null)
+                    {
+                        return;
+                    }
+
+                    var promoted = await _cloud.PromoteVersionAsync(
+                        _current.NoteId,
+                        Guid.Parse(selected.Version.VersionId),
+                        current is null ? null : Guid.Parse(current.Version.VersionId));
+                    CloudStatusText.Text = $"服务器当前版本已切换为 {promoted.VersionId[..8]}。";
+                    await RefreshCloudVersionsAsync(showErrors: false);
+                },
+                "正在结束并保存当前笔记，云端当前版本未切换。");
         }
         catch (Exception ex)
         {
@@ -2656,7 +2767,23 @@ public partial class NativeNotesWindow : Window
     }
 
     private async void OnRefreshCloudResults(object sender, RoutedEventArgs e)
-        => await RefreshCloudResultsAsync(showErrors: true);
+    {
+        if (_current is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await TryRunNoteOperationAsync(
+                () => RefreshCloudResultsAsync(showErrors: true),
+                "正在结束并保存当前笔记，云端结果未刷新。");
+        }
+        catch (Exception ex)
+        {
+            ShowFailure("读取云端结果失败", ex);
+        }
+    }
 
     private async Task RefreshCloudResultsAsync(bool showErrors, long? expectedSelectionGeneration = null)
     {

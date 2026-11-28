@@ -10,6 +10,7 @@ namespace Pim.Client.App;
 public partial class CloudNoteSourcesWindow : Window
 {
     private readonly CloudNoteMaterialService _cloud;
+    private readonly NativeNoteOperationCoordinator? _operations;
     private CloudNoteAccountScope? _loadedScope;
     private long? _loadedAccountGeneration;
     private long _refreshGeneration;
@@ -20,13 +21,34 @@ public partial class CloudNoteSourcesWindow : Window
         _cloud = App.Services.GetRequiredService<CloudNoteMaterialService>();
     }
 
+    internal CloudNoteSourcesWindow(NativeNoteOperationCoordinator operations)
+        : this()
+    {
+        _operations = operations;
+    }
+
     public Guid? SelectedNoteId { get; private set; }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
-        => await RefreshAsync();
+        => await RefreshThroughBarrierAsync();
 
     private async void OnRefresh(object sender, RoutedEventArgs e)
-        => await RefreshAsync();
+        => await RefreshThroughBarrierAsync();
+
+    private async Task RefreshThroughBarrierAsync()
+    {
+        if (_operations is null)
+        {
+            await RefreshAsync();
+            return;
+        }
+
+        var started = await _operations.TryRunExclusiveAsync(RefreshAsync);
+        if (!started)
+        {
+            StatusText.Text = "正在结束并保存本机笔记，请稍后再刷新服务器目录。";
+        }
+    }
 
     private async Task RefreshAsync()
     {
@@ -128,32 +150,46 @@ public partial class CloudNoteSourcesWindow : Window
             return;
         }
 
-        try
+        async Task RestoreAsync()
         {
-            StatusText.Text = "正在下载并校验固定材料…";
-            IsEnabled = false;
-            var result = await _cloud.RestoreVersionAsync(
-                versionId,
-                userConfirmedLocalCopy: true,
-                expectedAccountScope: _loadedScope,
-                expectedAccountGeneration: _loadedAccountGeneration);
-            SelectedNoteId = result.Import.NoteId;
-            StatusText.Text = "恢复完成；本机副本已创建。";
-            DialogResult = true;
+            try
+            {
+                StatusText.Text = "正在下载并校验固定材料…";
+                IsEnabled = false;
+                var result = await _cloud.RestoreVersionAsync(
+                    versionId,
+                    userConfirmedLocalCopy: true,
+                    expectedAccountScope: _loadedScope,
+                    expectedAccountGeneration: _loadedAccountGeneration);
+                SelectedNoteId = result.Import.NoteId;
+                StatusText.Text = "恢复完成；本机副本已创建。";
+                DialogResult = true;
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = "恢复未完成；本机笔记库保持不变。";
+                MessageBox.Show(
+                    this,
+                    ex.Message,
+                    "恢复服务器笔记失败",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            finally
+            {
+                IsEnabled = true;
+            }
         }
-        catch (Exception ex)
+
+        if (_operations is null)
         {
-            StatusText.Text = "恢复未完成；本机笔记库保持不变。";
-            MessageBox.Show(
-                this,
-                ex.Message,
-                "恢复服务器笔记失败",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
+            await RestoreAsync();
+            return;
         }
-        finally
+
+        if (!await _operations.TryRunExclusiveAsync(RestoreAsync))
         {
-            IsEnabled = true;
+            StatusText.Text = "正在结束并保存本机笔记，本次恢复未开始。";
         }
     }
 
@@ -181,8 +217,26 @@ public partial class CloudNoteSourcesWindow : Window
             return;
         }
 
-        SelectedNoteId = noteId;
-        DialogResult = true;
+        NativeNoteOperationLease? lease = null;
+        if (_operations is not null)
+        {
+            lease = _operations.TryBeginOperation();
+            if (lease is null)
+            {
+                StatusText.Text = "正在结束并保存本机笔记，本次选择未生效。";
+                return;
+            }
+        }
+
+        try
+        {
+            SelectedNoteId = noteId;
+            DialogResult = true;
+        }
+        finally
+        {
+            lease?.Dispose();
+        }
     }
 
     private bool IsLoadedScopeCurrent()

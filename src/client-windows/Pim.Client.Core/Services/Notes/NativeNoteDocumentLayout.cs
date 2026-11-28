@@ -48,18 +48,70 @@ public sealed record NativeNoteDocumentLayout(
     {
         ArgumentNullException.ThrowIfNull(materialIds);
         var text = markdown ?? string.Empty;
-        var position = Math.Clamp(caretIndex, 0, text.Length);
+        var existing = ReferencedMaterialIds(text);
         var markers = materialIds
-            .Where(id => id != Guid.Empty)
+            .Where(id => id != Guid.Empty && !existing.Contains(id))
             .Distinct()
-            .Select(CreateMarker)
             .ToArray();
-        if (markers.Length == 0)
+        return InsertMarkersCore(text, caretIndex, markers);
+    }
+
+    public static NativeNoteMarkerInsertion InsertMarkers(
+        string? markdown,
+        int caretIndex,
+        IReadOnlyList<LocalNoteMaterial> materials,
+        IEnumerable<Guid> materialIds)
+    {
+        // An already anchored material family is never inserted a second time.
+        // The existing marker owns the position; insertion keeps the caret put.
+        ArgumentNullException.ThrowIfNull(materials);
+        ArgumentNullException.ThrowIfNull(materialIds);
+        var text = markdown ?? string.Empty;
+        var materialOrder = materials.ToArray();
+        var materialById = materialOrder
+            .GroupBy(material => material.MaterialId)
+            .ToDictionary(group => group.Key, group => group.First());
+        var existing = ReferencedMaterialIds(text);
+        var selectedFamilies = new HashSet<Guid>();
+        var selected = new List<Guid>();
+        foreach (var materialId in materialIds)
+        {
+            if (materialId == Guid.Empty)
+            {
+                continue;
+            }
+
+            var displayId = materialById.TryGetValue(materialId, out var material)
+                ? ResolveDisplayMaterial(material, materialById, materialOrder).MaterialId
+                : materialId;
+            var family = materialById.TryGetValue(displayId, out var displayMaterial)
+                ? GetFamily(displayMaterial, materialOrder)
+                    .Select(member => member.MaterialId)
+                    .ToHashSet()
+                : [displayId];
+            if (existing.Overlaps(family) || !selectedFamilies.Add(displayId))
+            {
+                continue;
+            }
+
+            selected.Add(displayId);
+        }
+
+        return InsertMarkersCore(text, caretIndex, selected);
+    }
+
+    private static NativeNoteMarkerInsertion InsertMarkersCore(
+        string text,
+        int caretIndex,
+        IReadOnlyList<Guid> materialIds)
+    {
+        var position = Math.Clamp(caretIndex, 0, text.Length);
+        if (materialIds.Count == 0)
         {
             return new NativeNoteMarkerInsertion(text, position);
         }
 
-        var markerBlock = string.Join("\n\n", markers);
+        var markerBlock = string.Join("\n\n", materialIds.Select(CreateMarker));
         var prefix = position == 0
             ? string.Empty
             : text[position - 1] == '\n'
@@ -90,6 +142,7 @@ public sealed record NativeNoteDocumentLayout(
         var orderedIds = new List<Guid>();
         var orderedSet = new HashSet<Guid>();
         var placed = new HashSet<Guid>();
+        var renderedUnresolved = new HashSet<Guid>();
         var cursor = 0;
         foreach (Match match in MarkerPattern.Matches(text))
         {
@@ -109,6 +162,14 @@ public sealed record NativeNoteDocumentLayout(
                     markerMaterial,
                     materialById,
                     materialOrder);
+                // First anchor wins. Later markers for the same material family
+                // are invisible duplicates and must not render a second card.
+                if (placed.Contains(displayMaterial.MaterialId))
+                {
+                    cursor = match.Index + match.Length;
+                    continue;
+                }
+
                 AddFamilyToOrder(
                     displayMaterial,
                     materialOrder,
@@ -123,12 +184,19 @@ public sealed record NativeNoteDocumentLayout(
             }
             else
             {
+                var unresolvedId = Guid.TryParse(match.Groups["id"].Value, out var parsedId)
+                    ? parsedId
+                    : (Guid?)null;
+                if (unresolvedId is { } duplicateId && !renderedUnresolved.Add(duplicateId))
+                {
+                    cursor = match.Index + match.Length;
+                    continue;
+                }
+
                 segments.Add(new NativeNoteDocumentSegment(
                     NativeNoteDocumentSegmentKind.UnresolvedMaterial,
                     match.Value,
-                    Guid.TryParse(match.Groups["id"].Value, out var unresolvedId)
-                        ? unresolvedId
-                        : null,
+                    unresolvedId,
                     null));
             }
 
@@ -205,6 +273,33 @@ public sealed record NativeNoteDocumentLayout(
         return result;
     }
 
+    internal static string RewriteMaterialMarkers(
+        string markdown,
+        IReadOnlyDictionary<Guid, Guid> aliases,
+        ISet<Guid>? seen = null)
+    {
+        if (string.IsNullOrEmpty(markdown) || aliases.Count == 0)
+        {
+            return markdown;
+        }
+
+        return MarkerPattern.Replace(markdown, match =>
+        {
+            if (!Guid.TryParse(match.Groups["id"].Value, out var materialId)
+                || !aliases.TryGetValue(materialId, out var target))
+            {
+                return match.Value;
+            }
+
+            if (seen is not null && !seen.Add(target))
+            {
+                return string.Empty;
+            }
+
+            return NativeNoteDocumentLayout.CreateMarker(target);
+        });
+    }
+
     /// <summary>
     /// Photo and ink blocks own their server-side position. Legacy material
     /// markers for those block-backed files are ignored in Markdown so the
@@ -265,7 +360,11 @@ public sealed record NativeNoteDocumentLayout(
             }
         }
 
-        return Parse(builder.ToString(), materials);
+        var markdown = RewriteMaterialMarkers(
+            builder.ToString(),
+            ServerNoteRecordingMarkers.BuildAliases(source, materials),
+            new HashSet<Guid>());
+        return Parse(markdown, materials);
     }
 
     public static IReadOnlyList<LocalNoteMaterial> OrderServerSourceMaterials(

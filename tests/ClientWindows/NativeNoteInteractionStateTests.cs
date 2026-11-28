@@ -254,6 +254,182 @@ public sealed class NativeNoteInteractionStateTests
     }
 
     [Fact]
+    public void RepeatedMarkersRenderOneCardPerMaterialFamilyAndKeepFirstPosition()
+    {
+        var photo = Material(LocalNoteMaterialKind.Photo, "重复照片.png");
+        var preview = Material(LocalNoteMaterialKind.Handwriting, "重复手写.png");
+        var source = Material(
+            LocalNoteMaterialKind.HandwritingSource,
+            "重复手写.ink.json",
+            width: preview.Width,
+            height: preview.Height);
+        var recordingId = Guid.NewGuid();
+        var recording = Material(
+            LocalNoteMaterialKind.Recording,
+            "重复录音.wav",
+            recordingId: recordingId);
+        var secondSegment = Material(
+            LocalNoteMaterialKind.RecordingSegment,
+            "重复录音-2.wav",
+            recordingId: recordingId);
+        var markdown = string.Join(
+            "\n\n",
+            "开头",
+            NativeNoteDocumentLayout.CreateMarker(photo.MaterialId),
+            "照片之后",
+            NativeNoteDocumentLayout.CreateMarker(photo.MaterialId),
+            NativeNoteDocumentLayout.CreateMarker(preview.MaterialId),
+            NativeNoteDocumentLayout.CreateMarker(source.MaterialId),
+            NativeNoteDocumentLayout.CreateMarker(recording.MaterialId),
+            "录音之后",
+            NativeNoteDocumentLayout.CreateMarker(secondSegment.MaterialId),
+            NativeNoteDocumentLayout.CreateMarker(recording.MaterialId),
+            "结尾");
+
+        var layout = NativeNoteDocumentLayout.Parse(
+            markdown,
+            [photo, preview, source, recording, secondSegment]);
+
+        Assert.DoesNotContain(
+            layout.Segments,
+            segment => segment.Kind == NativeNoteDocumentSegmentKind.UnresolvedMaterial);
+        Assert.Equal(
+            [photo.MaterialId, preview.MaterialId, recording.MaterialId],
+            layout.Segments
+                .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+                .Select(segment => segment.MaterialId!.Value));
+        Assert.Empty(layout.UnplacedMaterials);
+        Assert.Equal(
+            [
+                photo.MaterialId,
+                preview.MaterialId,
+                source.MaterialId,
+                recording.MaterialId,
+                secondSegment.MaterialId,
+            ],
+            layout.OrderedMaterialIds);
+    }
+
+    [Fact]
+    public void LegacyServerRecordingMarkerResolvesToStableChunkWithoutDuplicateAnchor()
+    {
+        var recordingId = Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+        var firstChunkId = ServerNoteMaterialStableId.ForRecordingChunk(
+            recordingId,
+            segment: 1,
+            chunkIndex: 1,
+            samples: 5);
+        var secondChunkId = ServerNoteMaterialStableId.ForRecordingChunk(
+            recordingId,
+            segment: 1,
+            chunkIndex: 2,
+            samples: 7);
+        var firstChunk = Material(
+            LocalNoteMaterialKind.RecordingSegment,
+            "录音-1.wav",
+            materialId: firstChunkId,
+            recordingId: recordingId);
+        var secondChunk = Material(
+            LocalNoteMaterialKind.RecordingSegment,
+            "录音-2.wav",
+            materialId: secondChunkId,
+            recordingId: recordingId);
+        var markdown = string.Join(
+            "\n\n",
+            "开头",
+            NativeNoteDocumentLayout.CreateMarker(recordingId),
+            "旧锚点",
+            NativeNoteDocumentLayout.CreateMarker(recordingId),
+            "结尾");
+        var rawMarkdown = System.Text.Json.JsonSerializer.Serialize(new { text = markdown });
+        var serverSource = new LocalNoteServerSource(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "{}",
+            "{}",
+            "{}",
+            markdown,
+            [
+                new LocalNoteServerSourceBlock(
+                    Guid.NewGuid().ToString("D"),
+                    "markdown",
+                    rawMarkdown,
+                    []),
+            ],
+            [
+                new LocalNoteServerSourceFile(
+                    $"recordings/{recordingId:D}/s0001-c000001.wav",
+                    "AudioChunk",
+                    new string('a', 64),
+                    1,
+                    null,
+                    recordingId.ToString("D"),
+                    1,
+                    1,
+                    5,
+                    firstChunkId,
+                    null),
+                new LocalNoteServerSourceFile(
+                    $"recordings/{recordingId:D}/s0001-c000002.wav",
+                    "AudioChunk",
+                    new string('b', 64),
+                    1,
+                    null,
+                    recordingId.ToString("D"),
+                    1,
+                    2,
+                    7,
+                    secondChunkId,
+                    null),
+            ]);
+
+        var layout = NativeNoteDocumentLayout.ParseServerSource(
+            serverSource,
+            [firstChunk, secondChunk]);
+
+        Assert.DoesNotContain(
+            layout.Segments,
+            segment => segment.Kind == NativeNoteDocumentSegmentKind.UnresolvedMaterial);
+        var rendered = Assert.Single(
+            layout.Segments,
+            segment => segment.Kind == NativeNoteDocumentSegmentKind.Material);
+        Assert.Equal(firstChunkId, rendered.MaterialId);
+        Assert.Equal(
+            [firstChunkId, secondChunkId],
+            NativeNoteDocumentLayout.OrderServerSourceMaterials(
+                serverSource,
+                [firstChunk, secondChunk])
+                .Select(material => material.MaterialId));
+    }
+
+    [Fact]
+    public void InsertMarkersDoesNotAddASecondAnchorForAnAlreadyPlacedFamily()
+    {
+        var preview = Material(LocalNoteMaterialKind.Handwriting, "已插入手写.png");
+        var source = Material(
+            LocalNoteMaterialKind.HandwritingSource,
+            "已插入手写.ink.json",
+            width: preview.Width,
+            height: preview.Height);
+        var markdown = $"开头\n\n{NativeNoteDocumentLayout.CreateMarker(preview.MaterialId)}\n\n结尾";
+
+        var duplicateExact = NativeNoteDocumentLayout.InsertMarkers(
+            markdown,
+            caretIndex: 2,
+            [preview.MaterialId]);
+        var duplicateFamily = NativeNoteDocumentLayout.InsertMarkers(
+            markdown,
+            caretIndex: 2,
+            [preview, source],
+            [source.MaterialId]);
+
+        Assert.Equal(markdown, duplicateExact.Markdown);
+        Assert.Equal(2, duplicateExact.CaretIndex);
+        Assert.Equal(markdown, duplicateFamily.Markdown);
+        Assert.Equal(2, duplicateFamily.CaretIndex);
+    }
+
+    [Fact]
     public void ServerSourceBlocksRenderPhotosAndHandwritingAtTheirStoredPositions()
     {
         var photo = Material(LocalNoteMaterialKind.Photo, "server-photo.png");
@@ -620,6 +796,83 @@ public sealed class NativeNoteInteractionStateTests
 
         var retried = await coordinator.FinishAsync(() => Task.CompletedTask);
         Assert.True(retried.Succeeded);
+    }
+
+    [Fact]
+    public async Task ExclusiveLifecycleKeepsFinishBlockedAfterItsNestedSaveReturns()
+    {
+        using var coordinator = new NativeNoteOperationCoordinator();
+        var order = new List<string>();
+        var saveReturned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePostSaveWork = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var entry = coordinator.TryRunExclusiveAsync(async () =>
+        {
+            order.Add("save");
+            saveReturned.SetResult();
+            await releasePostSaveWork.Task;
+            order.Add("export-after-save");
+        });
+        await saveReturned.Task;
+
+        var finish = coordinator.FinishAsync(() =>
+        {
+            order.Add("finish");
+            return Task.CompletedTask;
+        });
+        Assert.False(finish.IsCompleted);
+        Assert.Null(coordinator.TryBeginOperation());
+
+        releasePostSaveWork.SetResult();
+        Assert.True(await entry);
+        var result = await finish;
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(["save", "export-after-save", "finish"], order);
+    }
+
+    [Fact]
+    public async Task ExclusiveLifecycleReleasesBothTheBarrierAndGateAfterFailure()
+    {
+        using var coordinator = new NativeNoteOperationCoordinator();
+
+        await Assert.ThrowsAsync<IOException>(() =>
+            coordinator.TryRunExclusiveAsync(() => throw new IOException("材料读取失败")));
+
+        using (var retry = coordinator.TryBeginOperation())
+        {
+            Assert.NotNull(retry);
+            await retry!.EnterSerializedAsync();
+            retry.ExitSerialized();
+        }
+
+        var finish = await coordinator.FinishAsync(() => Task.CompletedTask);
+        Assert.True(finish.Succeeded);
+    }
+
+    [Fact]
+    public async Task FinishRejectsLifecycleEntriesThatHaveNotStarted()
+    {
+        using var coordinator = new NativeNoteOperationCoordinator();
+        var finishEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = coordinator.FinishAsync(async () =>
+        {
+            finishEntered.SetResult();
+            await releaseFinish.Task;
+        });
+        await finishEntered.Task;
+
+        var entryRan = false;
+        Assert.False(await coordinator.TryRunExclusiveAsync(() =>
+        {
+            entryRan = true;
+            return Task.CompletedTask;
+        }));
+        Assert.False(entryRan);
+
+        releaseFinish.SetResult();
+        Assert.True((await finish).Succeeded);
     }
 
     private static LocalNoteSummary Summary(string title)

@@ -106,6 +106,42 @@ public sealed class NativeNoteOperationCoordinator : IDisposable
         }
     }
 
+    /// <summary>
+    /// Runs an entire note lifecycle entry point, including any save that must
+    /// precede it, under one operation lease. Finish waits for the whole
+    /// callback instead of only the nested save, and no later part of the entry
+    /// can keep running after Finish has crossed the barrier.
+    /// </summary>
+    public async Task<bool> TryRunExclusiveAsync(
+        Func<Task> operation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        var lease = TryBeginOperation();
+        if (lease is null)
+        {
+            return false;
+        }
+
+        var entered = false;
+        try
+        {
+            await lease.EnterSerializedAsync(cancellationToken);
+            entered = true;
+            await operation();
+            return true;
+        }
+        finally
+        {
+            if (entered)
+            {
+                lease.ExitSerialized();
+            }
+
+            lease.Dispose();
+        }
+    }
+
     internal async Task EnterSerializedAsync(CancellationToken cancellationToken)
         => await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 

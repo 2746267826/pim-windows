@@ -3,7 +3,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 
 namespace Pim.Client.Core.Services.Notes;
 
@@ -89,10 +88,6 @@ public sealed class ServerNoteMaterialBundleBuilder
     {
         WriteIndented = false,
     };
-    private static readonly Regex MaterialMarkerPattern = new(
-        @"<!--\s*pim-material:(?<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*-->",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     private sealed record ServerBlockMaterial(
         Guid MarkerMaterialId,
         JsonObject Block,
@@ -478,7 +473,7 @@ public sealed class ServerNoteMaterialBundleBuilder
         ServerNoteSourceIntegrity.Validate(source, version.Title, version.Markdown, version.Materials);
 
         var blockIds = new HashSet<string>(StringComparer.Ordinal);
-        var blocks = new JsonArray();
+        var blocks = new List<JsonObject>();
         foreach (var sourceBlock in source.Blocks)
         {
             if (!blockIds.Add(sourceBlock.Id))
@@ -500,7 +495,7 @@ public sealed class ServerNoteMaterialBundleBuilder
                 throw new LocalNoteStoreException("服务器混合材料块身份或材料映射已损坏。");
             }
 
-            blocks.Add(JsonNode.Parse(sourceBlock.RawJson)
+            blocks.Add(JsonNode.Parse(sourceBlock.RawJson) as JsonObject
                 ?? throw new LocalNoteStoreException("服务器混合材料块 JSON 无效。"));
         }
 
@@ -526,10 +521,33 @@ public sealed class ServerNoteMaterialBundleBuilder
             throw new LocalNoteStoreException("服务器混合材料 input 与原始 note source 不一致。");
         }
 
+        var recordingMarkerAliases = ServerNoteRecordingMarkers.BuildAliases(
+            source,
+            version.Materials);
+        var seenMarkers = new HashSet<Guid>();
+        foreach (var block in blocks)
+        {
+            if (string.Equals(
+                    block["kind"]?.GetValue<string>(),
+                    "markdown",
+                    StringComparison.Ordinal)
+                && block["text"]?.GetValue<string>() is { } text)
+            {
+                block["text"] = NativeNoteDocumentLayout.RewriteMaterialMarkers(
+                    text,
+                    recordingMarkerAliases,
+                    seenMarkers);
+            }
+        }
+
+        var documentMarkdown = NativeNoteDocumentLayout.RewriteMaterialMarkers(
+            source.DocumentMarkdown,
+            recordingMarkerAliases,
+            new HashSet<Guid>());
         noteNode["id"] = note.NoteId.ToString("D");
         noteNode["revision"] = version.CreatedAt.ToUnixTimeMilliseconds();
         noteNode["title"] = version.Title;
-        noteNode["blocks"] = blocks;
+        noteNode["blocks"] = new JsonArray(blocks.Select(block => (JsonNode)block).ToArray());
         var noteJson = noteNode.ToJsonString(JsonOptions);
         var noteBytes = Encoding.UTF8.GetBytes(noteJson);
 
@@ -595,7 +613,7 @@ public sealed class ServerNoteMaterialBundleBuilder
                         throw new LocalNoteStoreException("服务器 Markdown 文件路径无效。");
                     }
 
-                    outputs.Add(Inline(file.Path, file.Kind, source.DocumentMarkdown));
+                    outputs.Add(Inline(file.Path, file.Kind, documentMarkdown));
                     break;
                 case "RecordingManifest":
                     if (file.InlineJson is null
@@ -718,18 +736,10 @@ public sealed class ServerNoteMaterialBundleBuilder
                 continue;
             }
 
-            var rewritten = MaterialMarkerPattern.Replace(text, match =>
-            {
-                if (!Guid.TryParse(match.Groups["id"].Value, out var materialId)
-                    || !recordingMarkerIds.TryGetValue(materialId, out var stableId))
-                {
-                    return match.Value;
-                }
-
-                return seenStableIds.Add(stableId)
-                    ? NativeNoteDocumentLayout.CreateMarker(stableId)
-                    : string.Empty;
-            });
+            var rewritten = NativeNoteDocumentLayout.RewriteMaterialMarkers(
+                text,
+                recordingMarkerIds,
+                seenStableIds);
             if (string.Equals(rewritten, text, StringComparison.Ordinal))
             {
                 continue;
