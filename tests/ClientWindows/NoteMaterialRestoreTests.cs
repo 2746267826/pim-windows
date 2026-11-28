@@ -156,9 +156,15 @@ public sealed class NoteMaterialRestoreTests : IDisposable
             "\n\n",
             "开头",
             NativeNoteDocumentLayout.CreateMarker(photoMaterial.MaterialId),
+            "照片重复锚点",
+            NativeNoteDocumentLayout.CreateMarker(photoMaterial.MaterialId),
             "中间",
             NativeNoteDocumentLayout.CreateMarker(recordingMaterial.MaterialId),
+            "录音重复锚点",
+            NativeNoteDocumentLayout.CreateMarker(recordingMaterial.MaterialId),
             "录音之后",
+            NativeNoteDocumentLayout.CreateMarker(handwritingMaterial.MaterialId),
+            "手写重复锚点",
             NativeNoteDocumentLayout.CreateMarker(handwritingMaterial.MaterialId),
             "结尾");
         note = await sourceStore.SaveAsync(note.NoteId, note.Title, markdown);
@@ -185,10 +191,19 @@ public sealed class NoteMaterialRestoreTests : IDisposable
             NativeNoteDocumentLayout.CreateMarker(handwritingMaterial.MaterialId),
             markdownBlockText,
             StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.DoesNotContain(
             NativeNoteDocumentLayout.CreateMarker(recordingMaterial.MaterialId),
             markdownBlockText,
             StringComparison.Ordinal);
+        var expectedRecordingMaterialId =
+            Assert.Single(NativeNoteDocumentLayout.ReferencedMaterialIds(markdownBlockText));
+        var expectedRecordingMarker =
+            NativeNoteDocumentLayout.CreateMarker(expectedRecordingMaterialId);
+        Assert.NotEqual(recordingMaterial.MaterialId, expectedRecordingMaterialId);
+        Assert.Contains(expectedRecordingMarker, markdownBlockText, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            markdownBlockText.Split(expectedRecordingMarker, StringSplitOptions.None).Length - 1);
         Assert.Single(input.RootElement.GetProperty("recordings").EnumerateArray());
 
         var fixture = await CreateFixtureFromBundleAsync(bundle);
@@ -203,6 +218,16 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         var restored = await restoredStore.LoadAsync(restoredImport.Import.NoteId);
 
         Assert.True(restored.IsServerSourceReadOnly);
+        var restoredRecording = restored.Materials
+            .Where(material => material.Kind == LocalNoteMaterialKind.RecordingSegment)
+            .OrderBy(material => material.RecordingSegment)
+            .ThenBy(material => material.RecordingChunkIndex)
+            .First();
+        Assert.Equal(expectedRecordingMaterialId, restoredRecording.MaterialId);
+        Assert.Contains(expectedRecordingMarker, restored.Markdown, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            restored.Markdown.Split(expectedRecordingMarker, StringSplitOptions.None).Length - 1);
         var restoredLayout = NativeNoteDocumentLayout.ParseServerSource(
             restored.ServerSource!,
             restored.Materials);
@@ -212,6 +237,7 @@ public sealed class NoteMaterialRestoreTests : IDisposable
             .ToArray();
         Assert.Equal(3, renderedIds.Length);
         Assert.Equal(3, renderedIds.Distinct().Count());
+        Assert.Contains(expectedRecordingMaterialId, renderedIds);
         Assert.Equal(
             photoMaterial.MaterialId,
             restored.Materials.Single(
@@ -277,6 +303,16 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         var rebuilt = await new ServerNoteMaterialBundleBuilder(restoredStore)
             .BuildAsync(finished.NoteId, finished.CurrentVersionId);
         using var rebuiltInput = JsonDocument.Parse(rebuilt.InputJson);
+        var rebuiltMarkdownText = string.Join(
+            "\n",
+            rebuiltInput.RootElement.GetProperty("note").GetProperty("blocks")
+                .EnumerateArray()
+                .Where(block => block.GetProperty("kind").GetString() == "markdown")
+                .Select(block => block.GetProperty("text").GetString()));
+        Assert.Contains(expectedRecordingMarker, rebuiltMarkdownText, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            rebuiltMarkdownText.Split(expectedRecordingMarker, StringSplitOptions.None).Length - 1);
         Assert.Equal(
             blocks.Select(block => block.GetProperty("kind").GetString()),
             rebuiltInput.RootElement.GetProperty("note").GetProperty("blocks")

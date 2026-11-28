@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace Pim.Client.Core.Services.Notes;
 
@@ -88,6 +89,9 @@ public sealed class ServerNoteMaterialBundleBuilder
     {
         WriteIndented = false,
     };
+    private static readonly Regex MaterialMarkerPattern = new(
+        @"<!--\s*pim-material:(?<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*-->",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private sealed record ServerBlockMaterial(
         Guid MarkerMaterialId,
@@ -240,16 +244,18 @@ public sealed class ServerNoteMaterialBundleBuilder
                 && segment.Material is { } material
                 && (material.Kind is LocalNoteMaterialKind.Photo
                     or LocalNoteMaterialKind.Handwriting)
-                && blockMaterials.TryGetValue(material.MaterialId, out var descriptor)
-                && emittedBlockMaterials.Add(descriptor.MarkerMaterialId))
+                && blockMaterials.TryGetValue(material.MaterialId, out var descriptor))
             {
-                AppendBlockMaterial(descriptor);
+                if (emittedBlockMaterials.Add(descriptor.MarkerMaterialId))
+                {
+                    AppendBlockMaterial(descriptor);
+                }
+
                 continue;
             }
 
-            // Recordings have no server block kind. Their local anchors remain
-            // in Markdown so a later local restore can keep their position;
-            // duplicate photo/ink anchors are ignored after their block wins.
+            // Recordings have no server block kind. Their local anchors are
+            // rewritten below to the stable restored recording-chunk identity.
             markdownText.Append(segment.Text);
         }
 
@@ -265,6 +271,7 @@ public sealed class ServerNoteMaterialBundleBuilder
         }
 
         var recordings = new List<JsonObject>();
+        var recordingMarkerIds = new Dictionary<Guid, Guid>();
         var recordingMaterials = version.Materials
             .Where(material => material.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
             .OrderBy(material => material.AddedAt)
@@ -279,7 +286,12 @@ public sealed class ServerNoteMaterialBundleBuilder
             cancellationToken.ThrowIfCancellationRequested();
             var recordingId = recordingGroup.Key;
             var chunks = new List<JsonObject>();
-            var recordingFiles = new List<(LocalNoteMaterial Material, string Path, long Samples)>();
+            var recordingFiles = new List<(
+                LocalNoteMaterial Material,
+                string Path,
+                long Samples,
+                int Segment,
+                int ChunkIndex)>();
             var currentSegment = 1;
             foreach (var material in recordingGroup)
             {
@@ -306,7 +318,17 @@ public sealed class ServerNoteMaterialBundleBuilder
                     ["index"] = index,
                     ["samples"] = samples,
                 });
-                recordingFiles.Add((material, source, samples));
+                recordingFiles.Add((material, source, samples, segment, index));
+            }
+
+            var markerMaterialId = ServerNoteMaterialStableId.ForRecordingChunk(
+                recordingId,
+                recordingFiles[0].Segment,
+                recordingFiles[0].ChunkIndex,
+                recordingFiles[0].Samples);
+            foreach (var material in recordingGroup)
+            {
+                recordingMarkerIds[material.MaterialId] = markerMaterialId;
             }
 
             var recordingJson = new JsonObject
@@ -327,10 +349,8 @@ public sealed class ServerNoteMaterialBundleBuilder
                 "RecordingManifest",
                 recordingJsonText,
                 recordingId: recordingId.ToString("D")));
-            foreach (var (material, source, samples) in recordingFiles)
+            foreach (var (material, source, samples, segment, index) in recordingFiles)
             {
-                var segment = material.RecordingSegment ?? 1;
-                var index = material.RecordingChunkIndex ?? 1;
                 outputs.Add(new ServerNoteMaterialFile(
                     $"{prefix}/s{segment:D4}-c{index:D6}.wav",
                     "AudioChunk",
@@ -372,6 +392,8 @@ public sealed class ServerNoteMaterialBundleBuilder
             });
             markdownBlocks.Insert(0, string.Empty);
         }
+
+        RewriteRecordingMarkers(blocks, markdownBlocks, recordingMarkerIds);
 
         var noteJson = new JsonObject
         {
@@ -672,6 +694,50 @@ public sealed class ServerNoteMaterialBundleBuilder
             ?? throw new LocalNoteStoreException("服务器录音 manifest 无效。");
         recording["noteId"] = noteId.ToString("D");
         return recording;
+    }
+
+    private static void RewriteRecordingMarkers(
+        List<JsonObject> blocks,
+        List<string> markdownBlocks,
+        IReadOnlyDictionary<Guid, Guid> recordingMarkerIds)
+    {
+        if (recordingMarkerIds.Count == 0)
+        {
+            return;
+        }
+
+        var seenStableIds = new HashSet<Guid>();
+        for (var index = 0; index < blocks.Count; index++)
+        {
+            if (!string.Equals(
+                    blocks[index]["kind"]?.GetValue<string>(),
+                    "markdown",
+                    StringComparison.Ordinal)
+                || blocks[index]["text"]?.GetValue<string>() is not { } text)
+            {
+                continue;
+            }
+
+            var rewritten = MaterialMarkerPattern.Replace(text, match =>
+            {
+                if (!Guid.TryParse(match.Groups["id"].Value, out var materialId)
+                    || !recordingMarkerIds.TryGetValue(materialId, out var stableId))
+                {
+                    return match.Value;
+                }
+
+                return seenStableIds.Add(stableId)
+                    ? NativeNoteDocumentLayout.CreateMarker(stableId)
+                    : string.Empty;
+            });
+            if (string.Equals(rewritten, text, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            blocks[index]["text"] = rewritten;
+            markdownBlocks[index] = rewritten;
+        }
     }
 
     private static void BuildHandwritingBlockMaterials(

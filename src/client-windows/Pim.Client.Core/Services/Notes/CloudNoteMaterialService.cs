@@ -912,8 +912,8 @@ public sealed class CloudNoteMaterialService
                 .ConfigureAwait(false);
             var inkBytes = Encoding.UTF8.GetBytes(localInk);
             var inkSha = Convert.ToHexString(SHA256.HashData(inkBytes)).ToLowerInvariant();
-            var sourceMaterialId = StableRestoreMaterialId("server-ink-source", block.Id);
-            var previewMaterialId = StableRestoreMaterialId("server-ink-preview", block.Id);
+            var sourceMaterialId = ServerNoteMaterialStableId.Create("server-ink-source", block.Id);
+            var previewMaterialId = ServerNoteMaterialStableId.Create("server-ink-preview", block.Id);
             materials.Add(new LocalNoteServerMaterialInput(
                 sourceMaterialId,
                 LocalNoteMaterialKind.HandwritingSource,
@@ -1024,12 +1024,11 @@ public sealed class CloudNoteMaterialService
                 }
 
                 var materialFile = matches[0];
-                var materialId = StableRestoreMaterialId(
-                    "server-recording-chunk",
-                    recordingId.ToString("D"),
-                    segment.ToString(CultureInfo.InvariantCulture),
-                    chunkIndex.ToString(CultureInfo.InvariantCulture),
-                    samples.ToString(CultureInfo.InvariantCulture));
+                var materialId = ServerNoteMaterialStableId.ForRecordingChunk(
+                    recordingId,
+                    segment,
+                    chunkIndex,
+                    samples);
                 if (!ids.Add(materialId))
                 {
                     throw new InvalidDataException("服务器录音分片材料标识重复。");
@@ -1188,19 +1187,6 @@ public sealed class CloudNoteMaterialService
             height,
             strokes = localStrokes,
         }, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
-    }
-
-    private static Guid StableRestoreMaterialId(string purpose, params string[] parts)
-    {
-        var input = purpose + ":" + string.Join(":", parts);
-        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(input));
-        var bytes = digest.AsSpan(0, 16).ToArray();
-        bytes[7] = (byte)((bytes[7] & 0x0F) | 0x50);
-        bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80);
-        var id = new Guid(bytes);
-        return id == Guid.Empty
-            ? new Guid("00000000-0000-0000-0000-000000000001")
-            : id;
     }
 
     private static int? ToPixel(double? value)

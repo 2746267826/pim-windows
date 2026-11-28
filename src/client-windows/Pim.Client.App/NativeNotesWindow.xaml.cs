@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
 using Pim.Client.Core.Contract;
 using Pim.Client.Core.Services.Notes;
+using Point = System.Windows.Point;
 
 namespace Pim.Client.App;
 

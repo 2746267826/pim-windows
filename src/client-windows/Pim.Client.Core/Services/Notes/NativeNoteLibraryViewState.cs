@@ -1,5 +1,8 @@
 namespace Pim.Client.Core.Services.Notes;
 
+// Offsets are WPF device-independent pixels. NotesList explicitly uses
+// VirtualizingPanel.ScrollUnit=Pixel so VerticalOffset, ViewportHeight and
+// TranslatePoint all share this unit instead of mixing item and pixel offsets.
 public sealed record NativeNoteLibraryViewportSnapshot(
     Guid? AnchorNoteId,
     double AnchorOffsetPixels,

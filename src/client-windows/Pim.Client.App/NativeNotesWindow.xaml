@@ -48,7 +48,9 @@
                 <Grid>
                     <ListBox x:Name="NotesList" BorderThickness="0" Background="Transparent"
                              SelectionChanged="OnNoteSelected" DisplayMemberPath="Title"
-                             ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                             ScrollViewer.CanContentScroll="True"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             VirtualizingPanel.ScrollUnit="Pixel" />
                     <Border x:Name="NotesStatePanel" Background="{StaticResource PimSurfaceBrush}"
                             BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
                             CornerRadius="9" Padding="18" Visibility="Visible">
