@@ -174,8 +174,13 @@ public sealed class LocalNoteStore
                 throw new LocalNoteStoreException("该服务器混合材料版本在当前编辑器中只读；修改纯文本会丢失原始块顺序和身份。");
             }
 
+            var normalizedMaterials = NativeNoteDocumentLayout.OrderMaterials(
+                normalizedMarkdown,
+                note.Materials);
             if (string.Equals(note.Title, normalizedTitle, StringComparison.Ordinal)
-                && string.Equals(note.Markdown, normalizedMarkdown, StringComparison.Ordinal))
+                && string.Equals(note.Markdown, normalizedMarkdown, StringComparison.Ordinal)
+                && note.Materials.Select(material => material.MaterialId)
+                    .SequenceEqual(normalizedMaterials.Select(material => material.MaterialId)))
             {
                 return note;
             }
@@ -184,7 +189,7 @@ public sealed class LocalNoteStore
                 note,
                 normalizedTitle,
                 normalizedMarkdown,
-                note.Materials,
+                normalizedMaterials,
                 LocalNoteCheckpointReason.ManualSave,
                 cancellationToken);
         }
@@ -213,11 +218,14 @@ public sealed class LocalNoteStore
                 throw new LocalNoteStoreException("该服务器混合材料版本在当前编辑器中只读；修改纯文本会丢失原始块顺序和身份。");
             }
 
+            var normalizedMaterials = NativeNoteDocumentLayout.OrderMaterials(
+                normalizedMarkdown,
+                note.Materials);
             return await CreateCheckpointLockedAsync(
                 note,
                 normalizedTitle,
                 normalizedMarkdown,
-                note.Materials,
+                normalizedMaterials,
                 LocalNoteCheckpointReason.Finished,
                 cancellationToken);
         }
@@ -1403,11 +1411,16 @@ public sealed class LocalNoteStore
 
         await LoadVersionLockedAsync(noteId, note.CurrentVersionId, cancellationToken);
 
+        var materials = note.Materials ?? [];
+        var orderedMaterials = NativeNoteDocumentLayout.OrderMaterials(
+            note.Markdown ?? string.Empty,
+            materials)
+            .ToList();
         return note with
         {
             Title = note.Title ?? string.Empty,
             Markdown = note.Markdown ?? string.Empty,
-            Materials = note.Materials ?? [],
+            Materials = orderedMaterials,
         };
     }
 

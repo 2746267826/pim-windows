@@ -99,6 +99,73 @@ public sealed class LocalNoteStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task MarkerOrderIsPersistedThroughSaveExportImportAndFinish()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("混排顺序");
+        var first = await store.AddMaterialsAsync(note.NoteId,
+        [
+            new LocalNoteMaterialInput(
+                new MemoryStream(Encoding.UTF8.GetBytes("first")),
+                "第一张.png",
+                LocalNoteMaterialKind.Photo,
+                "image/png"),
+            new LocalNoteMaterialInput(
+                new MemoryStream(Encoding.UTF8.GetBytes("second")),
+                "第二张.png",
+                LocalNoteMaterialKind.Photo,
+                "image/png"),
+        ]);
+        var firstPhoto = first.Materials[0];
+        var secondPhoto = first.Materials[1];
+        var markdown = string.Join(
+            "\n\n",
+            "开头",
+            NativeNoteDocumentLayout.CreateMarker(secondPhoto.MaterialId),
+            "中间",
+            NativeNoteDocumentLayout.CreateMarker(firstPhoto.MaterialId),
+            "结尾");
+
+        var saved = await store.SaveAsync(note.NoteId, "混排顺序", markdown);
+        Assert.Equal(
+            [secondPhoto.MaterialId, firstPhoto.MaterialId],
+            saved.Materials.Select(material => material.MaterialId));
+
+        var exportPath = Path.Combine(_root, "exports", "ordered.pimnote.zip");
+        await store.ExportAsync(note.NoteId, saved.CurrentVersionId, exportPath);
+        using (var archive = ZipFile.OpenRead(exportPath))
+        {
+            var noteEntry = archive.GetEntry("note.md")
+                ?? throw new InvalidDataException("missing note.md");
+            await using var noteStream = noteEntry.Open();
+            using var reader = new StreamReader(noteStream, Encoding.UTF8);
+            Assert.Equal(markdown, await reader.ReadToEndAsync());
+        }
+
+        var imported = await store.ImportAsync(exportPath);
+        var importedNote = await store.LoadAsync(imported.NoteId);
+        Assert.Equal(
+            [secondPhoto.DisplayName, firstPhoto.DisplayName],
+            importedNote.Materials.Select(material => material.DisplayName));
+        Assert.Equal(
+            [secondPhoto.MaterialId, firstPhoto.MaterialId],
+            NativeNoteDocumentLayout.Parse(importedNote.Markdown, importedNote.Materials)
+                .Segments
+                .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+                .Select(segment => segment.MaterialId!.Value));
+
+        var finished = await store.FinalizeAsync(note.NoteId, "最终混排", importedNote.Markdown);
+        Assert.Equal(
+            [secondPhoto.MaterialId, firstPhoto.MaterialId],
+            finished.Materials.Select(material => material.MaterialId));
+        var finishedVersion = await store.LoadVersionAsync(note.NoteId, finished.CurrentVersionId);
+        Assert.Equal(LocalNoteCheckpointReason.Finished, finishedVersion.Reason);
+        Assert.Equal(
+            [secondPhoto.MaterialId, firstPhoto.MaterialId],
+            finishedVersion.MaterialIds);
+    }
+
+    [Fact]
     public async Task ContentAddressedMaterialIsSharedWithoutChangingOldSnapshot()
     {
         var store = new LocalNoteStore(_root);

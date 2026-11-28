@@ -16,7 +16,11 @@ public sealed record NativeNoteLibraryPresentation(
     bool ShowProgress,
     bool ShowCreateAction,
     bool ShowClearSearchAction,
-    bool ShowRetryAction);
+    bool ShowRetryAction,
+    bool ShowList = false,
+    bool ShowOverlay = false,
+    bool ShowInlineProgress = false,
+    bool ShowInlineError = false);
 
 public static class NativeNotePresentation
 {
@@ -28,6 +32,7 @@ public static class NativeNotePresentation
     {
         if (isLoading)
         {
+            var hasExistingNotes = noteCount > 0;
             return new(
                 NativeNoteLibraryState.Loading,
                 "正在读取本机笔记…",
@@ -35,11 +40,15 @@ public static class NativeNotePresentation
                 ShowProgress: true,
                 ShowCreateAction: false,
                 ShowClearSearchAction: false,
-                ShowRetryAction: false);
+                ShowRetryAction: false,
+                ShowList: hasExistingNotes,
+                ShowOverlay: !hasExistingNotes,
+                ShowInlineProgress: hasExistingNotes);
         }
 
         if (hasError)
         {
+            var hasExistingNotes = noteCount > 0;
             return new(
                 NativeNoteLibraryState.Error,
                 "本机笔记暂时读不出来",
@@ -47,7 +56,10 @@ public static class NativeNotePresentation
                 ShowProgress: false,
                 ShowCreateAction: false,
                 ShowClearSearchAction: false,
-                ShowRetryAction: true);
+                ShowRetryAction: true,
+                ShowList: hasExistingNotes,
+                ShowOverlay: !hasExistingNotes,
+                ShowInlineError: hasExistingNotes);
         }
 
         if (noteCount > 0)
@@ -59,7 +71,8 @@ public static class NativeNotePresentation
                 ShowProgress: false,
                 ShowCreateAction: false,
                 ShowClearSearchAction: false,
-                ShowRetryAction: false);
+                ShowRetryAction: false,
+                ShowList: true);
         }
 
         if (!string.IsNullOrWhiteSpace(query))
@@ -71,7 +84,8 @@ public static class NativeNotePresentation
                 ShowProgress: false,
                 ShowCreateAction: false,
                 ShowClearSearchAction: true,
-                ShowRetryAction: false);
+                ShowRetryAction: false,
+                ShowOverlay: true);
         }
 
         return new(
@@ -81,7 +95,8 @@ public static class NativeNotePresentation
             ShowProgress: false,
             ShowCreateAction: true,
             ShowClearSearchAction: false,
-            ShowRetryAction: false);
+            ShowRetryAction: false,
+            ShowOverlay: true);
     }
 
     public static string WindowTitle(string? noteTitle)

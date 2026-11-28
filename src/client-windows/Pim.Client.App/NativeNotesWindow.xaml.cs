@@ -19,7 +19,10 @@ public partial class NativeNotesWindow : Window
     private readonly CloudNoteMaterialService _cloud;
     private readonly ObservableCollection<LocalNoteSummary> _notes = [];
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
-    private readonly SemaphoreSlim _saveGate = new(1, 1);
+    private readonly NativeNoteOperationCoordinator _operations = new();
+    private readonly NativeNoteLibraryLoadState _library = new();
+    private readonly NativeNoteWindowState _windowState = new();
+    private readonly NativeNoteLayoutState _layout = new(1444);
     private readonly CloudNotesUiState _cloudUi = new();
     private LocalNoteDocument? _current;
     private bool _loading;
@@ -27,8 +30,8 @@ public partial class NativeNotesWindow : Window
     private bool _allowClose;
     private bool _closed;
     private bool _finishing;
-    private bool _notesLoading;
-    private string? _notesLoadError;
+    private CancellationTokenSource? _notesRefreshCancellation;
+    private HashSet<Guid> _recordingBaselineMaterialIds = [];
     private Func<Task>? _noticeRetry;
     private Func<Task>? _editorStateRetry;
     private bool _loadingCloudResult;
@@ -43,21 +46,25 @@ public partial class NativeNotesWindow : Window
     public NativeNotesWindow()
     {
         InitializeComponent();
+        DataContext = _windowState;
         _store = App.Services.GetRequiredService<LocalNoteStore>();
         _recording = App.Services.GetRequiredService<WindowsRecordingService>();
         _cloud = App.Services.GetRequiredService<CloudNoteMaterialService>();
         NotesList.ItemsSource = _notes;
         _saveTimer.Tick += OnSaveTimer;
         _recording.StateChanged += OnRecordingStateChanged;
+        ApplyResponsiveLayout();
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
-        => await InitializeLibraryAsync();
+    {
+        ApplyResponsiveLayout();
+        await InitializeLibraryAsync();
+    }
 
     private async Task InitializeLibraryAsync()
     {
-        _notesLoading = true;
-        _notesLoadError = null;
+        var initialRequest = _library.BeginRefresh(SearchBox.Text);
         ApplyNotesPresentation();
         if (_current is null)
         {
@@ -67,8 +74,15 @@ public partial class NativeNotesWindow : Window
         try
         {
             await _store.EnsureInitializedAsync();
-            if (!await RefreshNotesAsync())
+            if (!await RefreshNotesAsync(
+                    SearchBox.Text,
+                    requestGeneration: initialRequest))
             {
+                if (!_library.IsCurrent(initialRequest))
+                {
+                    return;
+                }
+
                 ShowEmptyEditor();
                 ShowEditorError(
                     "本机笔记库暂时打不开",
@@ -102,9 +116,16 @@ public partial class NativeNotesWindow : Window
         }
         catch (Exception ex)
         {
-            _notesLoading = false;
-            _notesLoadError = ex.Message;
-            ApplyNotesPresentation();
+            if (!_library.IsCurrent(initialRequest))
+            {
+                return;
+            }
+
+            if (_library.TryFail(initialRequest, ex.Message))
+            {
+                ApplyNotesPresentation();
+            }
+
             ShowEmptyEditor();
             ShowEditorError(
                 "本机笔记库暂时打不开",
@@ -163,6 +184,7 @@ public partial class NativeNotesWindow : Window
 
         if (_current?.NoteId == summary.NoteId)
         {
+            CollapseOverlayLibrary();
             return;
         }
 
@@ -187,6 +209,7 @@ public partial class NativeNotesWindow : Window
         }
 
         await LoadNoteAsync(summary, selectionGeneration, artifactGeneration);
+        CollapseOverlayLibrary();
     }
 
     private async Task LoadNoteAsync(
@@ -351,12 +374,13 @@ public partial class NativeNotesWindow : Window
 
     private void OnEditorChanged(object sender, TextChangedEventArgs e)
     {
-        if (_loading || _current is null || _closing)
+        if (_loading || _current is null || _closing || _finishing)
         {
             return;
         }
 
         UpdateWindowChrome();
+        UpdateDocumentFlow();
         SaveStateText.Text = "正在等待本机自动保存…";
         _saveTimer.Stop();
         _saveTimer.Start();
@@ -370,7 +394,7 @@ public partial class NativeNotesWindow : Window
 
     private async void OnAddPhoto(object sender, RoutedEventArgs e)
     {
-        if (_current is null)
+        if (_current is null || _finishing)
         {
             return;
         }
@@ -391,7 +415,7 @@ public partial class NativeNotesWindow : Window
 
     private async void OnAddRecording(object sender, RoutedEventArgs e)
     {
-        if (_current is null)
+        if (_current is null || _finishing)
         {
             return;
         }
@@ -412,6 +436,11 @@ public partial class NativeNotesWindow : Window
 
     private async void OnImportPackage(object sender, RoutedEventArgs e)
     {
+        if (_finishing)
+        {
+            return;
+        }
+
         if (!await SavePendingAsync())
         {
             return;
@@ -427,6 +456,14 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        var lease = _operations.TryBeginOperation();
+        if (lease is null)
+        {
+            ShowNotice("正在结束并保存当前笔记，笔记包导入未开始。");
+            return;
+        }
+
+        await lease.EnterSerializedAsync();
         try
         {
             var imported = await _store.ImportAsync(dialog.FileName);
@@ -438,11 +475,16 @@ public partial class NativeNotesWindow : Window
         {
             ShowFailure("导入笔记包失败；原笔记库未切换", ex);
         }
+        finally
+        {
+            lease.ExitSerialized();
+            lease.Dispose();
+        }
     }
 
     private async void OnAddHandwriting(object sender, RoutedEventArgs e)
     {
-        if (_current is null)
+        if (_current is null || _finishing)
         {
             return;
         }
@@ -477,36 +519,77 @@ public partial class NativeNotesWindow : Window
                 return;
             }
 
-            using var png = new MemoryStream(dialog.Capture.PngBytes, writable: false);
-            var saved = await _store.AddHandwritingAsync(
-                note.NoteId,
-                png,
-                dialog.Capture.VectorJson,
-                $"手写 {DateTime.Now:MM-dd HHmmss}",
-                dialog.Capture.Width,
-                dialog.Capture.Height,
-                expectedCurrentVersionId: fence.VersionId);
-            if (!IsHandwritingFenceCurrent(fence))
+            var lease = _operations.TryBeginOperation();
+            if (lease is null)
             {
+                ShowNotice("正在结束并保存当前笔记，手写材料未写入。");
                 return;
             }
 
-            _current = saved;
-            var savedFence = fence with { VersionId = saved.CurrentVersionId };
-            UpdateMaterials();
-            await RefreshNotesAsync(SearchBox.Text, () => IsHandwritingFenceCurrent(savedFence));
-            if (!IsHandwritingFenceCurrent(savedFence))
+            await lease.EnterSerializedAsync();
+            try
             {
-                return;
-            }
+                var beforeIds = note.Materials
+                    .Select(material => material.MaterialId)
+                    .ToHashSet();
+                using var png = new MemoryStream(dialog.Capture.PngBytes, writable: false);
+                var saved = await _store.AddHandwritingAsync(
+                    note.NoteId,
+                    png,
+                    dialog.Capture.VectorJson,
+                    $"手写 {DateTime.Now:MM-dd HHmmss}",
+                    dialog.Capture.Width,
+                    dialog.Capture.Height,
+                    expectedCurrentVersionId: fence.VersionId);
+                if (!IsHandwritingFenceCurrent(fence))
+                {
+                    return;
+                }
 
-            await RefreshVersionsAsync(saved.NoteId, saved.CurrentVersionId, () => IsHandwritingFenceCurrent(savedFence));
-            if (!IsHandwritingFenceCurrent(savedFence))
+                _current = saved;
+                var handwritingId = saved.Materials
+                    .Where(material => !beforeIds.Contains(material.MaterialId))
+                    .Where(material => material.Kind == LocalNoteMaterialKind.Handwriting)
+                    .Select(material => material.MaterialId)
+                    .LastOrDefault();
+                if (handwritingId != Guid.Empty)
+                {
+                    SetMarkdownWithInsertedMarkers([handwritingId]);
+                    if (!await SavePendingCoreAsync())
+                    {
+                        return;
+                    }
+                }
+
+                var savedFence = fence with { VersionId = _current!.CurrentVersionId };
+                if (!IsHandwritingFenceCurrent(savedFence))
+                {
+                    return;
+                }
+
+                UpdateMaterials();
+                await RefreshNotesAsync(SearchBox.Text, () => IsHandwritingFenceCurrent(savedFence));
+                if (!IsHandwritingFenceCurrent(savedFence))
+                {
+                    return;
+                }
+
+                await RefreshVersionsAsync(
+                    _current.NoteId,
+                    _current.CurrentVersionId,
+                    () => IsHandwritingFenceCurrent(savedFence));
+                if (!IsHandwritingFenceCurrent(savedFence))
+                {
+                    return;
+                }
+
+                SaveStateText.Text = "手写墨迹与 PNG 已保存为新的固定版本";
+            }
+            finally
             {
-                return;
+                lease.ExitSerialized();
+                lease.Dispose();
             }
-
-            SaveStateText.Text = "手写墨迹与 PNG 已保存为新的固定版本";
         }
         catch (Exception ex)
         {
@@ -519,7 +602,9 @@ public partial class NativeNotesWindow : Window
 
     private async void OnEditHandwriting(object sender, RoutedEventArgs e)
     {
-        if (_current is null || MaterialsList.SelectedItem is not LocalNoteMaterial selected
+        if (_finishing
+            || _current is null
+            || MaterialsList.SelectedItem is not LocalNoteMaterial selected
             || selected.Kind != LocalNoteMaterialKind.Handwriting)
         {
             MessageBox.Show(this, "请先选择一项手写材料。", "编辑手写", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -602,31 +687,72 @@ public partial class NativeNotesWindow : Window
                 return;
             }
 
-            using var png = new MemoryStream(dialog.Capture.PngBytes, writable: false);
-            var saved = await _store.AddHandwritingAsync(
-                note.NoteId, png, dialog.Capture.VectorJson, previewStem,
-                dialog.Capture.Width, dialog.Capture.Height, expectedCurrentVersionId: fence.VersionId);
-            if (!IsHandwritingFenceCurrent(fence))
+            var lease = _operations.TryBeginOperation();
+            if (lease is null)
             {
+                ShowNotice("正在结束并保存当前笔记，编辑后的手写未写入。");
                 return;
             }
 
-            _current = saved;
-            var savedFence = fence with { VersionId = saved.CurrentVersionId };
-            UpdateMaterials();
-            await RefreshNotesAsync(SearchBox.Text, () => IsHandwritingFenceCurrent(savedFence));
-            if (!IsHandwritingFenceCurrent(savedFence))
+            await lease.EnterSerializedAsync();
+            try
             {
-                return;
-            }
+                var beforeIds = note.Materials
+                    .Select(material => material.MaterialId)
+                    .ToHashSet();
+                using var png = new MemoryStream(dialog.Capture.PngBytes, writable: false);
+                var saved = await _store.AddHandwritingAsync(
+                    note.NoteId, png, dialog.Capture.VectorJson, previewStem,
+                    dialog.Capture.Width, dialog.Capture.Height, expectedCurrentVersionId: fence.VersionId);
+                if (!IsHandwritingFenceCurrent(fence))
+                {
+                    return;
+                }
 
-            await RefreshVersionsAsync(saved.NoteId, saved.CurrentVersionId, () => IsHandwritingFenceCurrent(savedFence));
-            if (!IsHandwritingFenceCurrent(savedFence))
+                _current = saved;
+                var handwritingId = saved.Materials
+                    .Where(material => !beforeIds.Contains(material.MaterialId))
+                    .Where(material => material.Kind == LocalNoteMaterialKind.Handwriting)
+                    .Select(material => material.MaterialId)
+                    .LastOrDefault();
+                if (handwritingId != Guid.Empty)
+                {
+                    SetMarkdownWithInsertedMarkers([handwritingId]);
+                    if (!await SavePendingCoreAsync())
+                    {
+                        return;
+                    }
+                }
+
+                var savedFence = fence with { VersionId = _current!.CurrentVersionId };
+                if (!IsHandwritingFenceCurrent(savedFence))
+                {
+                    return;
+                }
+
+                UpdateMaterials();
+                await RefreshNotesAsync(SearchBox.Text, () => IsHandwritingFenceCurrent(savedFence));
+                if (!IsHandwritingFenceCurrent(savedFence))
+                {
+                    return;
+                }
+
+                await RefreshVersionsAsync(
+                    _current.NoteId,
+                    _current.CurrentVersionId,
+                    () => IsHandwritingFenceCurrent(savedFence));
+                if (!IsHandwritingFenceCurrent(savedFence))
+                {
+                    return;
+                }
+
+                SaveStateText.Text = "已将编辑后的笔迹追加为新固定版本；原材料仍保留";
+            }
+            finally
             {
-                return;
+                lease.ExitSerialized();
+                lease.Dispose();
             }
-
-            SaveStateText.Text = "已将编辑后的笔迹追加为新固定版本；原材料仍保留";
         }
         catch (Exception ex)
         {
@@ -768,77 +894,83 @@ public partial class NativeNotesWindow : Window
 
         _finishing = true;
         _saveTimer.Stop();
-        FinishButton.IsEnabled = false;
-        RecordButton.IsEnabled = false;
-        NotesList.IsEnabled = false;
-        SearchBox.IsEnabled = false;
-        await _saveGate.WaitAsync();
+        ApplyEditorInteractionState();
+        NativeNoteFinishResult result;
         try
         {
-            if (_recording.IsRecording)
+            result = await _operations.FinishAsync(async () =>
             {
-                if (_recording.CurrentNoteId != _current.NoteId)
+                if (_recording.IsRecording)
                 {
-                    ShowNotice(
-                        "当前录音属于另一篇笔记。请先切回那篇笔记结束后再结束本篇；"
-                        + "本篇正文仍保留在窗口中。");
-                    return;
+                    if (_recording.CurrentNoteId != _current.NoteId)
+                    {
+                        throw new InvalidOperationException(
+                            "当前录音属于另一篇笔记。请先切回那篇笔记结束后再结束本篇；"
+                            + "本篇正文仍保留在窗口中。");
+                    }
+
+                    var previousMaterialIds = _current.Materials
+                        .Select(material => material.MaterialId)
+                        .ToHashSet();
+                    var recording = await _recording.StopAsync();
+                    if (recording is null)
+                    {
+                        RecordingStatusText.Text = "本段没有生成可用音频，继续保存正文。";
+                    }
+                    else
+                    {
+                        _current = recording.Note;
+                        var recordingMaterialIds = recording.Note.Materials
+                            .Where(material => !previousMaterialIds.Contains(material.MaterialId))
+                            .Where(material => material.Kind is LocalNoteMaterialKind.Recording
+                                or LocalNoteMaterialKind.RecordingSegment)
+                            .GroupBy(material => material.RecordingId ?? material.MaterialId)
+                            .Select(group => group
+                                .OrderBy(material => material.RecordingSegment ?? 1)
+                                .ThenBy(material => material.RecordingChunkIndex ?? 1)
+                                .First()
+                                .MaterialId)
+                            .ToArray();
+                        SetMarkdownWithInsertedMarkers(recordingMaterialIds);
+                        RecordingStatusText.Text =
+                            $"本段录音 {recording.Wave.Duration:mm\\:ss} 已保存到本机。";
+                    }
                 }
 
-                var recording = await _recording.StopAsync();
-                if (recording is null)
+                var noteId = _current.NoteId;
+                var finishedTitle = TitleBox.Text;
+                var finishedMarkdown = MarkdownBox.Text;
+                var finishedNote = await _store.FinalizeAsync(noteId, finishedTitle, finishedMarkdown);
+                _current = finishedNote;
+                UpdateMaterials();
+                UpdateWindowChrome();
+                ShowDocument();
+                RecordingStatusText.Text = "本次记录已结束；可继续补录，或稍后手动上传。";
+                ClearNotice();
+
+                var finishedVersionId = finishedNote.CurrentVersionId;
+                await RefreshNotesAsync(SearchBox.Text);
+                try
                 {
-                    RecordingStatusText.Text = "本段没有生成可用音频，继续保存正文。";
+                    await RefreshVersionsAsync(noteId, finishedVersionId);
                 }
-                else
+                catch (Exception refreshException)
                 {
-                    _current = recording.Note;
-                    RecordingStatusText.Text =
-                        $"本段录音 {recording.Wave.Duration:mm\\:ss} 已保存到本机。";
+                    ShowFailure(
+                        "已结束并保存本机固定版本，但版本列表暂未刷新",
+                        refreshException,
+                        () => RefreshFinishedVersionsAsync(noteId, finishedVersionId));
                 }
-            }
 
-            var noteId = _current.NoteId;
-            var finishedTitle = TitleBox.Text;
-            var finishedMarkdown = MarkdownBox.Text;
-            var finishedNote = await _store.FinalizeAsync(noteId, finishedTitle, finishedMarkdown);
-            _current = finishedNote;
-            UpdateMaterials();
-            UpdateWindowChrome();
-            ShowDocument();
-            RecordingStatusText.Text = "本次记录已结束；可继续补录，或稍后手动上传。";
-            ClearNotice();
-
-            var finishedVersionId = finishedNote.CurrentVersionId;
-            await RefreshNotesAsync(SearchBox.Text);
-            try
-            {
-                await RefreshVersionsAsync(noteId, finishedVersionId);
-            }
-            catch (Exception refreshException)
-            {
-                ShowFailure(
-                    "已结束并保存本机固定版本，但版本列表暂未刷新",
-                    refreshException,
-                    () => RefreshFinishedVersionsAsync(noteId, finishedVersionId));
-            }
-
-            SaveStateText.Text = NativeNotePresentation.SessionFinished(finishedVersionId);
-            var hasNewerEdits = !string.Equals(TitleBox.Text, finishedNote.Title, StringComparison.Ordinal)
-                || !string.Equals(MarkdownBox.Text, finishedNote.Markdown, StringComparison.Ordinal);
-            if (hasNewerEdits)
-            {
-                SaveStateText.Text += " 当前窗口仍有新的未保存修改。";
-                _saveTimer.Start();
-            }
-        }
-        catch (Exception ex)
-        {
-            RecordingStatusText.Text = "结束未完成；正文仍保留在窗口中";
-            ShowFailure(
-                "结束记录失败；正文仍保留在窗口中，可以重试",
-                ex,
-                FinishCurrentNoteAsync);
+                SaveStateText.Text = NativeNotePresentation.SessionFinished(finishedVersionId);
+                var hasNewerEdits = !string.Equals(TitleBox.Text, finishedNote.Title, StringComparison.Ordinal)
+                    || !string.Equals(MarkdownBox.Text, finishedNote.Markdown, StringComparison.Ordinal);
+                if (hasNewerEdits)
+                {
+                    SaveStateText.Text += " 当前窗口仍有新的未保存修改。";
+                    _saveTimer.Start();
+                }
+            });
         }
         finally
         {
@@ -852,9 +984,21 @@ public partial class NativeNotesWindow : Window
                 FinishButton.IsEnabled = false;
             }
 
-            NotesList.IsEnabled = true;
-            SearchBox.IsEnabled = true;
-            _saveGate.Release();
+            ApplyEditorInteractionState();
+        }
+
+        if (!result.Started)
+        {
+            return;
+        }
+
+        if (!result.Succeeded)
+        {
+            RecordingStatusText.Text = "结束未完成；正文仍保留在窗口中";
+            ShowFailure(
+                "结束记录失败；正文仍保留在窗口中，可以重试",
+                result.Failure ?? new InvalidOperationException("结束流程未能完成。"),
+                FinishCurrentNoteAsync);
         }
     }
 
@@ -880,7 +1024,7 @@ public partial class NativeNotesWindow : Window
 
     private async void OnExport(object sender, RoutedEventArgs e)
     {
-        if (_current is null)
+        if (_current is null || _finishing)
         {
             return;
         }
@@ -937,13 +1081,25 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        var lease = _operations.TryBeginOperation();
+        if (lease is null)
+        {
+            ShowNotice("正在结束并保存当前笔记，录音操作未开始。");
+            return;
+        }
+
+        await lease.EnterSerializedAsync();
         try
         {
             if (_recording.IsRecording)
             {
+                var baselineIds = _recordingBaselineMaterialIds.Count > 0
+                    ? _recordingBaselineMaterialIds
+                    : _current.Materials.Select(material => material.MaterialId).ToHashSet();
                 var recording = await _recording.StopAsync();
                 if (recording is null)
                 {
+                    _recordingBaselineMaterialIds = [];
                     SaveStateText.Text = "本段录音没有产生可用音频；正文仍保留在窗口中";
                     RecordingStatusText.Text = "本段未生成音频，可以继续记录或结束整篇。";
                     return;
@@ -955,17 +1111,27 @@ public partial class NativeNotesWindow : Window
                 }
                 else
                 {
+                    _cloudUi.BeginNoteSelection();
+                    _cloudUi.BeginArtifactSelection();
                     await RefreshNotesAsync();
                     var recordingNote = _notes.FirstOrDefault(summary => summary.NoteId == recording.NoteId);
-                    if (recordingNote is not null)
+                    if (recordingNote is null && !string.IsNullOrWhiteSpace(SearchBox.Text))
                     {
-                        _current = await _store.LoadAsync(recording.NoteId);
                         _loading = true;
-                        NotesList.SelectedItem = recordingNote;
-                        TitleBox.Text = _current.Title;
-                        MarkdownBox.Text = _current.Markdown;
+                        SearchBox.Text = string.Empty;
                         _loading = false;
+                        await RefreshNotesAsync();
+                        recordingNote = _notes.FirstOrDefault(
+                            summary => summary.NoteId == recording.NoteId);
                     }
+
+                    _current = recording.Note;
+                    _loading = true;
+                    NotesList.SelectedItem = recordingNote;
+                    TitleBox.Text = _current.Title;
+                    MarkdownBox.Text = _current.Markdown;
+                    _loading = false;
+                    UpdateWindowChrome();
 
                     MessageBox.Show(
                         this,
@@ -975,6 +1141,26 @@ public partial class NativeNotesWindow : Window
                         MessageBoxImage.Information);
                 }
 
+                var marked = NativeNoteDocumentLayout.ReferencedMaterialIds(MarkdownBox.Text);
+                var newRecordingIds = _current.Materials
+                    .Where(material => !baselineIds.Contains(material.MaterialId))
+                    .Where(material => material.Kind is LocalNoteMaterialKind.Recording
+                        or LocalNoteMaterialKind.RecordingSegment)
+                    .Where(material => !marked.Contains(material.MaterialId))
+                    .GroupBy(material => material.RecordingId ?? material.MaterialId)
+                    .Select(group => group
+                        .OrderBy(material => material.RecordingSegment ?? 1)
+                        .ThenBy(material => material.RecordingChunkIndex ?? 1)
+                        .First()
+                        .MaterialId)
+                    .ToArray();
+                SetMarkdownWithInsertedMarkers(newRecordingIds);
+                if (!await SavePendingCoreAsync())
+                {
+                    return;
+                }
+
+                _recordingBaselineMaterialIds = [];
                 UpdateMaterials();
                 RecordingStatusText.Text =
                     $"本段录音 {recording.Wave.Duration:mm\\:ss} 已保存；可继续写或补录。";
@@ -984,11 +1170,14 @@ public partial class NativeNotesWindow : Window
                 return;
             }
 
-            if (!await SavePendingAsync())
+            if (!await SavePendingCoreAsync())
             {
                 return;
             }
 
+            _recordingBaselineMaterialIds = _current.Materials
+                .Select(material => material.MaterialId)
+                .ToHashSet();
             await _recording.StartAsync(_current.NoteId);
             RecordButton.Content = "■ 停止本段";
         }
@@ -996,6 +1185,11 @@ public partial class NativeNotesWindow : Window
         {
             RecordingStatusText.Text = "录音操作未完成；正文仍保留";
             ShowFailure("主动录音失败", ex);
+        }
+        finally
+        {
+            lease.ExitSerialized();
+            lease.Dispose();
         }
     }
 
@@ -1007,7 +1201,7 @@ public partial class NativeNotesWindow : Window
             {
                 RecordingStatusText.Text =
                     $"本段录音中 {state.Elapsed:mm\\:ss} · 实际输入峰值 {state.PeakLevel:P0}";
-                RecordButton.IsEnabled = !_finishing;
+                ApplyEditorInteractionState();
                 UpdateWindowChrome();
                 return;
             }
@@ -1022,25 +1216,31 @@ public partial class NativeNotesWindow : Window
                 RecordingStatusText.Text = state.Error;
             }
 
-            if (RecordButton is not null)
-            {
-                RecordButton.IsEnabled = !_finishing
-                    && (_current is null || !_current.IsServerSourceReadOnly);
-            }
-
+            ApplyEditorInteractionState();
             UpdateWindowChrome();
         });
     }
 
     private async Task ImportFilesAsync(IReadOnlyList<string> paths, LocalNoteMaterialKind kind)
     {
+        var lease = _operations.TryBeginOperation();
+        if (lease is null)
+        {
+            ShowNotice("正在结束并保存当前笔记，材料导入未开始。");
+            return;
+        }
+
+        await lease.EnterSerializedAsync();
         try
         {
-            if (!await SavePendingAsync())
+            if (!await SavePendingCoreAsync() || _current is null)
             {
                 return;
             }
 
+            var beforeIds = _current.Materials
+                .Select(material => material.MaterialId)
+                .ToHashSet();
             var inputs = paths.Select(path => new LocalNoteMaterialInput(
                 File.OpenRead(path),
                 Path.GetFileName(path),
@@ -1058,6 +1258,21 @@ public partial class NativeNotesWindow : Window
                 }
             }
 
+            var newMaterialIds = _current.Materials
+                .Where(material => !beforeIds.Contains(material.MaterialId))
+                .Where(material => kind == LocalNoteMaterialKind.Photo
+                    ? material.Kind == LocalNoteMaterialKind.Photo
+                    : material.Kind is LocalNoteMaterialKind.Recording
+                        or LocalNoteMaterialKind.RecordingSegment)
+                .Select(material => material.MaterialId)
+                .Distinct()
+                .ToArray();
+            SetMarkdownWithInsertedMarkers(newMaterialIds);
+            if (!await SavePendingCoreAsync())
+            {
+                return;
+            }
+
             UpdateMaterials();
             await RefreshNotesAsync(SearchBox.Text);
             await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
@@ -1066,6 +1281,11 @@ public partial class NativeNotesWindow : Window
         catch (Exception ex)
         {
             ShowFailure("材料未能完整保存", ex);
+        }
+        finally
+        {
+            lease.ExitSerialized();
+            lease.Dispose();
         }
     }
 
@@ -1077,57 +1297,100 @@ public partial class NativeNotesWindow : Window
             return true;
         }
 
-        await _saveGate.WaitAsync();
+        var lease = _operations.TryBeginOperation();
+        if (lease is null)
+        {
+            return false;
+        }
+
+        await lease.EnterSerializedAsync();
         try
         {
-            if (_current is null || _loading)
-            {
-                return true;
-            }
-
-            var title = TitleBox.Text;
-            var markdown = MarkdownBox.Text;
-            if (string.Equals(_current.Title, title, StringComparison.Ordinal)
-                && string.Equals(_current.Markdown, markdown, StringComparison.Ordinal))
-            {
-                return true;
-            }
-
-            try
-            {
-                _current = await _store.SaveAsync(_current.NoteId, title, markdown);
-                UpdateMaterials();
-                UpdateWindowChrome();
-                SaveStateText.Text = "已保存为新的本机固定版本";
-                ClearNotice();
-                await RefreshNotesAsync(SearchBox.Text);
-                await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                SaveStateText.Text = "保存失败，当前正文仍保留在窗口中";
-                ShowFailure("本机自动保存失败；正文仍在窗口中", ex, SavePendingAsync);
-                return false;
-            }
+            return await SavePendingCoreAsync();
         }
         finally
         {
-            _saveGate.Release();
+            lease.ExitSerialized();
+            lease.Dispose();
         }
     }
 
-    private async Task<bool> RefreshNotesAsync(string? query = null, Func<bool>? applyGuard = null)
+    private async Task<bool> SavePendingCoreAsync()
     {
-        var wasShowingLoadError = _notesLoadError is not null;
-        _notesLoading = true;
-        _notesLoadError = null;
-        ApplyNotesPresentation();
-        var selectedId = _current?.NoteId;
+        if (_current is null || _loading)
+        {
+            return true;
+        }
+
+        var title = TitleBox.Text;
+        var markdown = MarkdownBox.Text;
+        var orderedMaterials = NativeNoteDocumentLayout.OrderMaterials(
+            markdown,
+            _current.Materials);
+        if (string.Equals(_current.Title, title, StringComparison.Ordinal)
+            && string.Equals(_current.Markdown, markdown, StringComparison.Ordinal)
+            && _current.Materials.Select(material => material.MaterialId)
+                .SequenceEqual(orderedMaterials.Select(material => material.MaterialId)))
+        {
+            return true;
+        }
+
         try
         {
-            var rows = await _store.ListAsync(query);
+            _current = await _store.SaveAsync(_current.NoteId, title, markdown);
+            UpdateMaterials();
+            UpdateWindowChrome();
+            SaveStateText.Text = "已保存为新的本机固定版本";
+            ClearNotice();
+            await RefreshNotesAsync(SearchBox.Text);
+            await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SaveStateText.Text = "保存失败，当前正文仍保留在窗口中";
+            ShowFailure("本机自动保存失败；正文仍在窗口中", ex, SavePendingAsync);
+            return false;
+        }
+    }
+
+    private async Task<bool> RefreshNotesAsync(
+        string? query = null,
+        Func<bool>? applyGuard = null,
+        long? requestGeneration = null)
+    {
+        var wasShowingLoadError = _library.Error is not null;
+        var selectedId = _current?.NoteId
+            ?? (NotesList.SelectedItem as LocalNoteSummary)?.NoteId;
+        var querySnapshot = query ?? SearchBox.Text;
+        var generation = requestGeneration ?? _library.BeginRefresh(querySnapshot);
+        if (!_library.IsCurrent(generation))
+        {
+            return false;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        var previousCancellation = Interlocked.Exchange(
+            ref _notesRefreshCancellation,
+            cancellation);
+        previousCancellation?.Cancel();
+        ApplyNotesPresentation();
+        try
+        {
+            var rows = await _store.ListAsync(querySnapshot, cancellation.Token);
+            if (_closed)
+            {
+                _library.TryAbandon(generation);
+                return false;
+            }
+
             if (applyGuard is not null && !applyGuard())
+            {
+                _library.TryAbandon(generation);
+                return false;
+            }
+
+            if (!_library.TryApply(generation, rows))
             {
                 return false;
             }
@@ -1150,37 +1413,60 @@ public partial class NativeNotesWindow : Window
 
             return true;
         }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            _library.TryAbandon(generation);
+            return false;
+        }
         catch (Exception ex)
         {
-            _notesLoadError = ex.Message;
+            if (!_library.TryFail(generation, ex.Message))
+            {
+                return false;
+            }
+
             ShowFailure(
                 "读取本机笔记库失败；原有笔记没有被改动",
                 ex,
-                async () => await RefreshNotesAsync(query));
+                async () => await RefreshNotesAsync(querySnapshot));
             return false;
         }
         finally
         {
-            _notesLoading = false;
-            ApplyNotesPresentation();
+            Interlocked.CompareExchange(
+                ref _notesRefreshCancellation,
+                null,
+                cancellation);
+            cancellation.Dispose();
+
+            if (!_closed && _library.IsCurrent(generation))
+            {
+                ApplyNotesPresentation();
+            }
         }
     }
 
     private void ApplyNotesPresentation()
     {
-        var presentation = NativeNotePresentation.Library(
-            _notesLoading,
-            _notesLoadError is not null,
-            _notes.Count,
-            SearchBox.Text);
+        var presentation = _library.Presentation;
         var isError = presentation.State == NativeNoteLibraryState.Error;
         var dangerBrush = (System.Windows.Media.Brush)FindResource("PimDangerBrush");
         var primaryBrush = (System.Windows.Media.Brush)FindResource("PimPrimaryBrush");
         var textBrush = (System.Windows.Media.Brush)FindResource("PimTextBrush");
         var borderBrush = (System.Windows.Media.Brush)FindResource("PimBorderBrush");
-        NotesStatePanel.Visibility = presentation.State == NativeNoteLibraryState.Ready
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        NotesList.Visibility = presentation.ShowList ? Visibility.Visible : Visibility.Collapsed;
+        NotesStatePanel.Visibility = presentation.ShowOverlay
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        NotesRefreshBar.Visibility = presentation.ShowInlineProgress
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        NotesInlineErrorPanel.Visibility = presentation.ShowInlineError
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        NotesInlineRetryButton.Visibility = presentation.ShowRetryAction
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         NotesStatePanel.BorderBrush = isError ? dangerBrush : borderBrush;
         NotesStateTitleText.Foreground = isError ? dangerBrush : textBrush;
         NotesStateIconText.Foreground = isError ? dangerBrush : primaryBrush;
@@ -1192,9 +1478,8 @@ public partial class NativeNotesWindow : Window
         NotesStateRetryButton.Visibility =
             presentation.ShowRetryAction ? Visibility.Visible : Visibility.Collapsed;
         NotesStateTitleText.Text = presentation.Title;
-        NotesStateDetailText.Text = string.IsNullOrWhiteSpace(_notesLoadError)
-            ? presentation.Detail
-            : $"{presentation.Detail}\n{_notesLoadError}";
+        NotesStateDetailText.Text = presentation.Detail;
+        NotesInlineErrorText.Text = _library.Error ?? presentation.Detail;
         NotesStateIconText.Text = presentation.State switch
         {
             NativeNoteLibraryState.Loading => "…",
@@ -1210,8 +1495,8 @@ public partial class NativeNotesWindow : Window
         {
             MaterialsText.Text = "固定材料版本 · 尚无材料";
             MaterialsList.ItemsSource = null;
-            FinishButton.IsEnabled = false;
-            CloudPanelToggleButton.IsEnabled = false;
+            UpdateDocumentFlow();
+            ApplyEditorInteractionState();
             return;
         }
 
@@ -1224,21 +1509,344 @@ public partial class NativeNotesWindow : Window
         var photos = _current.Materials.Count(item => item.Kind == LocalNoteMaterialKind.Photo);
         var handwriting = _current.Materials.Count(item => item.Kind == LocalNoteMaterialKind.Handwriting);
         MaterialsText.Text = $"固定版本 {_current.CurrentVersionId.ToString("N")[..8]} · 照片 {photos} · 手写 {handwriting} · 音频 {recordings}";
-        TitleBox.IsReadOnly = _current.IsServerSourceReadOnly;
-        MarkdownBox.IsReadOnly = _current.IsServerSourceReadOnly;
-        AddPhotoButton.IsEnabled = !_current.IsServerSourceReadOnly;
-        AddHandwritingButton.IsEnabled = !_current.IsServerSourceReadOnly;
-        AddRecordingButton.IsEnabled = !_current.IsServerSourceReadOnly;
-        RecordButton.IsEnabled = !_finishing
-            && (_recording.IsRecording || !_current.IsServerSourceReadOnly);
-        FinishButton.IsEnabled = !_finishing;
-        CloudPanelToggleButton.IsEnabled = !_finishing;
         if (_current.IsServerSourceReadOnly)
         {
             MaterialsText.Text += " · 云端混排原件只读，导出保留完整块序";
         }
 
+        UpdateDocumentFlow();
+        ApplyEditorInteractionState();
         UpdateWindowChrome();
+    }
+
+    private void ApplyEditorInteractionState()
+    {
+        var hasCurrent = _current is not null;
+        var readOnly = hasCurrent && _current!.IsServerSourceReadOnly;
+        var canEdit = hasCurrent && !_finishing;
+        TitleBox.IsEnabled = canEdit;
+        MarkdownBox.IsEnabled = canEdit;
+        TitleBox.IsReadOnly = readOnly;
+        MarkdownBox.IsReadOnly = readOnly;
+        AddPhotoButton.IsEnabled = canEdit && !readOnly;
+        AddHandwritingButton.IsEnabled = canEdit && !readOnly;
+        AddRecordingButton.IsEnabled = canEdit && !readOnly;
+        ImportPackageButton.IsEnabled = !_finishing;
+        ExportButton.IsEnabled = canEdit;
+        RecordButton.IsEnabled = !_finishing
+            && (_recording.IsRecording || canEdit && !readOnly);
+        FinishButton.IsEnabled = canEdit;
+        CloudPanelToggleButton.IsEnabled = canEdit;
+        NotesList.IsEnabled = !_finishing;
+        SearchBox.IsEnabled = !_finishing;
+        NewNoteButton.IsEnabled = !_finishing;
+        LibraryToggleButton.IsEnabled = !_finishing;
+        DocumentFlowPanel.IsEnabled = !_finishing;
+        MaterialsList.IsEnabled = !_finishing;
+        CloudPanel.IsEnabled = !_finishing;
+    }
+
+    private void UpdateDocumentFlow()
+    {
+        DocumentFlowPanel.Children.Clear();
+        if (_current is null)
+        {
+            return;
+        }
+
+        var layout = _current.ServerSource is { } serverSource
+            ? NativeNoteDocumentLayout.ParseServerSource(serverSource, _current.Materials)
+            : NativeNoteDocumentLayout.Parse(MarkdownBox.Text, _current.Materials);
+        foreach (var segment in layout.Segments)
+        {
+            switch (segment.Kind)
+            {
+                case NativeNoteDocumentSegmentKind.Markdown:
+                    AddDocumentText(segment.Text);
+                    break;
+                case NativeNoteDocumentSegmentKind.Material when segment.Material is not null:
+                    AddMaterialCard(segment.Material, isUnplaced: false);
+                    break;
+                case NativeNoteDocumentSegmentKind.UnresolvedMaterial:
+                    AddUnresolvedMarker(segment);
+                    break;
+            }
+        }
+
+        if (layout.UnplacedMaterials.Count > 0)
+        {
+            DocumentFlowPanel.Children.Add(new TextBlock
+            {
+                Text = "未定位材料 · 旧笔记或未插入正文的材料按保存顺序显示",
+                Margin = new Thickness(0, 18, 0, 6),
+                FontSize = 12,
+                Foreground = (System.Windows.Media.Brush)FindResource("PimMutedTextBrush"),
+                TextWrapping = TextWrapping.Wrap,
+            });
+            foreach (var material in layout.UnplacedMaterials)
+            {
+                AddMaterialCard(material, isUnplaced: true);
+            }
+        }
+
+        if (DocumentFlowPanel.Children.Count == 0)
+        {
+            DocumentFlowPanel.Children.Add(new TextBlock
+            {
+                Text = "正文为空。输入文字，或使用上方按钮在当前光标处插入照片、手写和录音。",
+                Margin = new Thickness(0, 6, 0, 8),
+                FontSize = 13,
+                Foreground = (System.Windows.Media.Brush)FindResource("PimMutedTextBrush"),
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+    }
+
+    private void AddDocumentText(string text)
+    {
+        var normalized = text.Trim('\r', '\n');
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return;
+        }
+
+        DocumentFlowPanel.Children.Add(new TextBlock
+        {
+            Text = normalized,
+            Margin = new Thickness(0, 4, 0, 10),
+            FontFamily = new System.Windows.Media.FontFamily("Microsoft YaHei UI, Segoe UI"),
+            FontSize = 15,
+            LineHeight = 24,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (System.Windows.Media.Brush)FindResource("PimTextBrush"),
+        });
+    }
+
+    private void AddUnresolvedMarker(NativeNoteDocumentSegment segment)
+    {
+        DocumentFlowPanel.Children.Add(new Border
+        {
+            Margin = new Thickness(0, 6, 0, 12),
+            Padding = new Thickness(12, 9, 12, 9),
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+            BorderBrush = (System.Windows.Media.Brush)FindResource("PimDangerBrush"),
+            Background = (System.Windows.Media.Brush)FindResource("PimMutedSurfaceBrush"),
+            Child = new TextBlock
+            {
+                Text = segment.MaterialId is { } id
+                    ? $"无法定位材料标记 {id.ToString("N")[..8]}；材料可能已被旧版本移除。"
+                    : "无法解析材料标记；原文仍保留在 Markdown 中。",
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = (System.Windows.Media.Brush)FindResource("PimDangerBrush"),
+            },
+        });
+    }
+
+    private void AddMaterialCard(LocalNoteMaterial material, bool isUnplaced)
+    {
+        var card = new Border
+        {
+            Margin = new Thickness(0, 6, 0, 12),
+            Padding = new Thickness(12, 10, 12, 10),
+            CornerRadius = new CornerRadius(10),
+            BorderThickness = new Thickness(1),
+            BorderBrush = (System.Windows.Media.Brush)FindResource("PimBorderBrush"),
+            Background = (System.Windows.Media.Brush)FindResource("PimMutedSurfaceBrush"),
+        };
+        var content = new DockPanel { LastChildFill = true };
+        var icon = new TextBlock
+        {
+            Text = material.Kind switch
+            {
+                LocalNoteMaterialKind.Photo => "▧",
+                LocalNoteMaterialKind.Handwriting or LocalNoteMaterialKind.HandwritingSource => "✎",
+                LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment => "◉",
+                _ => "◇",
+            },
+            Width = 34,
+            FontSize = 23,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = (System.Windows.Media.Brush)FindResource("PimPrimaryBrush"),
+        };
+        DockPanel.SetDock(icon, Dock.Left);
+        content.Children.Add(icon);
+
+        var actions = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(8, 6, 0, 0),
+        };
+        actions.Children.Add(CreateMaterialButton("打开", material, OnOpenInlineMaterial));
+        if (material.Kind == LocalNoteMaterialKind.Handwriting
+            && !_current!.IsServerSourceReadOnly)
+        {
+            actions.Children.Add(CreateMaterialButton("编辑笔迹", material, OnEditInlineMaterial));
+        }
+
+        if (isUnplaced && !_current!.IsServerSourceReadOnly)
+        {
+            actions.Children.Add(CreateMaterialButton("插入正文", material, OnInsertInlineMaterial));
+        }
+
+        DockPanel.SetDock(actions, Dock.Bottom);
+        content.Children.Add(actions);
+
+        var details = new StackPanel();
+        details.Children.Add(new TextBlock
+        {
+            Text = $"{MaterialKindLabel(material.Kind)} · {material.DisplayName}",
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (System.Windows.Media.Brush)FindResource("PimTextBrush"),
+        });
+        details.Children.Add(new TextBlock
+        {
+            Text = MaterialDetail(material),
+            Margin = new Thickness(0, 3, 0, 0),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (System.Windows.Media.Brush)FindResource("PimMutedTextBrush"),
+        });
+        content.Children.Add(details);
+        card.Child = content;
+        DocumentFlowPanel.Children.Add(card);
+    }
+
+    private Button CreateMaterialButton(
+        string label,
+        LocalNoteMaterial material,
+        RoutedEventHandler handler)
+    {
+        var button = new Button
+        {
+            Content = label,
+            Tag = material,
+            Style = (Style)FindResource("PimSecondaryButton"),
+            Padding = new Thickness(9, 4, 9, 4),
+            Margin = new Thickness(0, 0, 6, 0),
+        };
+        button.Click += handler;
+        return button;
+    }
+
+    private static string MaterialKindLabel(LocalNoteMaterialKind kind) => kind switch
+    {
+        LocalNoteMaterialKind.Photo => "照片",
+        LocalNoteMaterialKind.Handwriting => "手写",
+        LocalNoteMaterialKind.HandwritingSource => "手写源",
+        LocalNoteMaterialKind.Recording => "录音",
+        LocalNoteMaterialKind.RecordingSegment => "录音分片",
+        _ => "材料",
+    };
+
+    private static string MaterialDetail(LocalNoteMaterial material)
+    {
+        var parts = new List<string>();
+        if (material.Width is { } width && material.Height is { } height)
+        {
+            parts.Add($"{width} × {height}");
+        }
+
+        if (material.DurationMilliseconds is { } duration)
+        {
+            parts.Add(TimeSpan.FromMilliseconds(duration).ToString(@"mm\:ss"));
+        }
+
+        parts.Add($"{material.Length:N0} 字节");
+        return string.Join(" · ", parts);
+    }
+
+    private async void OnOpenInlineMaterial(object sender, RoutedEventArgs e)
+    {
+        if (_current is null
+            || sender is not FrameworkElement { Tag: LocalNoteMaterial material })
+        {
+            return;
+        }
+
+        try
+        {
+            var resolved = await _store.ResolveMaterialFileAsync(_current.NoteId, material.MaterialId);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(resolved.AbsolutePath)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            ShowFailure("无法打开材料", ex);
+        }
+    }
+
+    private void OnEditInlineMaterial(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: LocalNoteMaterial material })
+        {
+            return;
+        }
+
+        MaterialsList.SelectedItem = material;
+        OnEditHandwriting(sender, e);
+    }
+
+    private async void OnInsertInlineMaterial(object sender, RoutedEventArgs e)
+    {
+        if (_current is null
+            || _finishing
+            || sender is not FrameworkElement { Tag: LocalNoteMaterial material })
+        {
+            return;
+        }
+
+        var lease = _operations.TryBeginOperation();
+        if (lease is null)
+        {
+            ShowNotice("正在结束并保存当前笔记，材料未插入正文。");
+            return;
+        }
+
+        await lease.EnterSerializedAsync();
+        try
+        {
+            SetMarkdownWithInsertedMarkers([material.MaterialId]);
+            await SavePendingCoreAsync();
+        }
+        finally
+        {
+            lease.ExitSerialized();
+            lease.Dispose();
+        }
+    }
+
+    private void SetMarkdownWithInsertedMarkers(IEnumerable<Guid> materialIds)
+    {
+        var insertion = NativeNoteDocumentLayout.InsertMarkers(
+            MarkdownBox.Text,
+            MarkdownBox.CaretIndex,
+            materialIds);
+        if (string.Equals(insertion.Markdown, MarkdownBox.Text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _loading = true;
+        try
+        {
+            MarkdownBox.Text = insertion.Markdown;
+            MarkdownBox.CaretIndex = Math.Clamp(
+                insertion.CaretIndex,
+                0,
+                MarkdownBox.Text.Length);
+        }
+        finally
+        {
+            _loading = false;
+        }
+
+        UpdateDocumentFlow();
+        SaveStateText.Text = "材料已插入正文，正在等待自动保存…";
     }
 
     private void ShowEditorLoading(string title, string detail)
@@ -1252,8 +1860,7 @@ public partial class NativeNotesWindow : Window
         EditorStateDetailText.Text = detail;
         EditorStateCreateButton.Visibility = Visibility.Collapsed;
         EditorStateRetryButton.Visibility = Visibility.Collapsed;
-        FinishButton.IsEnabled = false;
-        CloudPanelToggleButton.IsEnabled = false;
+        ApplyEditorInteractionState();
         _editorStateRetry = null;
     }
 
@@ -1268,8 +1875,7 @@ public partial class NativeNotesWindow : Window
         EditorStateDetailText.Text = "新建一篇笔记，正文、照片、手写和录音都会先保存在本机。";
         EditorStateCreateButton.Visibility = Visibility.Visible;
         EditorStateRetryButton.Visibility = Visibility.Collapsed;
-        FinishButton.IsEnabled = false;
-        CloudPanelToggleButton.IsEnabled = false;
+        ApplyEditorInteractionState();
         _editorStateRetry = null;
     }
 
@@ -1284,8 +1890,7 @@ public partial class NativeNotesWindow : Window
         EditorStateDetailText.Text = detail;
         EditorStateCreateButton.Visibility = Visibility.Collapsed;
         EditorStateRetryButton.Visibility = Visibility.Visible;
-        FinishButton.IsEnabled = false;
-        CloudPanelToggleButton.IsEnabled = false;
+        ApplyEditorInteractionState();
         _editorStateRetry = retry;
     }
 
@@ -1293,8 +1898,8 @@ public partial class NativeNotesWindow : Window
     {
         DocumentScroll.Visibility = Visibility.Visible;
         EditorStatePanel.Visibility = Visibility.Collapsed;
-        FinishButton.IsEnabled = _current is not null && !_finishing;
-        CloudPanelToggleButton.IsEnabled = _current is not null && !_finishing;
+        ApplyEditorInteractionState();
+        UpdateWindowChrome();
         _editorStateRetry = null;
     }
 
@@ -1372,16 +1977,82 @@ public partial class NativeNotesWindow : Window
         }
     }
 
-    private void OnToggleCloudPanel(object sender, RoutedEventArgs e)
+    private void OnWindowSizeChanged(object sender, SizeChangedEventArgs e)
+        => ApplyResponsiveLayout();
+
+    private void OnToggleLibrary(object sender, RoutedEventArgs e)
     {
-        if (_current is null)
+        if (_finishing)
         {
             return;
         }
 
-        CloudPanel.Visibility = CloudPanel.Visibility == Visibility.Visible
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        _layout.ToggleLibrary();
+        ApplyResponsiveLayout();
+    }
+
+    private void OnToggleCloudPanel(object sender, RoutedEventArgs e)
+    {
+        if (_current is null || _finishing)
+        {
+            return;
+        }
+
+        _layout.ToggleCloud(noteAvailable: true);
+        ApplyResponsiveLayout();
+    }
+
+    private void CollapseOverlayLibrary()
+    {
+        if (!_layout.Current.LibraryOverlay)
+        {
+            return;
+        }
+
+        _layout.SetLibraryExpanded(false);
+        ApplyResponsiveLayout();
+    }
+
+    private void ApplyResponsiveLayout()
+    {
+        var width = RootLayoutGrid.ActualWidth > 0
+            ? RootLayoutGrid.ActualWidth
+            : Math.Max(0, Width - 36);
+        _layout.Resize(width);
+        var layout = _layout.Current;
+        var libraryDocked = layout.LibraryVisible && !layout.LibraryOverlay;
+        LibraryColumn.Width = new GridLength(
+            libraryDocked ? NativeNoteLayoutState.LibraryWidth : 0);
+        LibraryGapColumn.Width = new GridLength(
+            libraryDocked ? NativeNoteLayoutState.LibraryGap : 0);
+        MainColumn.Width = new GridLength(1, GridUnitType.Star);
+
+        NoteLibraryPanel.Visibility = layout.LibraryVisible
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        Grid.SetColumn(NoteLibraryPanel, 0);
+        Grid.SetColumnSpan(NoteLibraryPanel, layout.LibraryOverlay ? 3 : 1);
+        Panel.SetZIndex(NoteLibraryPanel, layout.LibraryOverlay ? 30 : 0);
+
+        CloudColumn.Width = new GridLength(
+            layout.CloudVisible && !layout.CloudOverlay
+                ? NativeNoteLayoutState.CloudWidth + NativeNoteLayoutState.CloudGap
+                : 0);
+        CloudPanel.Visibility = layout.CloudVisible
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        Grid.SetColumn(CloudPanel, layout.CloudOverlay ? 0 : 1);
+        Grid.SetColumnSpan(CloudPanel, layout.CloudOverlay ? 2 : 1);
+        CloudPanel.HorizontalAlignment = layout.CloudOverlay
+            ? HorizontalAlignment.Right
+            : HorizontalAlignment.Stretch;
+        CloudPanel.Margin = layout.CloudOverlay
+            ? new Thickness(0)
+            : new Thickness(NativeNoteLayoutState.CloudGap, 0, 0, 0);
+        Panel.SetZIndex(CloudPanel, layout.CloudOverlay ? 30 : 0);
+
+        LibraryToggleButton.Content = layout.LibraryVisible ? "隐藏列表" : "笔记列表";
+        CloudPanelToggleButton.Content = layout.CloudVisible ? "隐藏版本与云端" : "版本与云端";
     }
 
     private void ShowEmptyEditor()
@@ -1404,7 +2075,8 @@ public partial class NativeNotesWindow : Window
         RecordButton.IsEnabled = _recording.IsRecording;
         FinishButton.IsEnabled = false;
         CloudPanelToggleButton.IsEnabled = false;
-        CloudPanel.Visibility = Visibility.Collapsed;
+        _layout.CollapseCloud();
+        ApplyResponsiveLayout();
         CloudPanelToggleButton.Content = "版本与云端";
         _loading = false;
         MaterialsText.Text = "选择或新建笔记以开始";
@@ -1423,24 +2095,20 @@ public partial class NativeNotesWindow : Window
         SaveStateText.Text = "";
         ClearNotice();
         ShowEditorEmpty();
+        ApplyEditorInteractionState();
         UpdateWindowChrome();
     }
 
     private void UpdateWindowChrome()
     {
+        _windowState.SetRecording(_recording.IsRecording);
         if (_current is null)
         {
-            Title = _notes.Count == 0 ? "笔记库" : "选择一篇笔记";
-            EditorContextText.Text = _notes.Count == 0
-                ? "从一页空白开始"
-                : "选择一篇笔记继续";
+            _windowState.ShowLibrary(_notes.Count > 0);
             return;
         }
 
-        Title = NativeNotePresentation.WindowTitle(TitleBox.Text);
-        EditorContextText.Text = _recording.IsRecording
-            ? "正在记录 · 本机草稿"
-            : "本机草稿 · 自动保存";
+        _windowState.OpenNote(_current.NoteId, TitleBox.Text);
     }
 
     private async void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -1501,6 +2169,8 @@ public partial class NativeNotesWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _closed = true;
+        _saveTimer.Stop();
+        _notesRefreshCancellation?.Cancel();
         _recording.StateChanged -= OnRecordingStateChanged;
     }
 
