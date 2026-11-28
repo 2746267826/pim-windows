@@ -330,14 +330,19 @@ public sealed class ServerNoteMaterialBundleBuilder
                 }
 
                 currentSegment = segment;
-                chunks.Add(new JsonObject
+                var chunk = new JsonObject
                 {
                     ["segment"] = segment,
                     ["index"] = index,
                     ["samples"] = samples,
-                    ["format"] = format,
-                    ["mimeType"] = format == "wav" ? "audio/wav" : "audio/ogg",
-                });
+                };
+                if (format == "opus")
+                {
+                    chunk["format"] = format;
+                    chunk["mimeType"] = "audio/ogg";
+                }
+
+                chunks.Add(chunk);
                 recordingFiles.Add((material, source, samples, segment, index, format));
             }
 
