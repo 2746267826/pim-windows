@@ -174,7 +174,8 @@ public sealed class LocalNoteStore
                 throw new LocalNoteStoreException("该服务器混合材料版本在当前编辑器中只读；修改纯文本会丢失原始块顺序和身份。");
             }
 
-            var normalizedMaterials = NativeNoteDocumentLayout.OrderMaterials(
+            var normalizedMaterials = OrderMaterialsForNote(
+                note,
                 normalizedMarkdown,
                 note.Materials);
             if (string.Equals(note.Title, normalizedTitle, StringComparison.Ordinal)
@@ -218,7 +219,8 @@ public sealed class LocalNoteStore
                 throw new LocalNoteStoreException("该服务器混合材料版本在当前编辑器中只读；修改纯文本会丢失原始块顺序和身份。");
             }
 
-            var normalizedMaterials = NativeNoteDocumentLayout.OrderMaterials(
+            var normalizedMaterials = OrderMaterialsForNote(
+                note,
                 normalizedMarkdown,
                 note.Materials);
             return await CreateCheckpointLockedAsync(
@@ -359,13 +361,16 @@ public sealed class LocalNoteStore
             {
                 // Restoring a read-only server-backed note copies the saved
                 // source rather than creating a new editable projection.
+                var orderedMaterials = NativeNoteDocumentLayout.OrderServerSourceMaterials(
+                    source.ServerSource,
+                    restoredMaterials);
                 var restored = note with
                 {
                     UpdatedAt = DateTimeOffset.UtcNow,
                     CurrentVersionId = source.VersionId,
                     Title = source.Title,
                     Markdown = source.Markdown,
-                    Materials = restoredMaterials.ToList(),
+                    Materials = orderedMaterials.ToList(),
                     ServerSource = source.ServerSource,
                 };
                 await WriteNoteLockedAsync(restored, cancellationToken);
@@ -886,6 +891,11 @@ public sealed class LocalNoteStore
             var noteId = Guid.NewGuid();
             importingNoteId = noteId;
             var versionId = Guid.NewGuid();
+            var orderedMaterials = version.ServerSource is { } importSource
+                ? NativeNoteDocumentLayout.OrderServerSourceMaterials(
+                    importSource,
+                    importedMaterials)
+                : importedMaterials;
             var note = new LocalNoteDocument
             {
                 NoteId = noteId,
@@ -894,7 +904,7 @@ public sealed class LocalNoteStore
                 CurrentVersionId = versionId,
                 Title = NormalizeTitle(version.Title),
                 Markdown = version.Markdown ?? string.Empty,
-                Materials = importedMaterials,
+                Materials = orderedMaterials.ToList(),
                 ServerSource = version.ServerSource,
             };
             if (note.ServerSource is { } serverSource)
@@ -908,7 +918,7 @@ public sealed class LocalNoteStore
                 parentVersionId: null,
                 now,
                 LocalNoteCheckpointReason.ImportedPackage,
-                importedMaterials);
+                orderedMaterials);
             await WriteVersionLockedAsync(noteId, importedVersion, cancellationToken);
             await WriteNoteLockedAsync(note, cancellationToken);
             importCommitted = true;
@@ -1141,6 +1151,9 @@ public sealed class LocalNoteStore
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            var orderedMaterials = NativeNoteDocumentLayout.OrderServerSourceMaterials(
+                package.ServerSource,
+                materials);
             var now = DateTimeOffset.UtcNow;
             var noteId = Guid.NewGuid();
             importingNoteId = noteId;
@@ -1153,7 +1166,7 @@ public sealed class LocalNoteStore
                 CurrentVersionId = versionId,
                 Title = title,
                 Markdown = markdown,
-                Materials = materials,
+                Materials = orderedMaterials.ToList(),
                 ServerSource = package.ServerSource,
             };
             ServerNoteSourceIntegrity.Validate(package.ServerSource, note.Title, note.Markdown, materials);
@@ -1164,7 +1177,7 @@ public sealed class LocalNoteStore
                 parentVersionId: null,
                 now,
                 LocalNoteCheckpointReason.ImportedPackage,
-                materials);
+                orderedMaterials);
             await WriteVersionLockedAsync(noteId, version, cancellationToken);
             await WriteNoteLockedAsync(note, cancellationToken);
             importCommitted = true;
@@ -1412,7 +1425,8 @@ public sealed class LocalNoteStore
         await LoadVersionLockedAsync(noteId, note.CurrentVersionId, cancellationToken);
 
         var materials = note.Materials ?? [];
-        var orderedMaterials = NativeNoteDocumentLayout.OrderMaterials(
+        var orderedMaterials = OrderMaterialsForNote(
+            note,
             note.Markdown ?? string.Empty,
             materials)
             .ToList();
@@ -1423,6 +1437,14 @@ public sealed class LocalNoteStore
             Materials = orderedMaterials,
         };
     }
+
+    private static IReadOnlyList<LocalNoteMaterial> OrderMaterialsForNote(
+        LocalNoteDocument note,
+        string markdown,
+        IReadOnlyList<LocalNoteMaterial> materials)
+        => note.ServerSource is { } serverSource
+            ? NativeNoteDocumentLayout.OrderServerSourceMaterials(serverSource, materials)
+            : NativeNoteDocumentLayout.OrderMaterials(markdown, materials);
 
     private async Task<List<LocalNoteCloudBinding>> ReadCloudBindingsLockedAsync(
         CancellationToken cancellationToken)

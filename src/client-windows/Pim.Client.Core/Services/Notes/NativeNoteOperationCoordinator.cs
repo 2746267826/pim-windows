@@ -14,8 +14,9 @@ public sealed record NativeNoteFinishResult(bool Started, bool Succeeded, Except
 
 /// <summary>
 /// Serializes note writes and gives Finish a barrier over every operation that
-/// already started. Once Finish begins, no new edit/save/import operation can
-/// enter; it waits for in-flight imports and saves, then runs alone.
+/// already started. Once Finish begins, no new read/edit/save/import operation
+/// can enter; it waits for in-flight note reads, imports and saves, then runs
+/// alone.
 /// </summary>
 public sealed class NativeNoteOperationCoordinator : IDisposable
 {

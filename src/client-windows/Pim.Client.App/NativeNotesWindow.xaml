@@ -193,7 +193,7 @@
 
                                 <Border BorderBrush="{StaticResource PimBorderBrush}"
                                         BorderThickness="0,1,0,0" Padding="0,16,0,0" />
-                                <TextBlock Text="Markdown 正文 · 照片、手写和录音会插入当前光标位置"
+                                <TextBlock Text="Markdown 源文 · 材料锚点会插入当前光标位置"
                                            FontSize="12"
                                            Foreground="{StaticResource PimMutedTextBrush}"
                                            Margin="0,0,0,8" />
@@ -210,12 +210,17 @@
                                 <Border BorderBrush="{StaticResource PimBorderBrush}"
                                         BorderThickness="0,1,0,0" Padding="0,16,0,0"
                                         Margin="0,20,0,0" />
-                                <TextBlock Text="连续文档" FontSize="12"
+                                <TextBlock Text="连续文档预览" FontSize="12"
                                            Foreground="{StaticResource PimMutedTextBrush}"
                                            Margin="0,0,0,8" />
+                                <TextBlock Text="按锚点顺序预览；照片、手写和录音以独立卡片呈现，编辑仍在上方 Markdown 源文完成。"
+                                           FontSize="12"
+                                           Foreground="{StaticResource PimMutedTextBrush}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,10" />
                                 <StackPanel x:Name="DocumentFlowPanel" />
 
-                                <Expander Header="材料索引（正文已按标记顺序混排）"
+                                <Expander Header="材料索引（独立文件与操作）"
                                           IsExpanded="False"
                                           Margin="0,24,0,0">
                                     <Grid Margin="0,8,0,0">

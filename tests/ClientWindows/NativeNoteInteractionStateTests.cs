@@ -53,6 +53,73 @@ public sealed class NativeNoteInteractionStateTests
     }
 
     [Fact]
+    public void SuccessfulRefreshRestoresVisibleAnchorAndKeepsSelectionVisible()
+    {
+        var first = Guid.NewGuid();
+        var anchor = Guid.NewGuid();
+        var selected = Guid.NewGuid();
+        var last = Guid.NewGuid();
+        var state = new NativeNoteLibraryViewState();
+        state.Capture([first, anchor, selected, last], selected, anchor, -12.5, selectedVisible: true);
+
+        var plan = state.CreateRestorePlan([first, anchor, selected, last], selected);
+
+        Assert.NotNull(plan);
+        Assert.Equal(anchor, plan.ScrollTargetNoteId);
+        Assert.Equal(-12.5, plan.ScrollTargetOffsetPixels);
+        Assert.Equal(selected, plan.EnsureVisibleNoteId);
+    }
+
+    [Fact]
+    public void RefreshFallsBackToSelectionWhenTheAnchorRowDisappears()
+    {
+        var first = Guid.NewGuid();
+        var anchor = Guid.NewGuid();
+        var selected = Guid.NewGuid();
+        var state = new NativeNoteLibraryViewState();
+        state.Capture([first, anchor, selected], selected, anchor, 18, selectedVisible: true);
+
+        var plan = state.CreateRestorePlan([first, selected], selected);
+
+        Assert.NotNull(plan);
+        Assert.Equal(selected, plan.ScrollTargetNoteId);
+        Assert.Equal(0, plan.ScrollTargetOffsetPixels);
+        Assert.Equal(selected, plan.EnsureVisibleNoteId);
+    }
+
+    [Fact]
+    public void RefreshTargetsSelectionWhenItWasOutsideTheCapturedViewport()
+    {
+        var selected = Guid.NewGuid();
+        var anchor = Guid.NewGuid();
+        var last = Guid.NewGuid();
+        var state = new NativeNoteLibraryViewState();
+        state.Capture([selected, anchor, last], selected, anchor, 4, selectedVisible: false);
+
+        var plan = state.CreateRestorePlan([selected, anchor, last], selected);
+
+        Assert.NotNull(plan);
+        Assert.Equal(selected, plan.ScrollTargetNoteId);
+        Assert.Equal(0, plan.ScrollTargetOffsetPixels);
+        Assert.Equal(selected, plan.EnsureVisibleNoteId);
+    }
+
+    [Fact]
+    public void RefreshFromAnEmptyListStillKeepsTheLoadedSelectionVisible()
+    {
+        var selected = Guid.NewGuid();
+        var state = new NativeNoteLibraryViewState();
+        state.Capture([], selected, null, 0, selectedVisible: false);
+
+        var plan = state.CreateRestorePlan([selected, Guid.NewGuid()], selected);
+
+        Assert.NotNull(plan);
+        Assert.Equal(selected, plan.ScrollTargetNoteId);
+        Assert.Equal(0, plan.ScrollTargetOffsetPixels);
+        Assert.Equal(selected, plan.EnsureVisibleNoteId);
+    }
+
+    [Fact]
     public void MarkerLayoutInterleavesEverySupportedMaterialKindInBodyOrder()
     {
         var photo = Material(LocalNoteMaterialKind.Photo, "照片.png");
@@ -251,6 +318,67 @@ public sealed class NativeNoteInteractionStateTests
     }
 
     [Fact]
+    public void LegacyServerMarkdownMarkersDoNotDuplicateBackedPhotoAndInkBlocks()
+    {
+        var photo = Material(LocalNoteMaterialKind.Photo, "legacy-photo.png");
+        var preview = Material(LocalNoteMaterialKind.Handwriting, "legacy-ink.png");
+        var source = Material(
+            LocalNoteMaterialKind.HandwritingSource,
+            "legacy-ink.ink.json",
+            width: preview.Width,
+            height: preview.Height);
+        var markdownText = string.Join(
+            "\n\n",
+            "开头",
+            NativeNoteDocumentLayout.CreateMarker(photo.MaterialId),
+            "中间",
+            NativeNoteDocumentLayout.CreateMarker(preview.MaterialId),
+            "结尾");
+        var rawMarkdown = System.Text.Json.JsonSerializer.Serialize(new { text = markdownText });
+        var serverSource = new LocalNoteServerSource(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "{}",
+            "{}",
+            "{}",
+            string.Empty,
+            [
+                new LocalNoteServerSourceBlock(
+                    Guid.NewGuid().ToString("D"),
+                    "markdown",
+                    rawMarkdown,
+                    []),
+                new LocalNoteServerSourceBlock(
+                    Guid.NewGuid().ToString("D"),
+                    "photo",
+                    """{"kind":"photo"}""",
+                    [photo.MaterialId]),
+                new LocalNoteServerSourceBlock(
+                    Guid.NewGuid().ToString("D"),
+                    "ink",
+                    """{"kind":"ink"}""",
+                    [source.MaterialId, preview.MaterialId]),
+            ],
+            []);
+
+        var layout = NativeNoteDocumentLayout.ParseServerSource(
+            serverSource,
+            [photo, preview, source]);
+        var renderedMaterialIds = layout.Segments
+            .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+            .Select(segment => segment.MaterialId!.Value)
+            .ToArray();
+
+        Assert.Equal([photo.MaterialId, preview.MaterialId], renderedMaterialIds);
+        Assert.Equal(
+            [photo.MaterialId, preview.MaterialId, source.MaterialId],
+            NativeNoteDocumentLayout.OrderServerSourceMaterials(
+                serverSource,
+                [photo, preview, source])
+                .Select(material => material.MaterialId));
+    }
+
+    [Fact]
     public void WideLayoutDocksBothPanelsAndNarrowLayoutCollapsesToSingleColumn()
     {
         var layout = new NativeNoteLayoutState(1480);
@@ -363,14 +491,13 @@ public sealed class NativeNoteInteractionStateTests
         });
         await importEntered.Task;
 
-        Assert.Null(coordinator.TryBeginOperation());
-
         var finish = coordinator.FinishAsync(() =>
         {
             order.Add("finish");
             return Task.CompletedTask;
         });
         Assert.False(finish.IsCompleted);
+        Assert.Null(coordinator.TryBeginOperation());
 
         releaseImport.SetResult();
         await import;
@@ -381,6 +508,98 @@ public sealed class NativeNoteInteractionStateTests
         Assert.Equal(["import-start", "import-end", "finish"], order);
         using var afterFinish = coordinator.TryBeginOperation();
         Assert.NotNull(afterFinish);
+    }
+
+    [Fact]
+    public async Task FinishWaitsForInFlightNoteReadAndRejectsANewRead()
+    {
+        using var coordinator = new NativeNoteOperationCoordinator();
+        var order = new List<string>();
+        var readEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readLease = coordinator.TryBeginOperation();
+        Assert.NotNull(readLease);
+
+        var read = Task.Run(async () =>
+        {
+            using (readLease)
+            {
+                await readLease!.EnterSerializedAsync();
+                try
+                {
+                    order.Add("read-start");
+                    readEntered.SetResult();
+                    await releaseRead.Task;
+                    order.Add("read-end");
+                }
+                finally
+                {
+                    readLease.ExitSerialized();
+                }
+            }
+        });
+        await readEntered.Task;
+
+        var finish = coordinator.FinishAsync(() =>
+        {
+            order.Add("finish");
+            return Task.CompletedTask;
+        });
+        Assert.False(finish.IsCompleted);
+        Assert.Null(coordinator.TryBeginOperation());
+
+        releaseRead.SetResult();
+        await read;
+        var result = await finish;
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(["read-start", "read-end", "finish"], order);
+    }
+
+    [Fact]
+    public async Task FailedNoteReadReleasesBarrierForFinishAndRetry()
+    {
+        using var coordinator = new NativeNoteOperationCoordinator();
+        var order = new List<string>();
+        var readEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readLease = coordinator.TryBeginOperation();
+        Assert.NotNull(readLease);
+
+        var read = Task.Run(async () =>
+        {
+            using (readLease)
+            {
+                await readLease!.EnterSerializedAsync();
+                try
+                {
+                    order.Add("read-start");
+                    readEntered.SetResult();
+                    await releaseRead.Task;
+                    order.Add("read-failed");
+                    throw new IOException("读取失败");
+                }
+                finally
+                {
+                    readLease.ExitSerialized();
+                }
+            }
+        });
+        await readEntered.Task;
+
+        var finish = coordinator.FinishAsync(() =>
+        {
+            order.Add("finish");
+            return Task.CompletedTask;
+        });
+        releaseRead.SetResult();
+        await Assert.ThrowsAsync<IOException>(() => read);
+        var result = await finish;
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(["read-start", "read-failed", "finish"], order);
+        using var retryRead = coordinator.TryBeginOperation();
+        Assert.NotNull(retryRead);
     }
 
     [Fact]

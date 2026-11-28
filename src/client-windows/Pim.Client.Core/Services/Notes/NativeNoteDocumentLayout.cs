@@ -205,12 +205,22 @@ public sealed record NativeNoteDocumentLayout(
         return result;
     }
 
+    /// <summary>
+    /// Photo and ink blocks own their server-side position. Legacy material
+    /// markers for those block-backed files are ignored in Markdown so the
+    /// continuous view renders each file once. Recordings have no server block
+    /// kind; their local Markdown anchors are the only positional signal.
+    /// </summary>
     public static NativeNoteDocumentLayout ParseServerSource(
         LocalNoteServerSource source,
         IReadOnlyList<LocalNoteMaterial> materials)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(materials);
+        var blockBackedMaterialIds = source.Blocks
+            .Where(block => block.Kind is "photo" or "ink")
+            .SelectMany(block => block.MaterialIds)
+            .ToHashSet();
         var builder = new System.Text.StringBuilder();
         foreach (var block in source.Blocks)
         {
@@ -227,12 +237,16 @@ public sealed record NativeNoteDocumentLayout(
                     if (document.RootElement.TryGetProperty("text", out var text)
                         && text.ValueKind == System.Text.Json.JsonValueKind.String)
                     {
-                        builder.Append(text.GetString());
+                        builder.Append(StripBlockBackedMarkers(
+                            text.GetString() ?? string.Empty,
+                            blockBackedMaterialIds));
                     }
                 }
                 catch (System.Text.Json.JsonException)
                 {
-                    builder.Append(block.RawJson);
+                    builder.Append(StripBlockBackedMarkers(
+                        block.RawJson,
+                        blockBackedMaterialIds));
                 }
 
                 continue;
@@ -252,6 +266,53 @@ public sealed record NativeNoteDocumentLayout(
         }
 
         return Parse(builder.ToString(), materials);
+    }
+
+    public static IReadOnlyList<LocalNoteMaterial> OrderServerSourceMaterials(
+        LocalNoteServerSource source,
+        IReadOnlyList<LocalNoteMaterial> materials)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(materials);
+        var materialById = materials
+            .GroupBy(material => material.MaterialId)
+            .ToDictionary(group => group.Key, group => group.First());
+        var ordered = new List<LocalNoteMaterial>(materials.Count);
+        var seen = new HashSet<Guid>();
+        foreach (var materialId in ParseServerSource(source, materials).OrderedMaterialIds)
+        {
+            if (seen.Add(materialId) && materialById.TryGetValue(materialId, out var material))
+            {
+                ordered.Add(material);
+            }
+        }
+
+        foreach (var material in materials)
+        {
+            if (seen.Add(material.MaterialId))
+            {
+                ordered.Add(material);
+            }
+        }
+
+        return ordered;
+    }
+
+    private static string StripBlockBackedMarkers(
+        string text,
+        IReadOnlySet<Guid> blockBackedMaterialIds)
+    {
+        if (blockBackedMaterialIds.Count == 0)
+        {
+            return text;
+        }
+
+        return MarkerPattern.Replace(
+            text,
+            match => Guid.TryParse(match.Groups["id"].Value, out var materialId)
+                && blockBackedMaterialIds.Contains(materialId)
+                ? string.Empty
+                : match.Value);
     }
 
     private static LocalNoteMaterial ResolveDisplayMaterial(

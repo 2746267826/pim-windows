@@ -107,6 +107,184 @@ public sealed class NoteMaterialRestoreTests : IDisposable
     }
 
     [Fact]
+    public async Task UploadRestoreFinishRoundTripKeepsEachAnchorOnceAndStableOrder()
+    {
+        var sourceStore = new LocalNoteStore(Path.Combine(_root, "upload-source"));
+        var note = await sourceStore.CreateAsync("上传混排");
+        var imageBytes = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
+        await using (var photo = new MemoryStream(imageBytes))
+        {
+            note = await sourceStore.AddMaterialsAsync(note.NoteId,
+            [
+                new LocalNoteMaterialInput(photo, "照片.png", LocalNoteMaterialKind.Photo, "image/png"),
+            ]);
+        }
+
+        const string Ink =
+            """{"schemaVersion":1,"width":320,"height":180,"strokes":[[{"x":10,"y":20,"pressure":0.5}]]}""";
+        await using (var inkPreview = new MemoryStream(imageBytes))
+        {
+            note = await sourceStore.AddHandwritingAsync(
+                note.NoteId,
+                inkPreview,
+                Ink,
+                "手写",
+                320,
+                180);
+        }
+
+        var wave = SyntheticWave(5);
+        await using (var recording = new MemoryStream(wave))
+        {
+            note = await sourceStore.AddMaterialsAsync(note.NoteId,
+            [
+                new LocalNoteMaterialInput(
+                    recording,
+                    "录音.wav",
+                    LocalNoteMaterialKind.Recording,
+                    "audio/wav"),
+            ]);
+        }
+
+        var photoMaterial = note.Materials.Single(
+            material => material.Kind == LocalNoteMaterialKind.Photo);
+        var handwritingMaterial = note.Materials.Single(
+            material => material.Kind == LocalNoteMaterialKind.Handwriting);
+        var recordingMaterial = note.Materials.Single(
+            material => material.Kind == LocalNoteMaterialKind.Recording);
+        var markdown = string.Join(
+            "\n\n",
+            "开头",
+            NativeNoteDocumentLayout.CreateMarker(photoMaterial.MaterialId),
+            "中间",
+            NativeNoteDocumentLayout.CreateMarker(recordingMaterial.MaterialId),
+            "录音之后",
+            NativeNoteDocumentLayout.CreateMarker(handwritingMaterial.MaterialId),
+            "结尾");
+        note = await sourceStore.SaveAsync(note.NoteId, note.Title, markdown);
+        var bundle = await new ServerNoteMaterialBundleBuilder(sourceStore)
+            .BuildAsync(note.NoteId, note.CurrentVersionId);
+
+        using var input = JsonDocument.Parse(bundle.InputJson);
+        var blocks = input.RootElement.GetProperty("note").GetProperty("blocks")
+            .EnumerateArray()
+            .ToArray();
+        Assert.Equal(
+            ["markdown", "photo", "markdown", "ink", "markdown"],
+            blocks.Select(block => block.GetProperty("kind").GetString()));
+        var markdownBlockText = string.Join(
+            "\n",
+            blocks
+                .Where(block => block.GetProperty("kind").GetString() == "markdown")
+                .Select(block => block.GetProperty("text").GetString()));
+        Assert.DoesNotContain(
+            NativeNoteDocumentLayout.CreateMarker(photoMaterial.MaterialId),
+            markdownBlockText,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            NativeNoteDocumentLayout.CreateMarker(handwritingMaterial.MaterialId),
+            markdownBlockText,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            NativeNoteDocumentLayout.CreateMarker(recordingMaterial.MaterialId),
+            markdownBlockText,
+            StringComparison.Ordinal);
+        Assert.Single(input.RootElement.GetProperty("recordings").EnumerateArray());
+
+        var fixture = await CreateFixtureFromBundleAsync(bundle);
+        var restoredStore = new LocalNoteStore(Path.Combine(_root, "restored"));
+        var service = CreateService(
+            CreateApi(new RestoreHandler(fixture)),
+            restoredStore,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+        var restoredImport = await service.RestoreVersionAsync(
+            fixture.VersionId,
+            userConfirmedLocalCopy: true);
+        var restored = await restoredStore.LoadAsync(restoredImport.Import.NoteId);
+
+        Assert.True(restored.IsServerSourceReadOnly);
+        var restoredLayout = NativeNoteDocumentLayout.ParseServerSource(
+            restored.ServerSource!,
+            restored.Materials);
+        var renderedIds = restoredLayout.Segments
+            .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+            .Select(segment => segment.MaterialId!.Value)
+            .ToArray();
+        Assert.Equal(3, renderedIds.Length);
+        Assert.Equal(3, renderedIds.Distinct().Count());
+        Assert.Equal(
+            photoMaterial.MaterialId,
+            restored.Materials.Single(
+                material => material.Kind == LocalNoteMaterialKind.Photo).MaterialId);
+        Assert.Equal(
+            [
+                LocalNoteMaterialKind.Photo,
+                LocalNoteMaterialKind.RecordingSegment,
+                LocalNoteMaterialKind.Handwriting,
+            ],
+            restoredLayout.Segments
+                .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+                .Select(segment => segment.Material!.Kind));
+
+        var secondStore = new LocalNoteStore(Path.Combine(_root, "restored-again"));
+        var secondService = CreateService(
+            CreateApi(new RestoreHandler(fixture)),
+            secondStore,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+        var secondImport = await secondService.RestoreVersionAsync(
+            fixture.VersionId,
+            userConfirmedLocalCopy: true);
+        var secondRestore = await secondStore.LoadAsync(secondImport.Import.NoteId);
+        Assert.Equal(
+            restored.Materials.Select(material =>
+                (material.MaterialId, material.Kind, material.DisplayName)),
+            secondRestore.Materials.Select(material =>
+                (material.MaterialId, material.Kind, material.DisplayName)));
+
+        var materialOrder = restored.Materials.Select(material => material.MaterialId).ToArray();
+        var finished = await restoredStore.FinalizeAsync(
+            restored.NoteId,
+            restored.Title,
+            restored.Markdown);
+        Assert.Equal(
+            materialOrder,
+            finished.Materials.Select(material => material.MaterialId));
+        var finishedVersion = await restoredStore.LoadVersionAsync(
+            finished.NoteId,
+            finished.CurrentVersionId);
+        Assert.Equal(LocalNoteCheckpointReason.Finished, finishedVersion.Reason);
+        Assert.True(finishedVersion.ServerSource is not null);
+        Assert.Equal(
+            restored.ServerSource!.Blocks.Select(block => (block.Id, block.Kind, block.RawJson)),
+            finishedVersion.ServerSource!.Blocks.Select(block => (block.Id, block.Kind, block.RawJson)));
+
+        var restoredFinished = await restoredStore.RestoreVersionAsync(
+            finished.NoteId,
+            finished.CurrentVersionId);
+        Assert.Equal(restored.Markdown, restoredFinished.Markdown);
+        Assert.Equal(
+            materialOrder,
+            restoredFinished.Materials.Select(material => material.MaterialId));
+        var finishedLayout = NativeNoteDocumentLayout.ParseServerSource(
+            restoredFinished.ServerSource!,
+            restoredFinished.Materials);
+        Assert.Equal(
+            renderedIds,
+            finishedLayout.Segments
+                .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+                .Select(segment => segment.MaterialId!.Value));
+
+        var rebuilt = await new ServerNoteMaterialBundleBuilder(restoredStore)
+            .BuildAsync(finished.NoteId, finished.CurrentVersionId);
+        using var rebuiltInput = JsonDocument.Parse(rebuilt.InputJson);
+        Assert.Equal(
+            blocks.Select(block => block.GetProperty("kind").GetString()),
+            rebuiltInput.RootElement.GetProperty("note").GetProperty("blocks")
+                .EnumerateArray()
+                .Select(block => block.GetProperty("kind").GetString()));
+    }
+
+    [Fact]
     public void SourceIntegrityValidatesLargeInterleavedPhotoSource()
     {
         const int photoCount = 1_000;
@@ -531,6 +709,81 @@ public sealed class NoteMaterialRestoreTests : IDisposable
             ServerNoteMaterialRestoreParser.Parse(
                 fixture.InputJson,
                 shortHash.ToJsonString()));
+    }
+
+    private static async Task<RestoreFixture> CreateFixtureFromBundleAsync(
+        ServerNoteMaterialBundle bundle)
+    {
+        var files = new List<RestoreFile>(bundle.Files.Count);
+        foreach (var file in bundle.Files)
+        {
+            await using var stream = file.OpenRead();
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            files.Add(new RestoreFile(
+                file.Path,
+                file.Kind,
+                buffer.ToArray(),
+                file.BlockId,
+                file.RecordingId,
+                file.Segment,
+                file.ChunkIndex,
+                file.Samples));
+        }
+
+        var markdown = Encoding.UTF8.GetString(
+            files.Single(file => file.Path == "document.md").Bytes);
+        using var input = JsonDocument.Parse(bundle.InputJson);
+        var noteId = Guid.Parse(
+            input.RootElement.GetProperty("note").GetProperty("id").GetString()!);
+        var upload = new NoteMaterialUploadDto
+        {
+            BaseVersionId = null,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CurrentVersionId = bundle.VersionId.ToString("D"),
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(1),
+            Files = files.Select((file, index) => new NoteMaterialUploadFileDto
+            {
+                Index = index,
+                Kind = file.Kind,
+                PartCount = file.Bytes.Length == 0 ? 0 : 1,
+                Path = file.Path,
+                Sha256 = Hash(file.Bytes),
+                SizeBytes = file.Bytes.Length,
+                UploadedParts = [],
+            }).ToList(),
+            HasConflict = false,
+            IsCurrent = true,
+            Limits = new NoteMaterialUploadLimitsDto
+            {
+                PartSizeBytes = 1_048_576,
+                MaxMetadataCharacters = 8_388_608,
+                MaxVersionBytes = 64L * 1024 * 1024 * 1024,
+                MaxUserReservedBytes = 64L * 1024 * 1024 * 1024,
+                MaxFiles = 100_000,
+                MaxPendingVersions = 20,
+                MaxVersionsPerUser = 10_000,
+                UploadExpiryHours = 24,
+            },
+            NoteId = noteId.ToString("D"),
+            Phase = "Uploaded",
+            VersionId = bundle.VersionId.ToString("D"),
+        };
+        var response = new NoteMaterialVersionDto
+        {
+            InputJson = bundle.InputJson,
+            ManifestJson = bundle.ManifestJson,
+            Upload = upload,
+        };
+        return new RestoreFixture(
+            noteId,
+            bundle.VersionId,
+            files.FirstOrDefault(file => file.Kind == "Photo")?.Bytes ?? [],
+            markdown,
+            bundle.InputJson,
+            bundle.ManifestJson,
+            response,
+            files);
     }
 
     private static async Task<RestoreFixture> CreateFixtureAsync()

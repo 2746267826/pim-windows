@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
@@ -21,6 +22,7 @@ public partial class NativeNotesWindow : Window
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
     private readonly NativeNoteOperationCoordinator _operations = new();
     private readonly NativeNoteLibraryLoadState _library = new();
+    private readonly NativeNoteLibraryViewState _libraryView = new();
     private readonly NativeNoteWindowState _windowState = new();
     private readonly NativeNoteLayoutState _layout = new(1444);
     private readonly CloudNotesUiState _cloudUi = new();
@@ -182,37 +184,105 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        if (_finishing)
+        {
+            RestoreSelectedNote(_current?.NoteId);
+            return;
+        }
+
         if (_current?.NoteId == summary.NoteId)
         {
             CollapseOverlayLibrary();
             return;
         }
 
+        var previousNoteId = _current?.NoteId;
         var selectionGeneration = _cloudUi.BeginNoteSelection();
         var artifactGeneration = _cloudUi.BeginArtifactSelection();
         if (_cloudUi.IsDraftDirty && !ConfirmDiscardCloudDraft("切换笔记"))
         {
-            _loading = true;
-            NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == _current?.NoteId);
-            _loading = false;
+            RestoreSelectedNote(previousNoteId);
             RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
             return;
         }
 
-        if (!await SavePendingAsync())
+        if (await LoadNoteThroughBarrierAsync(
+                summary,
+                selectionGeneration,
+                artifactGeneration,
+                previousNoteId,
+                savePendingFirst: true))
         {
-            _loading = true;
-            NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == _current?.NoteId);
-            _loading = false;
-            RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
-            return;
+            CollapseOverlayLibrary();
         }
-
-        await LoadNoteAsync(summary, selectionGeneration, artifactGeneration);
-        CollapseOverlayLibrary();
     }
 
-    private async Task LoadNoteAsync(
+    private async Task<bool> LoadNoteThroughBarrierAsync(
+        LocalNoteSummary summary,
+        long selectionGeneration,
+        long artifactGeneration,
+        Guid? previousNoteId,
+        bool savePendingFirst)
+    {
+        var lease = _operations.TryBeginOperation();
+        if (lease is null)
+        {
+            RestoreSelectedNote(previousNoteId);
+            RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
+            ShowNotice("正在结束并保存当前笔记，本次切换未生效。");
+            return false;
+        }
+
+        var entered = false;
+        try
+        {
+            await lease.EnterSerializedAsync();
+            entered = true;
+            if (_operations.IsFinishing)
+            {
+                RestoreSelectedNote(previousNoteId);
+                RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
+                ShowNotice("正在结束并保存当前笔记，本次切换未生效。");
+                return false;
+            }
+
+            if (savePendingFirst && !await SavePendingCoreAsync())
+            {
+                RestoreSelectedNote(previousNoteId);
+                RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
+                return false;
+            }
+
+            return await LoadNoteAsync(summary, selectionGeneration, artifactGeneration);
+        }
+        finally
+        {
+            if (entered)
+            {
+                lease.ExitSerialized();
+            }
+
+            lease.Dispose();
+        }
+    }
+
+    private void RestoreSelectedNote(Guid? noteId)
+    {
+        var wasLoading = _loading;
+        _loading = true;
+        try
+        {
+            NotesList.SelectedItem = noteId is { } id
+                ? _notes.FirstOrDefault(note => note.NoteId == id)
+                : null;
+        }
+        finally
+        {
+            _loading = wasLoading;
+        }
+    }
+
+    private async Task<bool> LoadNoteAsync(
         LocalNoteSummary summary,
         long selectionGeneration,
         long artifactGeneration)
@@ -228,9 +298,7 @@ public partial class NativeNotesWindow : Window
         {
             if (selectionGeneration == _cloudUi.NoteGeneration)
             {
-                _loading = true;
-                NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == previousNoteId);
-                _loading = false;
+                RestoreSelectedNote(previousNoteId);
                 RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
                 if (previousNoteId is null)
                 {
@@ -257,7 +325,7 @@ public partial class NativeNotesWindow : Window
             }
 
             RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
-            return;
+            return false;
         }
 
         if (!IsSelectedNoteRequest(selectionGeneration, summary.NoteId))
@@ -273,7 +341,7 @@ public partial class NativeNotesWindow : Window
             }
 
             RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
-            return;
+            return false;
         }
 
         _cloudUi.ClearDraft();
@@ -284,6 +352,7 @@ public partial class NativeNotesWindow : Window
         MarkdownBox.IsEnabled = true;
         TitleBox.Text = note.Title;
         MarkdownBox.Text = note.Markdown;
+        NotesList.SelectedItem = _notes.FirstOrDefault(item => item.NoteId == note.NoteId);
         UpdateMaterials();
         ShowDocument();
         UpdateWindowChrome();
@@ -314,6 +383,8 @@ public partial class NativeNotesWindow : Window
 
             RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
         }
+
+        return true;
     }
 
     private async Task RefreshNoteDetailsAsync(LocalNoteDocument note, long selectionGeneration)
@@ -366,10 +437,14 @@ public partial class NativeNotesWindow : Window
 
         var selectionGeneration = _cloudUi.BeginNoteSelection();
         var artifactGeneration = _cloudUi.BeginArtifactSelection();
-        _loading = true;
-        NotesList.SelectedItem = summary;
-        _loading = false;
-        await LoadNoteAsync(summary, selectionGeneration, artifactGeneration);
+        var previousNoteId = _current?.NoteId;
+        RestoreSelectedNote(summary.NoteId);
+        await LoadNoteThroughBarrierAsync(
+            summary,
+            selectionGeneration,
+            artifactGeneration,
+            previousNoteId,
+            savePendingFirst: true);
     }
 
     private void OnEditorChanged(object sender, TextChangedEventArgs e)
@@ -1360,8 +1435,6 @@ public partial class NativeNotesWindow : Window
         long? requestGeneration = null)
     {
         var wasShowingLoadError = _library.Error is not null;
-        var selectedId = _current?.NoteId
-            ?? (NotesList.SelectedItem as LocalNoteSummary)?.NoteId;
         var querySnapshot = query ?? SearchBox.Text;
         var generation = requestGeneration ?? _library.BeginRefresh(querySnapshot);
         if (!_library.IsCurrent(generation))
@@ -1395,23 +1468,36 @@ public partial class NativeNotesWindow : Window
                 return false;
             }
 
+            var selectedAtApply = _current?.NoteId
+                ?? (NotesList.SelectedItem as LocalNoteSummary)?.NoteId;
+            var viewport = CaptureNotesViewport(selectedAtApply);
+            _libraryView.Capture(
+                _notes.Select(note => note.NoteId).ToArray(),
+                selectedAtApply,
+                viewport.AnchorNoteId,
+                viewport.AnchorOffsetPixels,
+                viewport.SelectedVisible);
             _notes.Clear();
             foreach (var row in rows)
             {
                 _notes.Add(row);
             }
 
-            if (selectedId is { } id)
+            RestoreSelectedNote(selectedAtApply);
+
+            if (_libraryView.CreateRestorePlan(
+                    rows.Select(note => note.NoteId).ToArray(),
+                    selectedAtApply) is { } restorePlan)
             {
-                NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == id);
+                await RestoreNotesViewportAsync(restorePlan, generation);
             }
 
-            if (wasShowingLoadError)
+            if (wasShowingLoadError && _library.IsCurrent(generation))
             {
                 ClearNotice();
             }
 
-            return true;
+            return _library.IsCurrent(generation);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
@@ -1444,6 +1530,144 @@ public partial class NativeNotesWindow : Window
                 ApplyNotesPresentation();
             }
         }
+    }
+
+    private (Guid? AnchorNoteId, double AnchorOffsetPixels, bool SelectedVisible)
+        CaptureNotesViewport(Guid? selectedNoteId)
+    {
+        if (_notes.Count == 0)
+        {
+            return (null, 0, false);
+        }
+
+        var scrollViewer = FindVisualChild<ScrollViewer>(NotesList);
+        if (scrollViewer is null)
+        {
+            return (selectedNoteId, 0, selectedNoteId is not null);
+        }
+
+        Guid? anchorNoteId = null;
+        var anchorOffset = 0d;
+        var selectedVisible = false;
+        for (var index = 0; index < _notes.Count; index++)
+        {
+            if (NotesList.ItemContainerGenerator.ContainerFromIndex(index)
+                    is not FrameworkElement container
+                || !container.IsVisible)
+            {
+                continue;
+            }
+
+            var top = container.TranslatePoint(new Point(0, 0), scrollViewer).Y;
+            var bottom = top + container.ActualHeight;
+            if (bottom <= 0 || top >= scrollViewer.ViewportHeight)
+            {
+                continue;
+            }
+
+            if (anchorNoteId is null || top < anchorOffset)
+            {
+                anchorNoteId = _notes[index].NoteId;
+                anchorOffset = top;
+            }
+
+            if (_notes[index].NoteId == selectedNoteId)
+            {
+                selectedVisible = true;
+            }
+        }
+
+        return (
+            anchorNoteId ?? selectedNoteId,
+            anchorNoteId is null ? 0 : anchorOffset,
+            selectedVisible);
+    }
+
+    private async Task RestoreNotesViewportAsync(
+        NativeNoteLibraryViewportPlan plan,
+        long requestGeneration)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        await Dispatcher.InvokeAsync(
+            () =>
+            {
+                if (_closed || !_library.IsCurrent(requestGeneration))
+                {
+                    return;
+                }
+
+                NotesList.UpdateLayout();
+                var scrollViewer = FindVisualChild<ScrollViewer>(NotesList);
+                if (scrollViewer is null)
+                {
+                    return;
+                }
+
+                if (plan.ScrollTargetNoteId is { } targetId
+                    && _notes.FirstOrDefault(note => note.NoteId == targetId) is { } target)
+                {
+                    NotesList.ScrollIntoView(target);
+                    NotesList.UpdateLayout();
+                    if (NotesList.ItemContainerGenerator.ContainerFromItem(target)
+                        is FrameworkElement targetContainer)
+                    {
+                        var currentTop = targetContainer.TranslatePoint(new Point(0, 0), scrollViewer).Y;
+                        scrollViewer.ScrollToVerticalOffset(
+                            scrollViewer.VerticalOffset
+                            + currentTop
+                            - plan.ScrollTargetOffsetPixels);
+                        NotesList.UpdateLayout();
+                    }
+                }
+
+                if (plan.EnsureVisibleNoteId is { } selectedId
+                    && _notes.FirstOrDefault(note => note.NoteId == selectedId) is { } selected)
+                {
+                    var selectedContainer =
+                        NotesList.ItemContainerGenerator.ContainerFromItem(selected)
+                        as FrameworkElement;
+                    if (selectedContainer is null
+                        || !IsElementVisibleInViewport(selectedContainer, scrollViewer))
+                    {
+                        NotesList.ScrollIntoView(selected);
+                    }
+                }
+            },
+            DispatcherPriority.Loaded);
+    }
+
+    private static bool IsElementVisibleInViewport(
+        FrameworkElement element,
+        ScrollViewer scrollViewer)
+    {
+        var top = element.TranslatePoint(new Point(0, 0), scrollViewer).Y;
+        var bottom = top + element.ActualHeight;
+        return bottom > 0 && top < scrollViewer.ViewportHeight;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent)
+        where T : DependencyObject
+    {
+        var count = VisualTreeHelper.GetChildrenCount(parent);
+        for (var index = 0; index < count; index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            if (FindVisualChild<T>(child) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
     }
 
     private void ApplyNotesPresentation()
@@ -1577,7 +1801,7 @@ public partial class NativeNotesWindow : Window
         {
             DocumentFlowPanel.Children.Add(new TextBlock
             {
-                Text = "未定位材料 · 旧笔记或未插入正文的材料按保存顺序显示",
+                Text = "未定位材料 · 旧笔记、服务器录音或尚未插入正文的材料按保存顺序显示",
                 Margin = new Thickness(0, 18, 0, 6),
                 FontSize = 12,
                 Foreground = (System.Windows.Media.Brush)FindResource("PimMutedTextBrush"),

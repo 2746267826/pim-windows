@@ -154,7 +154,7 @@ public static class ServerNoteMaterialRestoreParser
                     null,
                     null,
                     null,
-                    RequiredString(raw, null, "text", "Text"),
+                    RequiredMarkdownText(raw),
                     null,
                     null,
                     null,
@@ -518,6 +518,17 @@ public static class ServerNoteMaterialRestoreParser
         }
 
         return value.GetString()!;
+    }
+
+    private static string RequiredMarkdownText(JsonElement root)
+    {
+        var value = Property(root, "text", "Text");
+        if (value.ValueKind != JsonValueKind.String || value.GetString() is not { } text)
+        {
+            throw new LocalNoteStoreException("服务器 Markdown 块 text 字段无效。");
+        }
+
+        return text;
     }
 
     private static string? OptionalString(JsonElement root, params string[] names)
