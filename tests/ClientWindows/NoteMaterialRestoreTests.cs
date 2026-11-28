@@ -180,6 +180,45 @@ public sealed class NoteMaterialRestoreTests : IDisposable
     }
 
     [Fact]
+    public async Task RestoreOpusChunkRebuildsWithOggMediaTypeAndExtension()
+    {
+        var fixture = await CreateMixedRecordingFixtureAsync(opusChunk: (1, 2));
+        var store = new LocalNoteStore(_root);
+        var service = CreateService(
+            CreateApi(new RestoreHandler(fixture)),
+            store,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+
+        var restoredResult = await service.RestoreVersionAsync(
+            fixture.VersionId,
+            userConfirmedLocalCopy: true);
+        var restored = await store.LoadAsync(restoredResult.Import.NoteId);
+        var opus = Assert.Single(restored.Materials, material =>
+            material.Kind == LocalNoteMaterialKind.RecordingSegment
+            && material.RecordingSegment == 1
+            && material.RecordingChunkIndex == 2);
+        Assert.Equal("audio/ogg", opus.MediaType);
+        Assert.EndsWith(".opus", opus.RelativePath, StringComparison.Ordinal);
+        Assert.Equal(1600, opus.RecordingSamples);
+
+        var rebuilt = await new ServerNoteMaterialBundleBuilder(store)
+            .BuildAsync(restored.NoteId, restored.CurrentVersionId);
+        using var input = JsonDocument.Parse(rebuilt.InputJson);
+        var chunk = Assert.Single(
+            input.RootElement.GetProperty("recordings")[0].GetProperty("chunks")
+                .EnumerateArray(),
+            item => item.GetProperty("segment").GetInt32() == 1
+                && item.GetProperty("index").GetInt32() == 2);
+        Assert.Equal("opus", chunk.GetProperty("format").GetString());
+        Assert.Equal("audio/ogg", chunk.GetProperty("mimeType").GetString());
+        Assert.Equal(1600, chunk.GetProperty("samples").GetInt64());
+        Assert.Contains(
+            rebuilt.Files,
+            file => file.Kind == "AudioChunk"
+                && file.Path.EndsWith("-c000002.opus", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task UploadRestoreFinishRoundTripKeepsEachAnchorOnceAndStableOrder()
     {
         var sourceStore = new LocalNoteStore(Path.Combine(_root, "upload-source"));
@@ -1406,7 +1445,8 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 .GetProperty("futurePoint").GetInt32());
     }
 
-    private static async Task<RestoreFixture> CreateMixedRecordingFixtureAsync()
+    private static async Task<RestoreFixture> CreateMixedRecordingFixtureAsync(
+        (int Segment, int ChunkIndex)? opusChunk = null)
     {
         var noteId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
         var versionId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
@@ -1447,11 +1487,28 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         var photoPath = $"assets/{photoAssetId:D}.png";
         var inkPath = $"assets/{inkBlockId:D}-{inkHash}.png";
         var markdown = $"开头\n\n![照片]({photoPath})\n\n照片之后\n\n![手写卡片]({inkPath})\n<!-- 可编辑笔迹、身份和尺寸保存在同包 note.json 中 -->\n\n末尾";
-        var recordingJson = $$"""
-            {"id":"{{recordingId:D}}","createdAtMillis":7,"phase":"Completed","currentSegment":2,
-             "chunks":[{"segment":1,"index":1,"samples":5},{"segment":1,"index":2,"samples":7},{"segment":2,"index":1,"samples":11}],
-             "problem":null,"schemaVersion":1,"noteId":"{{noteId:D}}"}
-            """;
+        var chunks = new (long Samples, int Segment, int Chunk)[]
+        {
+            (5, 1, 1),
+            (7, 1, 2),
+            (11, 2, 1),
+        };
+        var recordingJson = new JsonObject
+        {
+            ["id"] = recordingId.ToString("D"),
+            ["createdAtMillis"] = 7,
+            ["phase"] = "Completed",
+            ["currentSegment"] = 2,
+            ["chunks"] = new JsonArray(chunks.Select(chunk => (JsonNode)new JsonObject
+            {
+                ["segment"] = chunk.Segment,
+                ["index"] = chunk.Chunk,
+                ["samples"] = opusChunk == (chunk.Segment, chunk.Chunk) ? 1600 : chunk.Samples,
+            }).ToArray()),
+            ["problem"] = null,
+            ["schemaVersion"] = 1,
+            ["noteId"] = noteId.ToString("D"),
+        }.ToJsonString();
         var input = $$"""
             {"schemaVersion":1,"id":"{{versionId:D}}","createdAtMillis":7,
              "note":{{noteJson}},"recordings":[{{recordingJson}}]}
@@ -1469,19 +1526,18 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 null,
                 recordingId.ToString("D")),
         };
-        files.AddRange(new[] { 5L, 7L, 11L }.Select((samples, index) =>
+        files.AddRange(chunks.Select(chunk =>
         {
-            var segment = index == 2 ? 2 : 1;
-            var chunk = index == 1 ? 2 : 1;
-            var wav = SyntheticWave(samples);
+            var samples = opusChunk == (chunk.Segment, chunk.Chunk) ? 1600 : chunk.Samples;
+            var isOpus = opusChunk == (chunk.Segment, chunk.Chunk);
             return new RestoreFile(
-                $"recordings/{recordingId:D}/s{segment:D4}-c{chunk:D6}.wav",
+                $"recordings/{recordingId:D}/s{chunk.Segment:D4}-c{chunk.Chunk:D6}.{(isOpus ? "opus" : "wav")}",
                 "AudioChunk",
-                wav,
+                isOpus ? SyntheticOpus() : SyntheticWave(samples),
                 null,
                 recordingId.ToString("D"),
-                segment,
-                chunk,
+                chunk.Segment,
+                chunk.Chunk,
                 samples);
         }));
         var manifest = JsonSerializer.Serialize(new
@@ -1607,6 +1663,9 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         return wave;
     }
 
+    private static byte[] SyntheticOpus() => Convert.FromBase64String(
+        "T2dnUwACAAAAAAAAAAD3WTvRAAAAALaS03IBE09wdXNIZWFkAQE4AYA+AAAAAABPZ2dTAAAAAAAAAAAAAPdZO9EBAAAAymKEcwE9T3B1c1RhZ3MMAAAATGF2ZjYyLjMuMTAwAQAAAB0AAABlbmNvZGVyPUxhdmM2Mi4xMS4xMDAgbGlib3B1c09nZ1MABPgTAAAAAAAA91k70QIAAAC8/jk5BlgsNDAyHUiBpvLzsXG9AAACAawTWRg+ZP9rYrq27r4PgIGySHntw3HAMzw+4Lq3gqoGy5yUXZK+KTRPCk79dJc5puC04dhrz1VXUtfo+gRq5gEzgyuwxrFRMQV5R6tInNZB5/yVTU6qGAOfCY8CGpOpsivqsqn3IPjcjREgsKc2cUKEV3tyaOknaEiZwl9zLdIzOkXZqNtXjU5TFYlQeWjabWDvCunj8JEhdpsOa4eEvMQ7u7IjyTp0wWsILyBImZ1ysJO6ioODsnzV0ZDnEngGehIa1xNwwmd25QUrHqhBoRTnNbik07INHVVVAkZImUofcy3SMQ7YBziRnHv/ofyN3Rgg3m1Z+H/fHXc2+9+Uhuw6nImqJMAREvhGiD3YP0gFjIXwEebjMnv5p2Wc22oURcy0X+x1X9RwbPlg");
+
     private CloudNoteMaterialService CreateService(
         ApiClient api,
         LocalNoteStore store,
@@ -1707,7 +1766,12 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 }
                 var content = new ByteArrayContent(body);
                 content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
-                    "application/octet-stream");
+                    Path.GetExtension(file.Path).ToLowerInvariant() switch
+                    {
+                        ".wav" => "audio/wav",
+                        ".opus" => "audio/ogg",
+                        _ => "application/octet-stream",
+                    });
                 content.Headers.ContentDisposition = new System.Net.Http.Headers.ContentDispositionHeaderValue("attachment")
                 {
                     FileName = WrongFileName ? "wrong-name.bin" : Path.GetFileName(file.Path),

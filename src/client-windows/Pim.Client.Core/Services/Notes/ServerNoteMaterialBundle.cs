@@ -286,15 +286,38 @@ public sealed class ServerNoteMaterialBundleBuilder
                 string Path,
                 long Samples,
                 int Segment,
-                int ChunkIndex)>();
+                int ChunkIndex,
+                string Format)>();
             var currentSegment = 1;
             foreach (var material in recordingGroup)
             {
                 var source = materialById[material.MaterialId].AbsolutePath;
-                var samples = await ValidatePcm16WaveAsync(source, cancellationToken);
+                var format = material.MediaType.ToLowerInvariant() switch
+                {
+                    "audio/wav" or "audio/x-wav" => "wav",
+                    "audio/ogg" => "opus",
+                    _ => throw new LocalNoteStoreException(
+                        $"录音分片格式不受支持：{material.DisplayName}"),
+                };
+                long samples;
+                if (format == "wav")
+                {
+                    samples = await ValidatePcm16WaveAsync(source, cancellationToken);
+                }
+                else
+                {
+                    if (material.RecordingSamples is not > 0)
+                    {
+                        throw new LocalNoteStoreException(
+                            $"录音 Opus 分片缺少样本数：{material.DisplayName}");
+                    }
+
+                    samples = material.RecordingSamples.Value;
+                }
                 if (material.RecordingSamples is { } expectedSamples && expectedSamples != samples)
                 {
-                    throw new LocalNoteStoreException($"录音 WAV 样本数与固定清单不一致：{material.DisplayName}");
+                    throw new LocalNoteStoreException(
+                        $"录音分片样本数与固定清单不一致：{material.DisplayName}");
                 }
 
                 var segment = material.RecordingSegment ?? 1;
@@ -312,8 +335,10 @@ public sealed class ServerNoteMaterialBundleBuilder
                     ["segment"] = segment,
                     ["index"] = index,
                     ["samples"] = samples,
+                    ["format"] = format,
+                    ["mimeType"] = format == "wav" ? "audio/wav" : "audio/ogg",
                 });
-                recordingFiles.Add((material, source, samples, segment, index));
+                recordingFiles.Add((material, source, samples, segment, index, format));
             }
 
             var markerMaterialId = ServerNoteMaterialStableId.ForRecordingChunk(
@@ -344,10 +369,10 @@ public sealed class ServerNoteMaterialBundleBuilder
                 "RecordingManifest",
                 recordingJsonText,
                 recordingId: recordingId.ToString("D")));
-            foreach (var (material, source, samples, segment, index) in recordingFiles)
+            foreach (var (material, source, samples, segment, index, format) in recordingFiles)
             {
                 outputs.Add(new ServerNoteMaterialFile(
-                    $"{prefix}/s{segment:D4}-c{index:D6}.wav",
+                    $"{prefix}/s{segment:D4}-c{index:D6}.{format}",
                     "AudioChunk",
                     material.ContentSha256,
                     material.Length,

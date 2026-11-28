@@ -1077,13 +1077,20 @@ public sealed class CloudNoteMaterialService
                     throw new InvalidDataException("服务器录音分片材料标识重复。");
                 }
 
+                var extension = Path.GetExtension(materialFile.Path).ToLowerInvariant();
+                var mediaType = extension switch
+                {
+                    ".wav" => "audio/wav",
+                    ".opus" => "audio/ogg",
+                    _ => throw new InvalidDataException("服务器录音分片格式不受支持。"),
+                };
                 chunkNumber++;
                 materials.Add(new LocalNoteServerMaterialInput(
                     materialId,
                     LocalNoteMaterialKind.RecordingSegment,
-                    $"录音-{materials.Count + 1:D3}-s{segment:D4}-c{chunkIndex:D6}.wav",
+                    $"录音-{materials.Count + 1:D3}-s{segment:D4}-c{chunkIndex:D6}{extension}",
                     materialFile.Sha256,
-                    "audio/wav",
+                    mediaType,
                     materialFile.SizeBytes,
                     stagedFiles[materialFile.Path],
                     ExpectedSamples: samples,

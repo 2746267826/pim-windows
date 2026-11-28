@@ -799,11 +799,21 @@ public class ApiClient
         {
             response.EnsureSuccessStatusCode();
 
-            var mediaType = response.Content.Headers.ContentType?.MediaType;
-            if (!string.Equals(mediaType, "application/octet-stream", StringComparison.OrdinalIgnoreCase))
+            var contentType = response.Content.Headers.ContentType;
+            var mediaType = contentType?.MediaType;
+            if (!ContractOperation.DownloadNoteMaterialFile.ResponseMediaTypes.Any(
+                    allowed => string.Equals(
+                        allowed,
+                        mediaType,
+                        StringComparison.OrdinalIgnoreCase)
+                        || allowed.Contains(';')
+                            && string.Equals(
+                                allowed,
+                                contentType?.ToString(),
+                                StringComparison.OrdinalIgnoreCase)))
             {
                 throw new InvalidDataException(
-                    "note material response must use application/octet-stream content type");
+                    "note material response must use a contract-declared content type");
             }
 
             var declaredLength = response.Content.Headers.ContentLength;

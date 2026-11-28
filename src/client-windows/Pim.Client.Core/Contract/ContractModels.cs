@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 5f5bffc67f26d70a15507d093d526c62c27270f4627a5feaba97b79be6eb73e7)
+//   契约快照      : contract/openapi.json (sha256 6fed0a41ff1c1451553fa62be850d5f79336f039d51db0690b0f73b498d5cdf6)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -34,6 +34,18 @@ public sealed class AiAsrDestinationConsent
     /// <summary>契约字段 <c>presetVersion</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("presetVersion")]
     public required string PresetVersion { get; set; }
+}
+
+/// <summary>契约 <c>components.schemas.AiPurpose</c>（response）。</summary>
+/// <summary>
+/// 契约枚举 <c>AiPurpose</c>：wire 值由生成 converter 精确往返。
+/// </summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter))]
+public enum AiPurpose
+{
+    NoteOrganization,
+    NoteTodo,
+    CalendarPlanning,
 }
 
 /// <summary>契约 <c>components.schemas.AppKnowledgeAppDto</c>（response）。</summary>
@@ -1027,6 +1039,9 @@ public sealed class EventResponse
     /// <summary>契约字段 <c>categories</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("categories")]
     public System.Collections.Generic.List<string>? Categories { get; set; }
+    /// <summary>契约字段 <c>clientOperationId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("clientOperationId")]
+    public string? ClientOperationId { get; set; }
     /// <summary>契约字段 <c>description</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("description")]
     public string? Description { get; set; }
@@ -1129,6 +1144,12 @@ public sealed class EventResponse
     /// <summary>契约字段 <c>reminderMinutesBeforeStart</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("reminderMinutesBeforeStart")]
     public int? ReminderMinutesBeforeStart { get; set; }
+    /// <summary>契约字段 <c>replayed</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("replayed")]
+    public bool Replayed { get; set; }
+    /// <summary>契约字段 <c>requiresConfirmation</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("requiresConfirmation")]
+    public bool RequiresConfirmation { get; set; }
     /// <summary>契约字段 <c>sensitivity</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("sensitivity")]
     public string? Sensitivity { get; set; }
@@ -1168,6 +1189,12 @@ public sealed class EventResponse
     /// <summary>契约字段 <c>uid</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("uid")]
     public required string Uid { get; set; }
+    /// <summary>契约字段 <c>undoAvailable</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("undoAvailable")]
+    public bool UndoAvailable { get; set; }
+    /// <summary>契约字段 <c>userMessage</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("userMessage")]
+    public string? UserMessage { get; set; }
 }
 
 /// <summary>契约 <c>components.schemas.EventResponseApiResponse</c>（response）。</summary>
@@ -2231,9 +2258,15 @@ public sealed class NoteDerivedDestinationDto
 /// <summary>契约 <c>components.schemas.NoteDerivedDestinationsDto</c>（response）。</summary>
 public sealed class NoteDerivedDestinationsDto
 {
+    /// <summary>契约字段 <c>defaultModelId</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("defaultModelId")]
+    public string? DefaultModelId { get; set; }
     /// <summary>契约字段 <c>items</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("items")]
     public required System.Collections.Generic.List<NoteDerivedDestinationDto> Items { get; set; }
+    /// <summary>契约字段 <c>purpose</c>。</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("purpose")]
+    public AiPurpose? Purpose { get; set; }
     /// <summary>契约字段 <c>total</c>。</summary>
     [System.Text.Json.Serialization.JsonPropertyName("total")]
     public required int Total { get; set; }

@@ -1172,12 +1172,22 @@ public sealed class LocalNoteStore
                 }
                 else if (input.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
                 {
-                    var samples = await ServerNoteMaterialBundleBuilder.ValidatePcm16WaveAsync(
-                        targetPath,
-                        cancellationToken);
-                    if (input.ExpectedSamples is { } expectedSamples && samples != expectedSamples)
+                    if (string.Equals(input.MediaType, "audio/wav", StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new LocalNoteStoreException("服务器录音 WAV 样本数与 manifest 不一致。");
+                        var samples = await ServerNoteMaterialBundleBuilder.ValidatePcm16WaveAsync(
+                            targetPath,
+                            cancellationToken);
+                        if (input.ExpectedSamples is { } expectedSamples && samples != expectedSamples)
+                        {
+                            throw new LocalNoteStoreException("服务器录音 WAV 样本数与 manifest 不一致。");
+                        }
+                    }
+                    else if (!string.Equals(
+                            input.MediaType,
+                            "audio/ogg",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new LocalNoteStoreException("服务器录音分片格式不受支持。");
                     }
                 }
 
@@ -2127,7 +2137,9 @@ public sealed class LocalNoteStore
         {
             "image/png" => ".png",
             "image/jpeg" => ".jpg",
+            "image/webp" => ".webp",
             "audio/wav" or "audio/x-wav" => ".wav",
+            "audio/ogg" => ".opus",
             "application/vnd.pim.ink+json" => ".ink.json",
             _ => ".bin",
         };
@@ -2137,7 +2149,9 @@ public sealed class LocalNoteStore
     {
         ".png" => "image/png",
         ".jpg" or ".jpeg" => "image/jpeg",
+        ".webp" => "image/webp",
         ".wav" => "audio/wav",
+        ".opus" => "audio/ogg",
         ".json" or ".ink.json" => "application/json",
         _ => "application/octet-stream",
     };

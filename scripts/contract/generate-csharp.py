@@ -233,7 +233,19 @@ NOTE_MATERIAL_FILE_HEADER_KINDS = {
 
 BINARY_RESPONSE_BOUNDARIES = {
     SEGMENT_CONTENT_PATH: ("audio/wav", RESPONSE_HEADER_KINDS),
-    NOTE_MATERIAL_FILE_PATH: ("application/octet-stream", NOTE_MATERIAL_FILE_HEADER_KINDS),
+    NOTE_MATERIAL_FILE_PATH: (
+        (
+            "application/json",
+            "application/octet-stream",
+            "audio/ogg",
+            "audio/wav",
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "text/markdown; charset=utf-8",
+        ),
+        NOTE_MATERIAL_FILE_HEADER_KINDS,
+    ),
 }
 
 
@@ -510,20 +522,22 @@ def validate_response_header_schema(
 def validate_binary_response(
         op_path: str,
         response: dict,
-        media_type: str,
+        media_types: tuple[str, ...] | str,
         header_kinds: dict[str, str]) -> None:
-    """Require the exact binary media type and exact modeled response headers."""
+    """Require the exact binary media types and exact modeled response headers."""
+    allowed = (media_types,) if isinstance(media_types, str) else media_types
     content = response.get("content") or {}
-    if set(content.keys()) != {media_type}:
+    if set(content.keys()) != set(allowed):
         raise GenerationError(
-            f"operation {op_path} 的 200 响应必须恰好使用 {media_type}："
+            f"operation {op_path} 的 200 响应必须恰好使用 {sorted(allowed)}："
             f"{sorted(content.keys())}"
         )
-    schema = content[media_type].get("schema") or {}
-    if schema != {"type": "string", "format": "binary"}:
-        raise GenerationError(
-            f"operation {op_path} 的 200 {media_type} 必须是 string/binary 根 schema。"
-        )
+    for media_type in content:
+        schema = content[media_type].get("schema") or {}
+        if schema != {"type": "string", "format": "binary"}:
+            raise GenerationError(
+                f"operation {op_path} 的 200 {media_type} 必须是 string/binary 根 schema。"
+            )
 
     headers = response.get("headers") or {}
     if set(headers.keys()) != set(header_kinds):
@@ -669,13 +683,13 @@ def success_response_schemas(op: dict, op_path: str = "") -> list[dict]:
         if not str(status).startswith("2"):
             continue
         has_responses = True
+        boundary = BINARY_RESPONSE_BOUNDARIES.get(op_path)
+        if boundary is not None and str(status) == "200":
+            media_type, header_kinds = boundary
+            validate_binary_response(op_path, response, media_type, header_kinds)
+            continue
         media = (response.get("content") or {}).get("application/json")
         if media is None or media.get("schema") is None:
-            boundary = BINARY_RESPONSE_BOUNDARIES.get(op_path)
-            if boundary is not None and str(status) == "200":
-                media_type, header_kinds = boundary
-                validate_binary_response(op_path, response, media_type, header_kinds)
-                continue
             raise GenerationError(f"operation 的 {status} 响应不是 application/json（生成器只支持 JSON 边界）")
         if (response.get("headers") or {}):
             raise GenerationError(
@@ -1208,7 +1222,7 @@ def operation_metadata(entry: dict, contract: dict) -> dict:
             query_parameters.append((name, shape, parameter.get("required") is True, allowed_values))
         elif parameter.get("in") == "header":
             request_headers.append((name, shape))
-    response_media = "application/json"
+    response_media_types = ["application/json"]
     response_headers = []
     binary_boundary = BINARY_RESPONSE_BOUNDARIES.get(full_path)
     for status, response in (op.get("responses") or {}).items():
@@ -1218,11 +1232,12 @@ def operation_metadata(entry: dict, contract: dict) -> dict:
         if binary_boundary is not None:
             media_type, header_kinds = binary_boundary
             validate_binary_response(full_path, response, media_type, header_kinds)
-            response_media = media_type
+            response_media_types = (
+                [media_type] if isinstance(media_type, str) else list(media_type))
         elif media_types:
             if media_types != ["application/json"]:
                 raise GenerationError(f"operation {full_path} 的 200 媒体类型未建模：{media_types}")
-            response_media = media_types[0]
+            response_media_types = media_types
         for header_name, header_schema in (response.get("headers") or {}).items():
             if binary_boundary is None:
                 raise GenerationError(
@@ -1238,7 +1253,7 @@ def operation_metadata(entry: dict, contract: dict) -> dict:
         "queryParameters": query_parameters,
         "requestMediaType": request_media_type,
         "requestHeaders": request_headers,
-        "responseMediaType": response_media,
+        "responseMediaTypes": response_media_types,
         "responseHeaders": response_headers,
     }
 
@@ -1266,6 +1281,8 @@ def render_operation_entry(entry: dict, contract: dict) -> list[str]:
         f'new("{name}", "{kind}")' for name, kind in metadata["requestHeaders"])
     response_headers = ", ".join(
         f'new("{name}", "{kind}")' for name, kind in metadata["responseHeaders"])
+    response_media_types = ", ".join(
+        json.dumps(media_type) for media_type in metadata["responseMediaTypes"])
     request_media_type = (
         "null"
         if metadata["requestMediaType"] is None
@@ -1277,7 +1294,7 @@ def render_operation_entry(entry: dict, contract: dict) -> list[str]:
         f'            new ContractQueryParameter[] {{ {query_parameters} }},',
         f'            new ContractHeader[] {{ {request_headers} }},',
         f'            {request_media_type},',
-        f'            "{metadata["responseMediaType"]}",',
+        f'            new string[] {{ {response_media_types} }},',
         f'            new ContractHeader[] {{ {response_headers} }});',
     ]
 
@@ -1309,7 +1326,7 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "        System.Collections.Generic.IReadOnlyList<ContractQueryParameter> queryParameters,",
         "        System.Collections.Generic.IReadOnlyList<ContractHeader> requestHeaders,",
         "        string? requestMediaType,",
-        "        string responseMediaType,",
+        "        System.Collections.Generic.IReadOnlyList<string> responseMediaTypes,",
         "        System.Collections.Generic.IReadOnlyList<ContractHeader> responseHeaders)",
         "    {",
         "        HttpMethod = httpMethod;",
@@ -1320,7 +1337,7 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "        QueryParameters = queryParameters;",
         "        RequestHeaders = requestHeaders;",
         "        RequestMediaType = requestMediaType;",
-        "        ResponseMediaType = responseMediaType;",
+        "        ResponseMediaTypes = responseMediaTypes;",
         "        ResponseHeaders = responseHeaders;",
         "    }",
         "",
@@ -1348,8 +1365,8 @@ def generate_operations(contract: dict, operations: list[dict], contract_sha: st
         "    /// <summary>契约声明的请求体媒体类型；无请求体时为 null。</summary>",
         "    public string? RequestMediaType { get; }",
         "",
-        "    /// <summary>2xx 响应的媒体类型；非 JSON（如 audio/wav）由客户端按流处理。</summary>",
-        "    public string ResponseMediaType { get; }",
+        "    /// <summary>契约声明的 200 响应媒体类型；非 JSON（如 audio/wav）由客户端按流处理。</summary>",
+        "    public System.Collections.Generic.IReadOnlyList<string> ResponseMediaTypes { get; }",
         "",
         "    /// <summary>契约声明的响应 header（用于下载流的身份/完整性绑定）。</summary>",
         "    public System.Collections.Generic.IReadOnlyList<ContractHeader> ResponseHeaders { get; }",

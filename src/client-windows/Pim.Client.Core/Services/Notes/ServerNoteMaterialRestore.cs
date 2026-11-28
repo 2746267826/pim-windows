@@ -356,10 +356,7 @@ public static class ServerNoteMaterialRestoreParser
             if (file.Kind == "AudioChunk"
                 && (file.Segment is not > 0
                     || file.ChunkIndex is not > 0
-                    || !string.Equals(
-                        file.Path,
-                        $"recordings/{file.RecordingId}/s{file.Segment:D4}-c{file.ChunkIndex:D6}.wav",
-                        StringComparison.Ordinal)))
+                    || !IsRecordingChunkPath(file)))
             {
                 throw new LocalNoteStoreException($"服务器录音分片路径与索引不一致：{file.Path}");
             }
@@ -376,6 +373,14 @@ public static class ServerNoteMaterialRestoreParser
                 throw new LocalNoteStoreException("服务器 note.json、manifest 与 document.md 正文不一致。");
             }
         }
+    }
+
+    private static bool IsRecordingChunkPath(ServerNoteMaterialRestoreFile file)
+    {
+        var prefix = $"recordings/{file.RecordingId}/s{file.Segment:D4}-c{file.ChunkIndex:D6}";
+        return file.Path is var path
+            && (string.Equals(path, prefix + ".wav", StringComparison.Ordinal)
+                || string.Equals(path, prefix + ".opus", StringComparison.Ordinal));
     }
 
     private static string ProjectMarkdown(

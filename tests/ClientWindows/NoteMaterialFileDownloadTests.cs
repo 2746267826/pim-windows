@@ -124,6 +124,40 @@ public class NoteMaterialFileDownloadTests
         Assert.True(content.Disposed);
     }
 
+    [Theory]
+    [InlineData("application/json")]
+    [InlineData("application/octet-stream")]
+    [InlineData("audio/ogg")]
+    [InlineData("audio/wav")]
+    [InlineData("image/jpeg")]
+    [InlineData("image/png")]
+    [InlineData("image/webp")]
+    [InlineData("text/markdown; charset=utf-8")]
+    public async Task Download_AcceptsEveryContractMediaType(string mediaType)
+    {
+        var payload = "material"u8.ToArray();
+        var content = new TrackingContent(payload);
+        var handler = new StubHandler(() =>
+        {
+            var response = NoteMaterialResponse(content, payload);
+            content.Headers.ContentType = MediaTypeHeaderValue.Parse(mediaType);
+            return response;
+        });
+        var api = new ApiClient(() => handler);
+
+        await using var download = await api.DownloadNoteMaterialFileAsync(
+            VersionId,
+            0,
+            maxContentBytes: 1024);
+
+        Assert.IsType<NoteMaterialFileDownload>(download);
+        Assert.Equal(
+            mediaType.Split(';')[0],
+            content.Headers.ContentType!.MediaType);
+        await download.DisposeAsync();
+        Assert.True(content.Disposed);
+    }
+
     [Fact]
     public async Task Download_RejectsDeclaredLengthAboveBudgetBeforeReading()
     {
