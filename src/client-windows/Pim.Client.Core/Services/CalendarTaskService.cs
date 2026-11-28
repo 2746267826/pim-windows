@@ -91,6 +91,7 @@ public sealed class CalendarTaskService(ApiClient api)
         bool isAllDay,
         string? location,
         string? description,
+        Guid? clientOperationId = null,
         CancellationToken cancellationToken = default)
     {
         if (calendarId == Guid.Empty)
@@ -98,7 +99,10 @@ public sealed class CalendarTaskService(ApiClient api)
         var cleanTitle = RequireTitle(title, "日程标题");
         if (end <= start)
             throw new ArgumentException("日程结束时间必须晚于开始时间。", nameof(end));
+        if (clientOperationId == Guid.Empty)
+            throw new ArgumentException("日程幂等键不能为空。", nameof(clientOperationId));
 
+        var operationId = clientOperationId ?? Guid.NewGuid();
         var response = await _api.CreateCalendarEventAsync(
             new CreateEventRequest
             {
@@ -110,12 +114,21 @@ public sealed class CalendarTaskService(ApiClient api)
                 Location = CleanOptional(location),
                 Title = cleanTitle,
             },
+            operationId,
             cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidDataException("服务器没有返回新日程。");
         var created = RequireResponse(response.Code, response.Message, response.Data);
         if (!string.Equals(created.CalendarId, calendarId.ToString("D"), StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("服务器返回的新日程不属于所选举日历。");
+        }
+        if (created.ClientOperationId is { Length: > 0 } returnedOperationId
+            && !string.Equals(
+                returnedOperationId,
+                operationId.ToString("D"),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("服务器返回的新日程幂等键与请求不一致。");
         }
 
         return created;

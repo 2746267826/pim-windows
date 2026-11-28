@@ -310,11 +310,25 @@ public class ApiClient
     /// <summary><c>POST /api/v1/calendar/events</c>。</summary>
     public Task<EventResponseApiResponse?> CreateCalendarEventAsync(
         CreateEventRequest request,
+        Guid? clientOperationId = null,
         CancellationToken ct = default)
-        => SendJsonAsync<EventResponseApiResponse>(
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var queryValues = clientOperationId is null
+            ? null
+            : new (string Name, string? Value)[]
+            {
+                ("clientOperationId", RequireGuid(
+                    clientOperationId.Value,
+                    nameof(clientOperationId)).ToString("D")),
+            };
+        return SendAsync<EventResponseApiResponse>(
             ContractOperation.CreateCalendarEvent,
-            request ?? throw new ArgumentNullException(nameof(request)),
-            ct);
+            null,
+            request,
+            ct,
+            queryValues: queryValues);
+    }
 
     /// <summary><c>GET /api/v1/calendar/task-books</c>。</summary>
     public Task<TaskBookDtoIReadOnlyListApiResponse?> GetTaskBooksAsync(

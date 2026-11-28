@@ -779,7 +779,10 @@ public class ContractBoundaryBehaviorTests
                 IsAllDay = false,
                 Title = "设计评审",
             },
-            (api, req) => api.CreateCalendarEventAsync((CreateEventRequest)req!)),
+            (api, req) => api.CreateCalendarEventAsync(
+                (CreateEventRequest)req!,
+                Guid.Parse("99999999-9999-9999-9999-999999999999")),
+            ExpectedQuery: "?clientOperationId=99999999-9999-9999-9999-999999999999"),
         new("POST", "/api/v1/calendar/tasks",
             new CreateTaskRequest
             {

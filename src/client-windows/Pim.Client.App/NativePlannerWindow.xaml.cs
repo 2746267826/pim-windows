@@ -17,6 +17,7 @@ public partial class NativePlannerWindow : Window
     private readonly SemaphoreSlim _taskGate = new(1, 1);
     private readonly NativePlannerUiState _eventUi = new();
     private readonly NativePlannerUiState _taskUi = new();
+    private readonly CalendarEventDraftKey _eventDraftKey = new();
     private bool _loading;
     private bool _suppressSelection;
     private bool _closed;
@@ -335,6 +336,14 @@ public partial class NativePlannerWindow : Window
             return;
         }
 
+        var operationId = _eventDraftKey.Resolve(
+            calendarId,
+            title,
+            start,
+            end,
+            isAllDay,
+            location,
+            description);
         CreateEventButton.IsEnabled = false;
         EventCreateStateText.Text = "正在创建日程…";
         try
@@ -346,12 +355,14 @@ public partial class NativePlannerWindow : Window
                 end,
                 isAllDay,
                 location,
-                description);
+                description,
+                operationId);
             if (_closed || account != CurrentAccount())
             {
                 return;
             }
 
+            _eventDraftKey.Reset();
             EventCreateStateText.Text = $"已创建：{created.Title}";
             EventTitleBox.Clear();
             EventLocationBox.Clear();
@@ -728,6 +739,7 @@ public partial class NativePlannerWindow : Window
     {
         _eventUi.Invalidate();
         _taskUi.Invalidate();
+        _eventDraftKey.Reset();
         if (_closed)
         {
             return;
