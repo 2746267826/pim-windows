@@ -238,6 +238,50 @@ public sealed class LocalNoteStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task RecordingCheckpointKeepsOneRecordingIdentityAcrossSameNoteSegments()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("补录");
+        var recordingId = Guid.NewGuid();
+
+        var first = await store.AddMaterialsAsync(
+            note.NoteId,
+            [
+                new LocalNoteMaterialInput(
+                    new MemoryStream(CreateSyntheticWave(sampleCount: 1600)),
+                    "补录 1.wav",
+                    LocalNoteMaterialKind.Recording,
+                    "audio/wav",
+                    DurationMilliseconds: 100,
+                    RecordingId: recordingId,
+                    RecordingSegment: 1,
+                    RecordingChunkIndex: 1),
+            ],
+            LocalNoteCheckpointReason.RecordingAdded);
+        var second = await store.AddMaterialsAsync(
+            note.NoteId,
+            [
+                new LocalNoteMaterialInput(
+                    new MemoryStream(CreateSyntheticWave(sampleCount: 3200)),
+                    "补录 2.wav",
+                    LocalNoteMaterialKind.Recording,
+                    "audio/wav",
+                    DurationMilliseconds: 200,
+                    RecordingId: recordingId,
+                    RecordingSegment: 2,
+                    RecordingChunkIndex: 1),
+            ],
+            LocalNoteCheckpointReason.RecordingAdded);
+
+        Assert.Equal(recordingId, Assert.Single(first.Materials).RecordingId);
+        Assert.Equal(2, second.Materials.Count);
+        Assert.Equal([recordingId, recordingId], second.Materials.Select(material => material.RecordingId));
+        Assert.Equal([1, 2], second.Materials.Select(material => material.RecordingSegment));
+        var version = await store.LoadVersionAsync(note.NoteId, second.CurrentVersionId);
+        Assert.Equal(LocalNoteCheckpointReason.RecordingAdded, version.Reason);
+    }
+
+    [Fact]
     public async Task HandwritingStylesSurviveLocalSaveExportAndPackageImport()
     {
         var store = new LocalNoteStore(_root);

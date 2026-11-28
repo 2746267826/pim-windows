@@ -114,14 +114,7 @@ public partial class NativeNotesWindow : Window
             if (_recording.IsRecording)
             {
                 RecordButton.Content = "■ 停止本段";
-                OnRecordingStateChanged(
-                    null,
-                    new WindowsRecordingState(
-                        true,
-                        _recording.CurrentNoteId,
-                        TimeSpan.Zero,
-                        0,
-                        null));
+                OnRecordingStateChanged(null, _recording.CurrentState);
             }
         }
         catch (Exception ex)
@@ -1547,8 +1540,21 @@ public partial class NativeNotesWindow : Window
         {
             if (state.IsRecording)
             {
-                RecordingStatusText.Text =
-                    $"本段录音中 {state.Elapsed:mm\\:ss} · 实际输入峰值 {state.PeakLevel:P0}";
+                var otherNote = _current is not null
+                    && state.NoteId is { } recordingNoteId
+                    && recordingNoteId != _current.NoteId;
+                RecordingStatusText.Text = otherNote
+                    ? $"另一篇笔记正在录音 · 第 {state.SegmentNumber} 段 {state.Elapsed:mm\\:ss}；停止会保存回开始时的笔记"
+                    : state.Error is not null
+                        ? $"{state.Error} · 本段 {state.Elapsed:mm\\:ss}"
+                        : state.SegmentNumber > 0
+                            ? $"第 {state.SegmentNumber} 段录音中 {state.Elapsed:mm\\:ss} · 实际输入峰值 {state.PeakLevel:P0}"
+                            : $"本段录音中 {state.Elapsed:mm\\:ss} · 实际输入峰值 {state.PeakLevel:P0}";
+                if (RecordButton is not null && state.SegmentNumber > 0)
+                {
+                    RecordButton.Content = $"■ 停止第 {state.SegmentNumber} 段";
+                }
+
                 ApplyEditorInteractionState();
                 UpdateWindowChrome();
                 return;
@@ -2648,7 +2654,10 @@ public partial class NativeNotesWindow : Window
 
     private void UpdateWindowChrome()
     {
-        _windowState.SetRecording(_recording.IsRecording);
+        var state = _recording.CurrentState;
+        var recordingCurrentNote = state.IsRecording
+            && (_current is null || state.NoteId == _current.NoteId);
+        _windowState.SetRecording(recordingCurrentNote, state.SegmentNumber);
         if (_current is null)
         {
             _windowState.ShowLibrary(_notes.Count > 0);
@@ -2673,6 +2682,21 @@ public partial class NativeNotesWindow : Window
         }
 
         _saveTimer.Stop();
+        if (!_allowClose && _recording.IsRecording)
+        {
+            var keepRecording = MessageBox.Show(
+                this,
+                "录音仍在进行。关闭窗口会保留录音，可从托盘「停止并保存笔记录音」结束。\n\n是否继续关闭窗口？",
+                "本段录音仍在进行",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) == MessageBoxResult.Yes;
+            if (!keepRecording)
+            {
+                e.Cancel = true;
+                return;
+            }
+        }
+
         if (_cloudUi.IsDraftDirty
             && MessageBox.Show(
                 this,

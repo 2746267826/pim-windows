@@ -14,6 +14,7 @@ public sealed class NativeNoteWindowState : INotifyPropertyChanged
     private string _windowTitle = "笔记库";
     private string _editorContext = "从一页空白开始";
     private bool _isRecording;
+    private int _recordingSegment;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -31,10 +32,13 @@ public sealed class NativeNoteWindowState : INotifyPropertyChanged
         private set => SetField(ref _editorContext, value);
     }
 
+    public int RecordingSegment => _recordingSegment;
+
     public void ShowLibrary(bool hasNotes)
     {
         _noteId = null;
         _isRecording = false;
+        _recordingSegment = 0;
         WindowTitle = hasNotes ? "选择一篇笔记" : "笔记库";
         EditorContext = hasNotes ? "选择一篇笔记继续" : "从一页空白开始";
     }
@@ -62,13 +66,18 @@ public sealed class NativeNoteWindowState : INotifyPropertyChanged
     }
 
     public void SetRecording(bool isRecording)
+        => SetRecording(isRecording, 0);
+
+    public void SetRecording(bool isRecording, int segmentNumber)
     {
-        if (_isRecording == isRecording)
+        var normalizedSegment = isRecording ? Math.Max(segmentNumber, 0) : 0;
+        if (_isRecording == isRecording && _recordingSegment == normalizedSegment)
         {
             return;
         }
 
         _isRecording = isRecording;
+        _recordingSegment = normalizedSegment;
         UpdateContext();
     }
 
@@ -88,7 +97,9 @@ public sealed class NativeNoteWindowState : INotifyPropertyChanged
         }
 
         EditorContext = _isRecording
-            ? "正在记录 · 本机草稿"
+            ? _recordingSegment > 0
+                ? $"正在记录 · 第 {_recordingSegment} 段 · 本机草稿"
+                : "正在记录 · 本机草稿"
             : "本机草稿 · 自动保存";
     }
 

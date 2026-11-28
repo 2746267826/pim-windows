@@ -242,6 +242,32 @@ public sealed class LocalNoteStore
         IReadOnlyList<LocalNoteMaterialInput> inputs,
         CancellationToken cancellationToken = default,
         Guid? expectedCurrentVersionId = null)
+        => await AddMaterialsWithCheckpointAsync(
+            noteId,
+            inputs,
+            LocalNoteCheckpointReason.MaterialAdded,
+            cancellationToken,
+            expectedCurrentVersionId);
+
+    public async Task<LocalNoteDocument> AddMaterialsAsync(
+        Guid noteId,
+        IReadOnlyList<LocalNoteMaterialInput> inputs,
+        LocalNoteCheckpointReason checkpointReason,
+        CancellationToken cancellationToken = default,
+        Guid? expectedCurrentVersionId = null)
+        => await AddMaterialsWithCheckpointAsync(
+            noteId,
+            inputs,
+            checkpointReason,
+            cancellationToken,
+            expectedCurrentVersionId);
+
+    private async Task<LocalNoteDocument> AddMaterialsWithCheckpointAsync(
+        Guid noteId,
+        IReadOnlyList<LocalNoteMaterialInput> inputs,
+        LocalNoteCheckpointReason checkpointReason,
+        CancellationToken cancellationToken,
+        Guid? expectedCurrentVersionId)
     {
         if (inputs.Count == 0)
         {
@@ -270,9 +296,10 @@ public sealed class LocalNoteStore
                 materials.Add(await AddMaterialLockedAsync(input, cancellationToken));
             }
 
-            var reason = inputs.Any(input => input.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
-                ? LocalNoteCheckpointReason.RecordingAdded
-                : LocalNoteCheckpointReason.MaterialAdded;
+            var reason = checkpointReason == LocalNoteCheckpointReason.MaterialAdded
+                && inputs.Any(input => input.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
+                    ? LocalNoteCheckpointReason.RecordingAdded
+                    : checkpointReason;
             return await CreateCheckpointLockedAsync(
                 note,
                 note.Title,
@@ -1450,6 +1477,9 @@ public sealed class LocalNoteStore
                 Width = input.Width,
                 Height = input.Height,
                 DurationMilliseconds = input.DurationMilliseconds,
+                RecordingId = input.RecordingId,
+                RecordingSegment = input.RecordingSegment,
+                RecordingChunkIndex = input.RecordingChunkIndex,
             };
         }
         finally

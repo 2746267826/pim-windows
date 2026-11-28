@@ -8,6 +8,8 @@ namespace Pim.Client.App;
 public sealed record WindowsRecordingState(
     bool IsRecording,
     Guid? NoteId,
+    Guid? RecordingId,
+    int SegmentNumber,
     TimeSpan Elapsed,
     double PeakLevel,
     string? Error);
@@ -16,7 +18,10 @@ public sealed record WindowsRecordingResult(
     Guid NoteId,
     string SourcePath,
     WavePcmResult Wave,
-    LocalNoteDocument Note);
+    LocalNoteDocument Note)
+{
+    public bool IsBoundToAnotherNote(Guid currentNoteId) => currentNoteId != NoteId;
+}
 
 public interface IAudioCaptureBackend : IDisposable
 {
@@ -42,11 +47,19 @@ public sealed class WindowsRecordingService : IAsyncDisposable
     private readonly string _recordingsRoot;
     private readonly object _sync = new();
     private readonly Stopwatch _elapsed = new();
+    private readonly Timer _statusTimer;
     private IAudioCaptureBackend? _capture;
     private WavePcmWriter? _writer;
     private Guid? _noteId;
+    private Guid? _recordingId;
+    private int _segmentNumber;
+    private int _recordingSegment;
+    private bool _starting;
     private bool _stopping;
+    private bool _suspended;
+    private bool _disposed;
     private string? _lastError;
+    private WindowsRecordingState? _lastPublishedState;
 
     public WindowsRecordingService(LocalNoteStore store)
         : this(
@@ -67,6 +80,7 @@ public sealed class WindowsRecordingService : IAsyncDisposable
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _captureFactory = captureFactory ?? throw new ArgumentNullException(nameof(captureFactory));
         _recordingsRoot = Path.GetFullPath(recordingsRoot);
+        _statusTimer = new Timer(_ => PublishState(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
     public event EventHandler<WindowsRecordingState>? StateChanged;
@@ -77,7 +91,7 @@ public sealed class WindowsRecordingService : IAsyncDisposable
         {
             lock (_sync)
             {
-                return _capture is not null;
+                return _writer is not null;
             }
         }
     }
@@ -93,6 +107,17 @@ public sealed class WindowsRecordingService : IAsyncDisposable
         }
     }
 
+    public WindowsRecordingState CurrentState
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return BuildStateLocked();
+            }
+        }
+    }
+
     public async Task StartAsync(Guid noteId, CancellationToken cancellationToken = default)
     {
         if (noteId == Guid.Empty)
@@ -102,53 +127,69 @@ public sealed class WindowsRecordingService : IAsyncDisposable
 
         lock (_sync)
         {
-            if (_capture is not null)
+            if (_disposed || _writer is not null || _starting)
             {
-                throw new InvalidOperationException("已有录音正在进行；没有启动第二个采集设备。");
+                throw new InvalidOperationException(
+                    _disposed
+                        ? "录音服务已关闭。"
+                        : "已有录音正在进行；没有启动第二个采集设备。");
             }
+
+            _starting = true;
         }
 
-        await _store.LoadAsync(noteId, cancellationToken);
-        Directory.CreateDirectory(_recordingsRoot);
-        var path = Path.Combine(
-            _recordingsRoot,
-            $"{DateTimeOffset.Now:yyyyMMdd-HHmmss}-{noteId:N}-{Guid.NewGuid():N}.wav");
-        var writer = new WavePcmWriter(path, SampleRate, Channels, BitsPerSample);
-        IAudioCaptureBackend? capture = null;
         try
         {
-            capture = _captureFactory.Create(SampleRate, Channels, BitsPerSample);
-            capture.DataAvailable += data =>
-            {
-                writer.Append(data);
-                PublishState();
-            };
-            capture.Start();
-            lock (_sync)
-            {
-                _writer = writer;
-                _capture = capture;
-                _noteId = noteId;
-                _stopping = false;
-                _lastError = null;
-                _elapsed.Restart();
-            }
-
-            PublishState();
-        }
-        catch
-        {
-            capture?.Dispose();
-            writer.Dispose();
+            var note = await _store.LoadAsync(noteId, cancellationToken);
+            var segmentNumber = CountExistingSegments(note) + 1;
+            Directory.CreateDirectory(_recordingsRoot);
+            var path = Path.Combine(
+                _recordingsRoot,
+                $"{DateTimeOffset.Now:yyyyMMdd-HHmmss}-{noteId:N}-s{segmentNumber:D4}-{Guid.NewGuid():N}.wav");
+            var writer = new WavePcmWriter(path, SampleRate, Channels, BitsPerSample);
+            var recordingId = Guid.NewGuid();
+            IAudioCaptureBackend? capture = null;
             try
             {
-                File.Delete(path);
+                capture = CreateCapture(writer);
+                lock (_sync)
+                {
+                    _writer = writer;
+                    _capture = capture;
+                    _noteId = noteId;
+                    _recordingId = recordingId;
+                    _segmentNumber = segmentNumber;
+                    _recordingSegment = 1;
+                    _stopping = false;
+                    _suspended = false;
+                    _lastError = null;
+                    _elapsed.Restart();
+                    _statusTimer.Change(1_000, 1_000);
+                }
+
+                PublishState();
             }
             catch
             {
-            }
+                capture?.Dispose();
+                writer.Dispose();
+                try
+                {
+                    File.Delete(path);
+                }
+                catch
+                {
+                }
 
-            throw;
+                throw;
+            }
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _starting = false;
+            }
         }
     }
 
@@ -157,9 +198,12 @@ public sealed class WindowsRecordingService : IAsyncDisposable
         IAudioCaptureBackend? capture;
         WavePcmWriter? writer;
         Guid noteId;
+        Guid recordingId;
+        int segmentNumber;
+        int recordingSegment;
         lock (_sync)
         {
-            if (_capture is null || _writer is null || _noteId is null)
+            if (_writer is null || _noteId is null)
             {
                 return null;
             }
@@ -173,23 +217,29 @@ public sealed class WindowsRecordingService : IAsyncDisposable
             capture = _capture;
             writer = _writer;
             noteId = _noteId.Value;
+            recordingId = _recordingId ?? Guid.NewGuid();
+            segmentNumber = Math.Max(_segmentNumber, 1);
+            recordingSegment = Math.Max(_recordingSegment, 1);
             _elapsed.Stop();
         }
 
         try
         {
             Exception? captureFailure = null;
-            try
+            if (capture is not null)
             {
-                capture.Stop();
-            }
-            catch (Exception ex)
-            {
-                captureFailure = ex;
-            }
-            finally
-            {
-                capture.Dispose();
+                try
+                {
+                    capture.Stop();
+                }
+                catch (Exception ex)
+                {
+                    captureFailure = ex;
+                }
+                finally
+                {
+                    capture.Dispose();
+                }
             }
 
             var wave = writer.Complete();
@@ -222,8 +272,13 @@ public sealed class WindowsRecordingService : IAsyncDisposable
                         Path.GetFileName(writer.Path),
                         LocalNoteMaterialKind.Recording,
                         "audio/wav",
-                        DurationMilliseconds: (long)wave.Duration.TotalMilliseconds),
-                ], cancellationToken);
+                        DurationMilliseconds: (long)wave.Duration.TotalMilliseconds,
+                        RecordingId: recordingId,
+                        RecordingSegment: recordingSegment,
+                        RecordingChunkIndex: 1),
+                ],
+                LocalNoteCheckpointReason.RecordingAdded,
+                cancellationToken);
             }
 
             var result = new WindowsRecordingResult(noteId, writer.Path, wave, note);
@@ -276,6 +331,99 @@ public sealed class WindowsRecordingService : IAsyncDisposable
             {
             }
         }
+
+        lock (_sync)
+        {
+            _disposed = true;
+            _statusTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        }
+
+        _statusTimer.Dispose();
+    }
+
+    /// <summary>
+    /// 系统进入睡眠前调用：停止 WinMM 采集，但保留已完成音频、笔记绑定和段号。
+    /// 返回 true 表示当时确实有录音被挂起；恢复后同一录音会话可继续接收数据。
+    /// </summary>
+    public bool Suspend()
+    {
+        IAudioCaptureBackend? capture;
+        lock (_sync)
+        {
+            if (_capture is null || _writer is null || _stopping)
+            {
+                return false;
+            }
+
+            capture = _capture;
+            _capture = null;
+            _suspended = true;
+            _elapsed.Stop();
+            _lastError = "系统睡眠，录音已暂停；唤醒后将尝试继续。";
+        }
+
+        try
+        {
+            capture.Stop();
+        }
+        catch
+        {
+        }
+        finally
+        {
+            capture.Dispose();
+        }
+
+        PublishState();
+        return true;
+    }
+
+    /// <summary>
+    /// 系统唤醒后调用：若录音只是被睡眠暂停，则重建采集设备并接回同一录音。
+    /// 设备/隐私不可用时结束录音会话并保留已采集音频，错误通过 StateChanged 暴露。
+    /// </summary>
+    public void Resume()
+    {
+        WavePcmWriter? writer;
+        lock (_sync)
+        {
+            if (!_suspended || _writer is null || _capture is not null || _stopping)
+            {
+                return;
+            }
+
+            writer = _writer;
+        }
+
+        IAudioCaptureBackend? capture = null;
+        try
+        {
+            capture = CreateCapture(writer);
+            lock (_sync)
+            {
+                if (!_suspended || _writer is not writer || _stopping)
+                {
+                    capture.Dispose();
+                    return;
+                }
+
+                _capture = capture;
+                _suspended = false;
+                _lastError = null;
+                _elapsed.Start();
+            }
+        }
+        catch (Exception ex)
+        {
+            capture?.Dispose();
+            lock (_sync)
+            {
+                _suspended = false;
+                _lastError = $"唤醒后无法继续录音：{ex.Message} 已采集的音频会在停止时保留。";
+            }
+        }
+
+        PublishState();
     }
 
     private void ResetState(bool keepError = false)
@@ -285,8 +433,13 @@ public sealed class WindowsRecordingService : IAsyncDisposable
             _capture = null;
             _writer = null;
             _noteId = null;
+            _recordingId = null;
+            _segmentNumber = 0;
+            _recordingSegment = 0;
             _stopping = false;
+            _suspended = false;
             _elapsed.Reset();
+            _statusTimer.Change(Timeout.Infinite, Timeout.Infinite);
             if (!keepError)
             {
                 _lastError = null;
@@ -299,15 +452,70 @@ public sealed class WindowsRecordingService : IAsyncDisposable
         WindowsRecordingState state;
         lock (_sync)
         {
-            state = new WindowsRecordingState(
-                _capture is not null,
-                _noteId,
-                _elapsed.Elapsed,
-                _writer?.PeakLevel ?? 0,
-                _lastError);
+            if (_disposed)
+            {
+                return;
+            }
+
+            state = BuildStateLocked();
         }
 
-        StateChanged?.Invoke(this, state);
+        if (Equals(_lastPublishedState, state))
+        {
+            return;
+        }
+
+        _lastPublishedState = state;
+        var handlers = StateChanged;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<WindowsRecordingState> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, state);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private WindowsRecordingState BuildStateLocked()
+        => new(
+            _writer is not null,
+            _noteId,
+            _recordingId,
+            _segmentNumber,
+            _elapsed.Elapsed,
+            _writer?.PeakLevel ?? 0,
+            _lastError);
+
+    private static int CountExistingSegments(LocalNoteDocument note)
+        => note.Materials.Count(material => material.Kind is LocalNoteMaterialKind.Recording
+            or LocalNoteMaterialKind.RecordingSegment);
+
+    private IAudioCaptureBackend CreateCapture(WavePcmWriter writer)
+    {
+        var capture = _captureFactory.Create(SampleRate, Channels, BitsPerSample);
+        try
+        {
+            capture.DataAvailable += data =>
+            {
+                writer.Append(data);
+                PublishState();
+            };
+            capture.Start();
+            return capture;
+        }
+        catch
+        {
+            capture.Dispose();
+            throw;
+        }
     }
 
     private static void TryDelete(string path)

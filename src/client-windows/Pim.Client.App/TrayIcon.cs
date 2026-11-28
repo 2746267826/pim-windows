@@ -10,6 +10,10 @@ namespace Pim.Client.App;
 public partial class TrayIcon : IDisposable
 {
     private System.Windows.Forms.NotifyIcon? _notifyIcon;
+    private WindowsRecordingService? _recording;
+    private System.Windows.Forms.ToolStripMenuItem? _startRecordingItem;
+    private System.Windows.Forms.ToolStripMenuItem? _stopRecordingItem;
+    private System.Windows.Forms.ToolStripMenuItem? _recordingStatusItem;
 
     /// <summary>安全告警气泡（登录凭据保存失败等）。NotifyIcon 未就绪时静默，由调用方日志兜底。</summary>
     public void NotifyWarning(string text)
@@ -31,6 +35,13 @@ public partial class TrayIcon : IDisposable
         _notifyIcon?.Dispose();
         var menu = new System.Windows.Forms.ContextMenuStrip();
         BuildContextMenu(menu);
+        _recording = App.Services.GetService<WindowsRecordingService>();
+        if (_recording is not null)
+        {
+            _recording.StateChanged += OnRecordingStateChanged;
+            ApplyRecordingState(_recording.CurrentState);
+        }
+
         _notifyIcon = new System.Windows.Forms.NotifyIcon
         {
             Icon = LoadIcon(),
@@ -48,8 +59,24 @@ public partial class TrayIcon : IDisposable
         menu.Items.Add("原生今日", null, (_, _) => OpenNativeTodayWindow());
         menu.Items.Add("原生日历与任务", null, (_, _) => OpenNativePlannerWindow());
         menu.Items.Add("打开笔记", null, (_, _) => App.ShowNotesWindow());
-        menu.Items.Add("开始笔记录音", null, async (_, _) => await StartQuickNoteRecordingAsync());
-        menu.Items.Add("停止并保存笔记录音", null, async (_, _) => await StopNoteRecordingAsync());
+        _recordingStatusItem = new System.Windows.Forms.ToolStripMenuItem("录音：未开始")
+        {
+            Enabled = false,
+        };
+        menu.Items.Add(_recordingStatusItem);
+        _startRecordingItem = new System.Windows.Forms.ToolStripMenuItem(
+            "开始笔记录音",
+            null,
+            async (_, _) => await StartQuickNoteRecordingAsync());
+        menu.Items.Add(_startRecordingItem);
+        _stopRecordingItem = new System.Windows.Forms.ToolStripMenuItem(
+            "停止并保存笔记录音",
+            null,
+            async (_, _) => await StopNoteRecordingAsync())
+        {
+            Enabled = false,
+        };
+        menu.Items.Add(_stopRecordingItem);
         menu.Items.Add("打开状态中心", null, (_, _) => ShowStatusWindow());
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         menu.Items.Add("立即同步", null, async (_, _) => await TriggerSyncAsync());
@@ -64,6 +91,39 @@ public partial class TrayIcon : IDisposable
         menu.Items.Add("登录...", null, (_, _) => ShowLogin());
         menu.Items.Add("退出", null, (_, _) => ConfirmAndExit());
     }
+
+    internal void ApplyRecordingState(WindowsRecordingState state)
+    {
+        if (_startRecordingItem is not null)
+        {
+            _startRecordingItem.Enabled = !state.IsRecording;
+        }
+
+        if (_stopRecordingItem is not null)
+        {
+            _stopRecordingItem.Enabled = state.IsRecording;
+        }
+
+        var status = RecordTrayStatus(state);
+        if (_recordingStatusItem is not null)
+        {
+            _recordingStatusItem.Text = status;
+        }
+
+        if (_notifyIcon is not null)
+        {
+            _notifyIcon.Text = state.IsRecording
+                ? $"PIM - 录音 第{state.SegmentNumber}段 {state.Elapsed:mm\\:ss}"
+                : $"PIM 守护程序 - {GlobalHotKeyGesture.NativeNotes.DisplayName} 打开笔记";
+        }
+    }
+
+    internal static string RecordTrayStatus(WindowsRecordingState state)
+        => state.IsRecording
+            ? state.Error is not null
+                ? $"录音已暂停 · 第 {state.SegmentNumber} 段 · {state.Elapsed:mm\\:ss}"
+                : $"录音中 · 第 {state.SegmentNumber} 段 · {state.Elapsed:mm\\:ss}"
+            : "录音：未开始";
 
     private static Icon LoadIcon()
     {
@@ -288,7 +348,25 @@ public partial class TrayIcon : IDisposable
 
     public void Dispose()
     {
+        if (_recording is not null)
+        {
+            _recording.StateChanged -= OnRecordingStateChanged;
+            _recording = null;
+        }
+
         _notifyIcon?.Dispose();
         _notifyIcon = null;
+    }
+
+    private void OnRecordingStateChanged(object? sender, WindowsRecordingState state)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(() => ApplyRecordingState(state));
+            return;
+        }
+
+        ApplyRecordingState(state);
     }
 }

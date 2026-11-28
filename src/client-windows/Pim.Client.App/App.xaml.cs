@@ -106,10 +106,12 @@ public partial class App : Application
                     // OccurredAt 取钩子入口时刻：它就是"休眠起点"（最后一条事件的时间戳就在此刻附近）。
                     var suspendAt = DateTimeOffset.UtcNow;
                     TryReportPlannedOffline("suspend", wait: true, occurredAt: suspendAt);
+                    try { Services.GetService<WindowsRecordingService>()?.Suspend(); } catch { }
                     try { Services.GetService<NativeTrackerService>()?.HandleSuspend(); } catch { }
                 }
                 else if (e.Mode == PowerModes.Resume)
                 {
+                    try { Services.GetService<WindowsRecordingService>()?.Resume(); } catch { }
                     try { Services.GetService<NativeTrackerService>()?.HandleResume(); } catch { }
 
                     // 等待在途 suspend 上报 ≤3s 结束或超时，再重置防重。

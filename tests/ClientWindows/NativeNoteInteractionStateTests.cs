@@ -659,6 +659,23 @@ public sealed class NativeNoteInteractionStateTests
     }
 
     [Fact]
+    public void WindowStateExposesRecordingSegmentAndClearsItWhenRecordingStops()
+    {
+        var state = new NativeNoteWindowState();
+        state.OpenNote(Guid.NewGuid(), "补录");
+
+        state.SetRecording(true, 3);
+
+        Assert.Equal(3, state.RecordingSegment);
+        Assert.Equal("正在记录 · 第 3 段 · 本机草稿", state.EditorContext);
+
+        state.SetRecording(false);
+
+        Assert.Equal(0, state.RecordingSegment);
+        Assert.Equal("本机草稿 · 自动保存", state.EditorContext);
+    }
+
+    [Fact]
     public async Task FinishWaitsForInFlightImportAndRejectsNewWorkUntilItCompletes()
     {
         using var coordinator = new NativeNoteOperationCoordinator();
