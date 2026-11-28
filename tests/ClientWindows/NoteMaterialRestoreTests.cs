@@ -1499,11 +1499,22 @@ public sealed class NoteMaterialRestoreTests : IDisposable
             ["createdAtMillis"] = 7,
             ["phase"] = "Completed",
             ["currentSegment"] = 2,
-            ["chunks"] = new JsonArray(chunks.Select(chunk => (JsonNode)new JsonObject
+            ["chunks"] = new JsonArray(chunks.Select(chunk =>
             {
-                ["segment"] = chunk.Segment,
-                ["index"] = chunk.Chunk,
-                ["samples"] = opusChunk == (chunk.Segment, chunk.Chunk) ? 1600 : chunk.Samples,
+                var isOpus = opusChunk == (chunk.Segment, chunk.Chunk);
+                var item = new JsonObject
+                {
+                    ["segment"] = chunk.Segment,
+                    ["index"] = chunk.Chunk,
+                    ["samples"] = isOpus ? 1600 : chunk.Samples,
+                };
+                if (isOpus)
+                {
+                    item["format"] = "opus";
+                    item["mimeType"] = "audio/ogg";
+                }
+
+                return (JsonNode)item;
             }).ToArray()),
             ["problem"] = null,
             ["schemaVersion"] = 1,
