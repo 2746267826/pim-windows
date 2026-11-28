@@ -401,7 +401,7 @@ public sealed class WindowsRecordingService : IAsyncDisposable
             capture = CreateCapture(writer);
             lock (_sync)
             {
-                if (!_suspended || _writer is not writer || _stopping)
+                if (!_suspended || !ReferenceEquals(_writer, writer) || _stopping)
                 {
                     capture.Dispose();
                     return;
