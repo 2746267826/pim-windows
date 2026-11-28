@@ -140,19 +140,30 @@
                         Background="{StaticResource PimMutedSurfaceBrush}"
                         BorderBrush="{StaticResource PimDangerBrush}"
                         BorderThickness="1" Visibility="Collapsed">
-                    <DockPanel>
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <Button x:Name="RetryNoticeButton" Content="重试"
-                                    Style="{StaticResource PimSecondaryButton}"
-                                    Padding="10,5" Margin="0,0,6,0" Visibility="Collapsed"
-                                    Click="OnRetryNotice" />
-                            <Button x:Name="NoticeDismissButton" Content="关闭"
-                                    Style="{StaticResource PimSecondaryButton}"
-                                    Padding="10,5" Click="OnDismissNotice" />
-                        </StackPanel>
-                        <TextBlock x:Name="EditorNoticeText" Text="" VerticalAlignment="Center"
-                                   TextWrapping="Wrap" Foreground="{StaticResource PimDangerBrush}" />
-                    </DockPanel>
+                    <StackPanel>
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button x:Name="RetryNoticeButton" Content="重试"
+                                        Style="{StaticResource PimSecondaryButton}"
+                                        Padding="10,5" Margin="0,0,6,0" Visibility="Collapsed"
+                                        Click="OnRetryNotice" />
+                                <Button x:Name="NoticeDismissButton" Content="关闭"
+                                        Style="{StaticResource PimSecondaryButton}"
+                                        Padding="10,5" Click="OnDismissNotice" />
+                            </StackPanel>
+                            <TextBlock x:Name="EditorNoticeText" Text="" VerticalAlignment="Center"
+                                       TextWrapping="Wrap" Foreground="{StaticResource PimDangerBrush}" />
+                        </DockPanel>
+                        <Expander x:Name="NoticeDetailsExpander" Header="错误详情"
+                                  Margin="0,6,0,0" Visibility="Collapsed">
+                            <TextBox x:Name="NoticeDetailsText" Text="" IsReadOnly="True"
+                                     TextWrapping="Wrap" AcceptsReturn="True"
+                                     MaxHeight="160" VerticalScrollBarVisibility="Auto"
+                                     FontFamily="Consolas, Microsoft YaHei UI"
+                                     FontSize="11" Padding="8"
+                                     BorderBrush="{StaticResource PimBorderBrush}" />
+                        </Expander>
+                    </StackPanel>
                 </Border>
 
                 <Grid x:Name="WorkspaceGrid" Grid.Row="2">
@@ -195,27 +206,11 @@
 
                                 <Border BorderBrush="{StaticResource PimBorderBrush}"
                                         BorderThickness="0,1,0,0" Padding="0,16,0,0" />
-                                <TextBlock Text="Markdown 源文 · 材料锚点会插入当前光标位置"
+                                <TextBlock Text="正文"
                                            FontSize="12"
                                            Foreground="{StaticResource PimMutedTextBrush}"
                                            Margin="0,0,0,8" />
-                                <TextBox x:Name="MarkdownBox" AcceptsReturn="True" AcceptsTab="True"
-                                         TextWrapping="Wrap" MinHeight="230"
-                                         VerticalScrollBarVisibility="Disabled"
-                                         HorizontalScrollBarVisibility="Disabled"
-                                         FontFamily="Microsoft YaHei UI, Segoe UI"
-                                         FontSize="16" Padding="0" BorderThickness="0"
-                                         Background="Transparent"
-                                         VerticalContentAlignment="Top"
-                                         TextChanged="OnEditorChanged" />
-
-                                <Border BorderBrush="{StaticResource PimBorderBrush}"
-                                        BorderThickness="0,1,0,0" Padding="0,16,0,0"
-                                        Margin="0,20,0,0" />
-                                <TextBlock Text="连续文档预览" FontSize="12"
-                                           Foreground="{StaticResource PimMutedTextBrush}"
-                                           Margin="0,0,0,8" />
-                                <TextBlock Text="按锚点顺序预览；照片、手写和录音以独立卡片呈现，编辑仍在上方 Markdown 源文完成。"
+                                <TextBlock Text="文字可直接编辑；照片、手写和录音按顺序夹在正文中。插入材料会使用当前文字段落的光标位置。"
                                            FontSize="12"
                                            Foreground="{StaticResource PimMutedTextBrush}"
                                            TextWrapping="Wrap"
@@ -243,6 +238,7 @@
                                                         Margin="8,0,0,0">
                                                 <Button Content="编辑所选笔迹"
                                                         Style="{StaticResource PimSecondaryButton}"
+                                                        ToolTip="在正文内定位并编辑所选笔迹；不会打开独立窗口"
                                                         Click="OnEditHandwriting" />
                                                 <Button x:Name="DeleteHandwritingButton"
                                                         Content="删除所选手写"
