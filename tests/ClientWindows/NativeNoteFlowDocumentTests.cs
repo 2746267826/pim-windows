@@ -114,21 +114,22 @@ public sealed class NativeNoteFlowDocumentTests
     {
         var photo = Material(LocalNoteMaterialKind.Photo, "照片.png");
         var markdown = "第一段\n\n第二段";
-        var second = NativeNoteFlowDocument.Create(markdown, [])
-            .Blocks.Last(block => block.IsEditableText);
+        var block = Assert.Single(
+            NativeNoteFlowDocument.Create(markdown, []).Blocks,
+            item => item.IsEditableText);
+        var caretInsideFirstParagraph = "第一".Length;
 
         var updated = NativeNoteFlowDocument.InsertMaterialMarker(
             markdown,
-            second.Text,
-            2,
+            block.Text,
+            caretInsideFirstParagraph,
             photo.MaterialId);
 
-        Assert.StartsWith("第一段\n\n", updated);
+        Assert.StartsWith("第一\n\n", updated, StringComparison.Ordinal);
         var markerIndex = updated.IndexOf(
             NativeNoteDocumentLayout.CreateMarker(photo.MaterialId),
             StringComparison.Ordinal);
-        Assert.True(markerIndex > updated.IndexOf("第二段", StringComparison.Ordinal));
-        Assert.Equal(1, updated[..markerIndex].Count(character => character == '二'));
+        Assert.Equal("第一\n\n".Length, markerIndex);
         var flow = NativeNoteFlowDocument.Create(updated, [photo]);
         Assert.Equal(
             [

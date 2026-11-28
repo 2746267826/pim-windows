@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
@@ -2143,7 +2144,7 @@ public partial class NativeNotesWindow : Window
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             BorderThickness = new Thickness(0),
-            Background = Brushes.Transparent,
+            Background = System.Windows.Media.Brushes.Transparent,
             Padding = new Thickness(0),
             Margin = new Thickness(0, 4, 0, 10),
             MinHeight = block.Text.Length == 0 ? 28 : 0,
@@ -2400,16 +2401,17 @@ public partial class NativeNotesWindow : Window
                 return;
             }
 
-            var image = new Image
+            var image = new System.Windows.Controls.Image
             {
                 Source = LoadBitmap(file.AbsolutePath),
+                MaxWidth = 640,
                 MaxHeight = 420,
                 Stretch = Stretch.Uniform,
-                HorizontalAlignment = HorizontalAlignment.Left,
+                HorizontalAlignment = HorizontalAlignment.Center,
             };
             host.Content = new Border
             {
-                Background = Brushes.White,
+                Background = System.Windows.Media.Brushes.White,
                 BorderBrush = (System.Windows.Media.Brush)FindResource("PimBorderBrush"),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
@@ -2430,6 +2432,23 @@ public partial class NativeNotesWindow : Window
                 Foreground = (System.Windows.Media.Brush)FindResource("PimDangerBrush"),
             };
         }
+    }
+
+    private static BitmapImage LoadBitmap(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read | FileShare.Delete);
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+        bitmap.StreamSource = stream;
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
     }
 
     private Button CreateMaterialButton(

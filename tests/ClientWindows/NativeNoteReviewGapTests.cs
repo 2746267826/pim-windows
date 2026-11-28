@@ -144,10 +144,12 @@ public sealed class NativeNoteReviewGapTests
 
     private static string MethodBody(string code, string methodName)
     {
-        var marker = $" {methodName}(";
-        var start = code.IndexOf(marker, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"Method {methodName} was not found.");
-        var bodyStart = code.IndexOf('{', start);
+        var declaration = System.Text.RegularExpressions.Regex.Match(
+            code,
+            $@"^[ \t]*(?:public|private|protected|internal)\b[^\r\n]*\b{System.Text.RegularExpressions.Regex.Escape(methodName)}\s*\(",
+            System.Text.RegularExpressions.RegexOptions.Multiline);
+        Assert.True(declaration.Success, $"Method {methodName} was not found.");
+        var bodyStart = code.IndexOf('{', declaration.Index + declaration.Length);
         Assert.True(bodyStart >= 0, $"Method {methodName} has no body.");
 
         var depth = 0;

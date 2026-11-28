@@ -5,6 +5,8 @@ using System.Windows.Ink;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Pim.Client.Core.Services.Notes;
+using WpfBrush = System.Windows.Media.Brush;
+using WpfBrushes = System.Windows.Media.Brushes;
 
 namespace Pim.Client.App;
 
@@ -36,8 +38,8 @@ internal sealed class InlineHandwritingEditor : Border
             : new LocalInkEditor(validated);
         _editor.Brush = LocalInkStyle.Default;
 
-        Background = (Brush)Application.Current.FindResource("PimMutedSurfaceBrush");
-        BorderBrush = (Brush)Application.Current.FindResource("PimBorderBrush");
+        Background = (WpfBrush)Application.Current.FindResource("PimMutedSurfaceBrush");
+        BorderBrush = (WpfBrush)Application.Current.FindResource("PimBorderBrush");
         BorderThickness = new Thickness(1);
         CornerRadius = new CornerRadius(10);
         Padding = new Thickness(12);
@@ -73,7 +75,7 @@ internal sealed class InlineHandwritingEditor : Border
             Text = validated is null ? "正文内手写" : "正文内编辑手写",
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = (Brush)Application.Current.FindResource("PimTextBrush"),
+            Foreground = (WpfBrush)Application.Current.FindResource("PimTextBrush"),
         });
         root.Children.Add(header);
 
@@ -88,8 +90,8 @@ internal sealed class InlineHandwritingEditor : Border
 
         var canvasBorder = new Border
         {
-            Background = Brushes.White,
-            BorderBrush = (Brush)Application.Current.FindResource("PimBorderBrush"),
+            Background = WpfBrushes.White,
+            BorderBrush = (WpfBrush)Application.Current.FindResource("PimBorderBrush"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
             Child = new ScrollViewer
@@ -100,7 +102,7 @@ internal sealed class InlineHandwritingEditor : Border
                 {
                     Width = _editor.Width,
                     Height = _editor.Height,
-                    Background = Brushes.White,
+                    Background = WpfBrushes.White,
                     EditingMode = InkCanvasEditingMode.Ink,
                     DefaultDrawingAttributes =
                         HandwritingStrokeMapper.ToDrawingAttributes(_editor.Brush),
@@ -116,7 +118,7 @@ internal sealed class InlineHandwritingEditor : Border
             Margin = new Thickness(0, 8, 0, 0),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
-            Foreground = (Brush)Application.Current.FindResource("PimMutedTextBrush"),
+            Foreground = (WpfBrush)Application.Current.FindResource("PimMutedTextBrush"),
         };
         root.Children.Add(_statusText);
         Child = root;
