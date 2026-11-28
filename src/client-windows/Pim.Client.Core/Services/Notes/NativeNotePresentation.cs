@@ -108,4 +108,10 @@ public static class NativeNotePresentation
 
     public static string SessionFinished(Guid versionId)
         => $"已结束并保存本机固定版本 {versionId.ToString("N")[..8]}；尚未自动上传。";
+
+    public static string RecordingClock(TimeSpan elapsed)
+    {
+        var bounded = elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed;
+        return $"{(long)bounded.TotalHours:00}:{bounded.Minutes:00}:{bounded.Seconds:00}";
+    }
 }

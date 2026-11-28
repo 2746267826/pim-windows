@@ -1266,7 +1266,7 @@ public partial class NativeNotesWindow : Window
                             .ToArray();
                         SetMarkdownWithInsertedMarkers(recordingMaterialIds);
                         RecordingStatusText.Text =
-                            $"本段录音 {recording.Wave.Duration:mm\\:ss} 已保存到本机。";
+                            $"本段录音 {NativeNotePresentation.RecordingClock(recording.Wave.Duration)} 已保存到本机。";
                     }
                 }
 
@@ -1504,7 +1504,7 @@ public partial class NativeNotesWindow : Window
                 _recordingBaselineMaterialIds = [];
                 UpdateMaterials();
                 RecordingStatusText.Text =
-                    $"本段录音 {recording.Wave.Duration:mm\\:ss} 已保存；可继续写或补录。";
+                    $"本段录音 {NativeNotePresentation.RecordingClock(recording.Wave.Duration)} 已保存；可继续写或补录。";
                 SaveStateText.Text = "本段原始 WAV 已保存到本机固定版本；云端尚未提交";
                 await RefreshNotesAsync(SearchBox.Text);
                 await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
@@ -1543,13 +1543,14 @@ public partial class NativeNotesWindow : Window
                 var otherNote = _current is not null
                     && state.NoteId is { } recordingNoteId
                     && recordingNoteId != _current.NoteId;
+                var clock = NativeNotePresentation.RecordingClock(state.Elapsed);
                 RecordingStatusText.Text = otherNote
-                    ? $"另一篇笔记正在录音 · 第 {state.SegmentNumber} 段 {state.Elapsed:mm\\:ss}；停止会保存回开始时的笔记"
+                    ? $"另一篇笔记正在录音 · 第 {state.SegmentNumber} 段 {clock}；停止会保存回开始时的笔记"
                     : state.Error is not null
-                        ? $"{state.Error} · 本段 {state.Elapsed:mm\\:ss}"
+                        ? $"{state.Error} · 本段 {clock}"
                         : state.SegmentNumber > 0
-                            ? $"第 {state.SegmentNumber} 段录音中 {state.Elapsed:mm\\:ss} · 实际输入峰值 {state.PeakLevel:P0}"
-                            : $"本段录音中 {state.Elapsed:mm\\:ss} · 实际输入峰值 {state.PeakLevel:P0}";
+                            ? $"第 {state.SegmentNumber} 段录音中 {clock} · 实际输入峰值 {state.PeakLevel:P0}"
+                            : $"本段录音中 {clock} · 实际输入峰值 {state.PeakLevel:P0}";
                 if (RecordButton is not null && state.SegmentNumber > 0)
                 {
                     RecordButton.Content = $"■ 停止第 {state.SegmentNumber} 段";

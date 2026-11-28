@@ -149,14 +149,14 @@ public sealed class WindowsRecordingServiceTests : IDisposable
     {
         var store = new LocalNoteStore(Path.Combine(_root, "notes"));
         var note = await store.CreateAsync("补录");
-        var capture = new SyntheticCapture();
+        var captures = new SyntheticCaptureFactory();
         var service = new WindowsRecordingService(
             store,
-            new FakeCaptureFactory(() => capture),
+            captures,
             Path.Combine(_root, "recordings"));
 
         await service.StartAsync(note.NoteId);
-        capture.Emit([0, 0, 0, 32]);
+        captures.Last.Emit([0, 0, 0, 32]);
         var first = await service.StopAsync();
         Assert.NotNull(first);
         var firstMaterialId = Assert.Single(first.Note.Materials).MaterialId;
@@ -164,7 +164,7 @@ public sealed class WindowsRecordingServiceTests : IDisposable
 
         await service.StartAsync(note.NoteId);
         Assert.Equal(2, service.CurrentState.SegmentNumber);
-        capture.Emit([0, 0, 0, 64]);
+        captures.Last.Emit([0, 0, 0, 64]);
         var second = await service.StopAsync();
 
         Assert.NotNull(second);
@@ -177,6 +177,69 @@ public sealed class WindowsRecordingServiceTests : IDisposable
             second.Note.Materials.Select(material => material.MaterialId),
             version.MaterialIds);
         Assert.NotEqual(finished.CurrentVersionId, finishedAgain.CurrentVersionId);
+    }
+
+    [Fact]
+    public async Task LateCallbackFromFinishedCaptureCannotWriteToNewRecording()
+    {
+        var store = new LocalNoteStore(Path.Combine(_root, "notes"));
+        var note = await store.CreateAsync("迟到回调");
+        var capture = new SyntheticCapture();
+        var service = new WindowsRecordingService(
+            store,
+            new FakeCaptureFactory(() => capture),
+            Path.Combine(_root, "recordings"));
+
+        await service.StartAsync(note.NoteId);
+        capture.Emit([0, 0, 0, 32]);
+        var first = await service.StopAsync();
+        Assert.NotNull(first);
+        Assert.Equal(4, first.Wave.DataBytes);
+
+        await service.StartAsync(note.NoteId);
+        capture.Emit([0, 0, 0, 64]);
+        var second = await service.StopAsync();
+
+        Assert.NotNull(second);
+        Assert.Equal(4, second.Wave.DataBytes);
+        Assert.Equal(8, second.Note.Materials.Sum(material => material.Length));
+    }
+
+    [Fact]
+    public async Task SegmentNumberCountsUserVisibleSegmentsNotChunkedAudio()
+    {
+        var store = new LocalNoteStore(Path.Combine(_root, "notes"));
+        var note = await store.CreateAsync("分片录音");
+        var recordingId = Guid.NewGuid();
+        await store.AddMaterialsAsync(
+            note.NoteId,
+            [
+                new LocalNoteMaterialInput(
+                    new MemoryStream([0, 0, 0, 0]),
+                    "录音 1-1.wav",
+                    LocalNoteMaterialKind.RecordingSegment,
+                    "audio/wav",
+                    RecordingId: recordingId,
+                    RecordingSegment: 1,
+                    RecordingChunkIndex: 1),
+                new LocalNoteMaterialInput(
+                    new MemoryStream([0, 0, 0, 0]),
+                    "录音 1-2.wav",
+                    LocalNoteMaterialKind.RecordingSegment,
+                    "audio/wav",
+                    RecordingId: recordingId,
+                    RecordingSegment: 1,
+                    RecordingChunkIndex: 2),
+            ]);
+        var service = new WindowsRecordingService(
+            store,
+            new FakeCaptureFactory(() => new SyntheticCapture()),
+            Path.Combine(_root, "recordings"));
+
+        await service.StartAsync(note.NoteId);
+
+        Assert.Equal(2, service.CurrentState.SegmentNumber);
+        await service.DisposeAsync();
     }
 
     [Fact]

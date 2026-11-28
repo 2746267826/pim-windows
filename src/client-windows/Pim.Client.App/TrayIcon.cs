@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Pim.Client.App.Services;
 using Pim.Client.Core;
 using Pim.Client.Core.Services;
+using Pim.Client.Core.Services.Notes;
 
 namespace Pim.Client.App;
 
@@ -113,7 +114,7 @@ public partial class TrayIcon : IDisposable
         if (_notifyIcon is not null)
         {
             _notifyIcon.Text = state.IsRecording
-                ? $"PIM - 录音 第{state.SegmentNumber}段 {state.Elapsed:mm\\:ss}"
+                ? $"PIM - 录音 第{state.SegmentNumber}段 {NativeNotePresentation.RecordingClock(state.Elapsed)}"
                 : $"PIM 守护程序 - {GlobalHotKeyGesture.NativeNotes.DisplayName} 打开笔记";
         }
     }
@@ -121,8 +122,8 @@ public partial class TrayIcon : IDisposable
     internal static string RecordTrayStatus(WindowsRecordingState state)
         => state.IsRecording
             ? state.Error is not null
-                ? $"录音已暂停 · 第 {state.SegmentNumber} 段 · {state.Elapsed:mm\\:ss}"
-                : $"录音中 · 第 {state.SegmentNumber} 段 · {state.Elapsed:mm\\:ss}"
+                ? $"录音已暂停 · 第 {state.SegmentNumber} 段 · {NativeNotePresentation.RecordingClock(state.Elapsed)}"
+                : $"录音中 · 第 {state.SegmentNumber} 段 · {NativeNotePresentation.RecordingClock(state.Elapsed)}"
             : "录音：未开始";
 
     private static Icon LoadIcon()
@@ -253,7 +254,7 @@ public partial class TrayIcon : IDisposable
             }
 
             System.Windows.Forms.MessageBox.Show(
-                $"录音已保存到本机笔记固定版本。\n时长：{result.Wave.Duration:mm\\:ss}\n云端尚未提交。",
+                $"录音已保存到本机笔记固定版本。\n时长：{NativeNotePresentation.RecordingClock(result.Wave.Duration)}\n云端尚未提交。",
                 "PIM 笔记",
                 System.Windows.Forms.MessageBoxButtons.OK,
                 System.Windows.Forms.MessageBoxIcon.Information);

@@ -65,4 +65,17 @@ public sealed class NativeNotePresentationTests
         Assert.Contains("本机固定版本", message);
         Assert.Contains("尚未自动上传", message);
     }
+
+    [Theory]
+    [InlineData(0, "00:00:00")]
+    [InlineData(9, "00:00:09")]
+    [InlineData(65, "00:01:05")]
+    [InlineData(90_061, "25:01:01")]
+    [InlineData(-1, "00:00:00")]
+    public void RecordingClockKeepsTotalHoursAndNeverShowsNegativeTime(
+        int seconds,
+        string expected)
+    {
+        Assert.Equal(expected, NativeNotePresentation.RecordingClock(TimeSpan.FromSeconds(seconds)));
+    }
 }

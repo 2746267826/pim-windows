@@ -60,6 +60,7 @@ public sealed class WindowsRecordingService : IAsyncDisposable
     private bool _disposed;
     private string? _lastError;
     private WindowsRecordingState? _lastPublishedState;
+    private long _captureGeneration;
 
     public WindowsRecordingService(LocalNoteStore store)
         : this(
@@ -439,6 +440,7 @@ public sealed class WindowsRecordingService : IAsyncDisposable
             _recordingSegment = 0;
             _stopping = false;
             _suspended = false;
+            Interlocked.Increment(ref _captureGeneration);
             _elapsed.Reset();
             _statusTimer.Change(Timeout.Infinite, Timeout.Infinite);
             if (!keepError)
@@ -496,17 +498,42 @@ public sealed class WindowsRecordingService : IAsyncDisposable
             _lastError);
 
     private static int CountExistingSegments(LocalNoteDocument note)
-        => note.Materials.Count(material => material.Kind is LocalNoteMaterialKind.Recording
-            or LocalNoteMaterialKind.RecordingSegment);
+        => note.Materials
+            .Where(material => material.Kind is LocalNoteMaterialKind.Recording
+                or LocalNoteMaterialKind.RecordingSegment)
+            .Select(material => (
+                RecordingKey: material.RecordingId ?? material.MaterialId,
+                Segment: material.RecordingSegment ?? 1))
+            .Distinct()
+            .Count();
 
     private IAudioCaptureBackend CreateCapture(WavePcmWriter writer)
     {
         var capture = _captureFactory.Create(SampleRate, Channels, BitsPerSample);
+        var generation = Interlocked.Increment(ref _captureGeneration);
         try
         {
             capture.DataAvailable += data =>
             {
-                writer.Append(data);
+                lock (_sync)
+                {
+                    if (_disposed
+                        || generation != Interlocked.Read(ref _captureGeneration)
+                        || !ReferenceEquals(_writer, writer))
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        writer.Append(data);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return;
+                    }
+                }
+
                 PublishState();
             };
             capture.Start();
