@@ -202,7 +202,7 @@ public sealed class WindowsRecordingServiceTests : IDisposable
 
         Assert.NotNull(second);
         Assert.Equal(4, second.Wave.DataBytes);
-        Assert.Equal(8, second.Note.Materials.Sum(material => material.Length));
+        Assert.Equal(2, second.Note.Materials.Count);
     }
 
     [Fact]
