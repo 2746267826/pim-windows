@@ -2,29 +2,100 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="手写材料" Width="720" Height="560" MinWidth="480" MinHeight="360"
-        WindowStartupLocation="CenterOwner" Background="{StaticResource PimMutedSurfaceBrush}">
+        WindowStartupLocation="CenterOwner" Background="{StaticResource PimMutedSurfaceBrush}"
+        PreviewKeyDown="OnPreviewKeyDown">
     <Grid Margin="16">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
         <DockPanel Grid.Row="0" Margin="0,0,0,12">
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <Button Content="清除" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnClear" />
                 <Button x:Name="CancelButton" Content="取消" IsCancel="True" Style="{StaticResource PimSecondaryButton}" Margin="4,0" />
                 <Button x:Name="SaveButton" Content="保存手写" Style="{StaticResource PimPrimaryButton}" Margin="4,0" Click="OnSave" />
             </StackPanel>
             <TextBlock x:Name="HandwritingTitle" Text="手写卡片" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"
                        Foreground="{StaticResource PimTextBrush}" />
         </DockPanel>
-        <Border Grid.Row="1" Background="White" BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1" CornerRadius="8">
+        <WrapPanel Grid.Row="1" Margin="0,0,0,10">
+            <Button x:Name="InkModeButton" Content="画笔 · 墨色 · 中" Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnBrushSettings" />
+            <Button x:Name="EraserButton" Content="橡皮 · 局部" Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnEraserSettings" />
+            <Button x:Name="SelectModeButton" Content="选择" Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnSelectMode" />
+            <Button x:Name="UndoButton" Content="撤销" Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnUndo" IsEnabled="False" />
+            <Button x:Name="RedoButton" Content="重做" Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnRedo" IsEnabled="False" />
+            <Button x:Name="CopyButton" Content="复制" Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnCopySelection" IsEnabled="False" />
+            <Button x:Name="PasteButton" Content="粘贴" Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnPaste" IsEnabled="False" />
+            <Button x:Name="DeleteSelectionButton" Content="删除所选" Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnDeleteSelection" IsEnabled="False" />
+            <Button x:Name="ClearButton" Content="清除" Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnClear" />
+        </WrapPanel>
+        <Popup x:Name="BrushPopup" PlacementTarget="{Binding ElementName=InkModeButton}" Placement="Bottom"
+               StaysOpen="False" PopupAnimation="Fade">
+            <Border Background="{StaticResource PimSurfaceBrush}" BorderBrush="{StaticResource PimBorderBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,4,0,0">
+                <StackPanel Width="250">
+                    <TextBlock x:Name="BrushStateText" Text="画笔 · 墨色 · 中" FontWeight="SemiBold"
+                               Foreground="{StaticResource PimTextBrush}" />
+                    <TextBlock Text="颜色" Margin="0,10,0,4" FontSize="12"
+                               Foreground="{StaticResource PimMutedTextBrush}" />
+                    <WrapPanel>
+                        <Button x:Name="InkColorInkButton" Content="● 墨色" Tag="#252b35"
+                                Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnBrushColorSelected" />
+                        <Button x:Name="InkColorRedButton" Content="● 红" Tag="#b8373c"
+                                Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnBrushColorSelected" />
+                        <Button x:Name="InkColorBlueButton" Content="● 蓝" Tag="#245fba"
+                                Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnBrushColorSelected" />
+                        <Button x:Name="InkColorGreenButton" Content="● 绿" Tag="#216e4e"
+                                Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnBrushColorSelected" />
+                    </WrapPanel>
+                    <TextBlock Text="粗细" Margin="0,6,0,4" FontSize="12"
+                               Foreground="{StaticResource PimMutedTextBrush}" />
+                    <WrapPanel>
+                        <Button x:Name="InkWidthThinButton" Content="细" Tag="1.8"
+                                Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnBrushWidthSelected" />
+                        <Button x:Name="InkWidthMediumButton" Content="中" Tag="3.4"
+                                Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnBrushWidthSelected" />
+                        <Button x:Name="InkWidthThickButton" Content="粗" Tag="6"
+                                Style="{StaticResource PimSecondaryButton}" Margin="0,0,4,4" Click="OnBrushWidthSelected" />
+                    </WrapPanel>
+                    <Button x:Name="BrushDoneButton" Content="完成设置" HorizontalAlignment="Right"
+                            Style="{StaticResource PimPrimaryButton}" Margin="0,10,0,0" Click="OnBrushDone" />
+                </StackPanel>
+            </Border>
+        </Popup>
+        <Popup x:Name="EraserPopup" PlacementTarget="{Binding ElementName=EraserButton}" Placement="Bottom"
+               StaysOpen="False" PopupAnimation="Fade">
+            <Border Background="{StaticResource PimSurfaceBrush}" BorderBrush="{StaticResource PimBorderBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,4,0,0">
+                <StackPanel Width="250">
+                    <TextBlock Text="橡皮" FontWeight="SemiBold" Foreground="{StaticResource PimTextBrush}" />
+                    <Button x:Name="PartialEraserButton" Content="局部擦除（默认）" HorizontalContentAlignment="Left"
+                            Style="{StaticResource PimSecondaryButton}" Margin="0,8,0,4" Click="OnPartialEraser" />
+                    <Button x:Name="WholeEraserButton" Content="整笔擦除" HorizontalContentAlignment="Left"
+                            Style="{StaticResource PimSecondaryButton}" Margin="0,0,0,4" Click="OnWholeEraser" />
+                    <TextBlock Text="局部擦除切断笔迹并保留两侧；整笔擦除命中即删除。一次拖动可一步撤销。"
+                               TextWrapping="Wrap" FontSize="11" Margin="0,4,0,0"
+                               Foreground="{StaticResource PimMutedTextBrush}" />
+                </StackPanel>
+            </Border>
+        </Popup>
+        <Border Grid.Row="2" Background="White" BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1" CornerRadius="8">
             <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
                 <InkCanvas x:Name="Canvas" Background="White" EditingMode="Ink"
-                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           StrokeCollected="OnStrokeCollected"
+                           SelectionChanged="OnSelectionChanged"
+                           SelectionMoved="OnSelectionMoved"
+                           PreviewMouseLeftButtonDown="OnCanvasPreviewMouseLeftButtonDown"
+                           PreviewMouseMove="OnCanvasPreviewMouseMove"
+                           PreviewMouseLeftButtonUp="OnCanvasPreviewMouseLeftButtonUp"
+                           LostMouseCapture="OnCanvasLostMouseCapture"
+                           SelectionResizing="OnSelectionResizing" />
             </ScrollViewer>
         </Border>
-        <TextBlock Grid.Row="2" Margin="0,10,0,0" Text="保存会生成新的固定版本；取消不会修改原材料。笔迹坐标、压力与顺序会与 PNG 一并保留。"
-                   Foreground="{StaticResource PimMutedTextBrush}" />
+        <TextBlock x:Name="StatusText" Grid.Row="3" Margin="0,10,0,0"
+                   Text="鼠标可直接书写；每笔独立保留坐标、压力与顺序。保存会生成新的固定版本，取消不会修改原材料。"
+                   TextWrapping="Wrap" Foreground="{StaticResource PimMutedTextBrush}" />
     </Grid>
 </Window>

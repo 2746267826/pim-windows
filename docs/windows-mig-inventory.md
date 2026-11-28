@@ -12,19 +12,20 @@
 - 固定版本：正文保存、材料加入、手写、录音都会生成不可变本机版本；可从版本下拉列表浏览并恢复为新的当前版本。
 - 混合材料：照片、PNG 手写、手写向量 JSON、WAV 音频；材料以 SHA-256 内容寻址保存。
 - 主动录音：WinMM 麦克风采集，实际 PCM 计算时长/峰值；录音服务注册为应用级单例，关闭笔记窗口不停止采集。
-- 本机入口：主 Shell、托盘可打开笔记；托盘可直接开始/停止笔记录音。
+- 本机入口：原生工作台、托盘可打开笔记；托盘可直接开始/停止笔记录音。
 - 本机导出/导入：`.pimnote.zip` 固定正文、版本清单、材料原件、逐文件 SHA-256；导入时校验版本、正文摘要、材料长度与摘要，拒绝篡改包。
-- 旧快速记录兼容入口：主 Shell 增加“旧快速记录（Web 兼容）”，导航 `/quick-notes`；旧数据继续由 Web 承载，未被新本机笔记库删除或冒充迁移完成。
+- 旧快速记录兼容入口：原生工作台增加“旧快速记录（Web 兼容）”，通过系统浏览器导航 `/quick-notes`；旧数据继续由 Web 承载，未被新本机笔记库删除或冒充迁移完成。
 - 云端固定材料上传：按服务器 schema-v1 从本机固定版本生成 `note.json`、`document.md`、照片、手写墨迹/预览、录音清单与 16 kHz PCM 分片；使用已有 typed begin/part/complete/promote/sources/derived/manual-revision/select operations。
 - 云端绑定恢复：按规范化服务器 URL + 当前账号持久化本机笔记与云端 Head 绑定；丢失绑定时从服务器已有版本恢复 `baseVersionId`，同版本重试复用首次请求并可跳过已上传分片。
 - 服务器材料目录：`asr-tasks/sources?offset=&limit=` 以 `includeWithoutAudio=true` 展示当前账号已完成材料版本，按标题、版本数、录音段数、时长、当前/冲突状态分组；可跳回同 `noteId` 的本机笔记。
 - 云端结果入口：Windows 笔记窗口可读取服务器固定版本/冲突状态、完整记录、独立分析、历史结果版本和人工修订；只读打开不会启动 ASR 或付费模型。
+- 服务端处理状态：笔记窗口按固定 `noteId`/`versionId` 读取高层 `GET /api/v1/native-notes/processing`，展示总体、录音转写（等待/失败阻断/完成）、笔记整理（等待/处理中/完成/失败）、已生成结果与问题摘要，并提供原生“刷新状态”入口；失败提示说明可在其他客户端重试后再刷新。换端恢复的只读笔记使用其服务器来源 `noteId`/`versionId`。问题摘要会隐藏 TaskId、ChangeKey、GraphEventId、内部 step key 等工程标识。该入口只读，不启动 ASR/模型，也不以 WebView 代替原生流程。
 
 当前未覆盖：
 
 - 原生云端笔记目录、笔记级标题/元数据分页与显式删除/回收站尚不存在；用户仍需从本机笔记进入对应稳定 `noteId`，不能浏览服务器上的全部笔记目录。
 - 服务器实现 `GET /api/v1/native-notes/versions/{versionId}/files/{fileIndex}`，但 Windows 仓 canonical OpenAPI 的 200 content schema 缺失；尚不生成猜测的 typed 下载，因此云端回读是逐版本结果/材料元数据，不是跨端完整本地往返。
-- 云端 ASR/派生生成启动需要管理员路由配置与显式计费/模型 consent；本批只读取已有结果并保存人工修订，不自动启动真实 ASR/模型，也不能把只读结果页当作主动记录迁移完成。
+- 云端 ASR/派生生成启动需要管理员路由配置与显式计费/模型 consent；本批只读取高层处理状态和已有结果并保存人工修订，不自动启动真实 ASR/模型，Windows 也还没有高层处理发起入口，不能把只读状态页当作主动记录迁移完成。
 - 完整 M3 Markdown 富编辑仍缺；当前 WPF `TextBox` 只是保留的源码编辑基础，不能标记 Tiptap/ProseMirror 等价能力完成。
 - 真实麦克风、声学、长时、睡眠/唤醒、设备切换与隐私权限路径未操作硬件，保持 `NOT-VERIFIED`。
 - `.pimnote.zip` 是 Windows 本机固定版本交换格式；服务器 schema-v1 包由独立 builder 生成，不能把两者称为跨端往返完成。
@@ -66,9 +67,9 @@
 
 | 编号 | Windows 当前可复用事实 | 本批判断 |
 | --- | --- | --- |
-| MIG-01 今日、工作台 | `MainShellWindow` 复用登录态和 WebView `/today`；无原生聚合/业务动作 | Web 承载，非迁移完成 |
-| MIG-02 日历、任务、日历本/任务本 | 新增原生规划工作台，按契约 operation 读取日历/分页日程/任务本/分页任务，可按时间范围、日历、状态和标题筛选；支持创建日程、创建任务、选择任务本、将任务标记完成 | 读取与常见创建/完成动作已原生；系列/重复、提醒、附件、任务规划/分段、批量操作及完整日历本管理仍未迁移 |
-| MIG-03 确认中心、提醒、习惯、报告、数据中心 | Shell 路由 `/confirmations`、`/reports`、`/data-center`；`NotificationActionRouter` 可发端点通知动作，但业务页面仍 Web | 混合，业务未原生化 |
+| MIG-01 今日、工作台 | 新增纯原生 `NativeWorkbenchWindow` 作为主工作台，从托盘「原生工作台」或托盘双击打开；原生 Today、原生日历/任务、原生笔记、电脑记录、应用知识、设备中心与状态中心均从原生入口进入；读取当前账户今日到期任务与今日日程，支持快速新建今日任务、标记完成和打开完整原生规划器；旧 `/today` 和 `/quick-notes` 仍保留系统浏览器 Web 兼容入口 | 今日与工作台主入口已原生化且不再依赖内嵌 WebView；复杂日程编辑、工作台全部 Web tile、旧 `Pim.Shell.App` 独立发布物和真实桌面流程仍未迁移或验证 |
+| MIG-02 日历、任务、日历本/任务本 | 新增原生规划工作台，按契约 operation 读取日历/分页日程/任务本/分页任务，可按时间范围、日历、多选状态和标题筛选（空选表示全部，重复去重，非法值请求前拒绝）；支持创建日程、创建任务、选择任务本、将任务标记完成 | 读取与常见创建/完成动作已原生；系列/重复、提醒、附件、任务规划/分段、批量操作及完整日历本管理仍未迁移。任务状态多选已完成客户端实现与自动化测试，真实桌面交互仍需人工验收 |
+| MIG-03 确认中心、提醒、习惯、报告、数据中心 | Shell 路由 `/confirmations`、`/reports`、`/data-center`；`NotificationActionRouter` 只做风险分级与端点通知动作 API 调用，系统 toast、点击激活和深链注册仍未接入；业务页面仍 Web | 混合，业务未原生化；通知深链需后续交付 |
 | MIG-04 快速记录、文件 | 旧快速记录有显式 Web 兼容入口 `/quick-notes`；旧附件仍由服务端/Web；本机新笔记独立保存，二者未合并 | 旧入口保留；迁移未完成 |
 | MIG-05 电脑记录、浏览器使用、电脑明细 | `NativeTrackerService`、`TrackerLogger`、`TrackerSessionManager`、`BrowserBridgeService`、KeyStats 采集与上传均原生保留；本机历史继续按最近 30 天、10,000 条、64 MB 有界保留，支持今天/7/30 天、类别、搜索和明细；新增“服务器历史”模式，按最多 31 天的日期范围、当前账号设备和 `window`/`web`/`web-page` 类型查询已上传详情；服务端每页最多 200 条、最多浏览 25 页（5,000 条），明确提示截断及空结果不证明采集/上传完整 | 本机与服务器查询入口均有原生实现；服务端历史依赖已上传数据及现有 owner-scoped API。未覆盖上传前数据、本地与远端合并、超过客户端预算的完整导出或真实多设备/浏览器数据验收，不能标全量迁移完成 |
 | MIG-06 手机记录、历史位置 | Windows 无手机采集、地图/轨迹业务 UI | WebView-only |
@@ -77,7 +78,7 @@
 | MIG-09 登录、初始化、服务器、账号安全 | `LoginWindow`、`AuthService`、DPAPI token 存储、服务器地址保存均原生；用户/管理员管理仍 Web | 原生复用强；管理员边界未迁移 |
 | MIG-10 Outlook、Drive、AI、MCP 设置 | 对应设置路由由 Web 承载；Windows 本地模型/运行时有独立原生状态 UI，但不等同完整第三方设置业务 | 基础组件可复用，业务 WebView-only |
 | MIG-11 系统状态、可靠性、数据/日历管理、回收站、审计 | `StatusWindow`、Bootstrap/daemon 日志、采集状态、本地模型状态为原生；数据修复/回收站/审计仍 Web | 状态诊断部分复用，其余未迁移 |
-| MIG-12 端点/壳入口、嵌入页、旧路由别名 | `MainShellWindow`、`EmbeddedWebViewHost`、认证与通知动作路由可复用；本批只补 `/quick-notes` 兼容入口 | 宿主复用，全量路由/占位盘点未完成 |
-| MIG-13 安装更新、托盘/通知、采集启停、队列同步、设置 | 托盘、通知路由、自动启动、更新检查、Tracker/BrowserBridge/KeyStats、守护进程退出路径均保留；`WindowsRecordingService` 为 DI 单例，关闭笔记窗口只解绑 UI 事件，不停止录音 | 生命周期复用强；仍需真实安装/升级与设备/长时验收 |
+| MIG-12 端点/壳入口、嵌入页、旧路由别名 | 已移除不可达的 `MainShellWindow`/`EmbeddedWebViewHost` 与守护程序内 WebView2 依赖；托盘和原生工作台均以原生窗口为主，Web 页面只通过系统浏览器显式兼容入口打开；认证与通知动作路由可复用 | 守护程序内嵌 WebView 已清理；统一 `pim-windows` ZIP/安装器已排除旧壳与 WebView2 载荷，但独立 `Pim.Shell.App` 发布工件仍由现有 workflow 构建，旧壳/Tauri 退役仍需单独交付 |
+| MIG-13 安装更新、托盘/通知、采集启停、队列同步、设置 | 托盘、通知动作路由、自动启动、更新检查、Tracker/BrowserBridge/KeyStats、守护进程退出路径均保留；`WindowsRecordingService` 为 DI 单例，关闭笔记窗口只解绑 UI 事件，不停止录音 | 生命周期复用强；系统通知展示与深链未接入，仍需真实安装/升级与设备/长时验收 |
 
 结论：本批新增的是 Windows 本机主动笔记纵向能力，以及 MIG-04/MIG-13 的兼容入口和生命周期证据；MIG-02、MIG-05、MIG-08 也只在上表列出的动作上部分原生化，没有任何 MIG-01 至 MIG-13 因本批自动销项。

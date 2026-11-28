@@ -48,6 +48,38 @@ public sealed class NoteMaterialRestoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadOnlyServerSourceHandwritingCannotBeDeletedLocally()
+    {
+        var fixture = await CreateMixedRecordingFixtureAsync();
+        var store = new LocalNoteStore(_root);
+        var service = CreateService(
+            CreateApi(new RestoreHandler(fixture)),
+            store,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+        var restored = await service.RestoreVersionAsync(
+            fixture.VersionId,
+            userConfirmedLocalCopy: true);
+        var note = await store.LoadAsync(restored.Import.NoteId);
+        Assert.True(note.IsServerSourceReadOnly);
+        var preview = Assert.Single(note.Materials, material =>
+            material.Kind == LocalNoteMaterialKind.Handwriting);
+        var source = Assert.Single(note.Materials, material =>
+            material.Kind == LocalNoteMaterialKind.HandwritingSource);
+
+        var rejected = await Assert.ThrowsAsync<LocalNoteStoreException>(() =>
+            store.RemoveHandwritingAsync(
+                note.NoteId,
+                preview.MaterialId,
+                expectedCurrentVersionId: note.CurrentVersionId));
+
+        Assert.Contains("只读", rejected.Message, StringComparison.Ordinal);
+        var unchanged = await store.LoadAsync(note.NoteId);
+        Assert.Equal(note.CurrentVersionId, unchanged.CurrentVersionId);
+        Assert.Contains(unchanged.Materials, material => material.MaterialId == preview.MaterialId);
+        Assert.Contains(unchanged.Materials, material => material.MaterialId == source.MaterialId);
+    }
+
+    [Fact]
     public async Task RestorePreservesInterleavedBlocksAndEveryRecordingSegmentThroughZipAndUploadBuild()
     {
         var fixture = await CreateMixedRecordingFixtureAsync();
@@ -76,6 +108,16 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 material.RecordingSegment!.Value,
                 material.RecordingChunkIndex!.Value,
                 material.RecordingSamples!.Value)));
+        var restoredInkSource = Assert.Single(restored.Materials, material =>
+            material.Kind == LocalNoteMaterialKind.HandwritingSource);
+        var restoredInkJson = await File.ReadAllTextAsync(
+            Path.Combine(_root, restoredInkSource.RelativePath));
+        var restoredInk = LocalInkDocumentCodec.Parse(restoredInkJson);
+        AssertInkUnknownFields(restoredInkJson);
+        var restoredStroke = Assert.Single(restoredInk.Strokes);
+        Assert.Equal(Guid.Parse("44444444-4444-4444-8444-444444444444"), restoredStroke.Id);
+        Assert.Equal("#b8373c", restoredStroke.Color);
+        Assert.Equal(1.8, restoredStroke.Width);
 
         var zipPath = Path.Combine(_root, "roundtrip.pimnote.zip");
         await store.ExportAsync(restored.NoteId, restored.CurrentVersionId, zipPath);
@@ -87,6 +129,16 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         Assert.Equal(
             restored.ServerSource.Blocks.Select(block => (block.Id, block.Kind, block.RawJson)),
             imported.ServerSource!.Blocks.Select(block => (block.Id, block.Kind, block.RawJson)));
+        var importedInkSource = Assert.Single(imported.Materials, material =>
+            material.Kind == LocalNoteMaterialKind.HandwritingSource);
+        var importedInkJson = await File.ReadAllTextAsync(
+            Path.Combine(importedRoot, importedInkSource.RelativePath));
+        var importedInk = LocalInkDocumentCodec.Parse(importedInkJson);
+        AssertInkUnknownFields(importedInkJson);
+        var importedStroke = Assert.Single(importedInk.Strokes);
+        Assert.Equal(restoredStroke.Id, importedStroke.Id);
+        Assert.Equal("#b8373c", importedStroke.Color);
+        Assert.Equal(1.8, importedStroke.Width);
 
         var rebuilt = await new ServerNoteMaterialBundleBuilder(importedStore)
             .BuildAsync(imported.NoteId, imported.CurrentVersionId);
@@ -103,6 +155,27 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 chunk.GetProperty("segment").GetInt32(),
                 chunk.GetProperty("index").GetInt32(),
                 chunk.GetProperty("samples").GetInt64())));
+        var rebuiltInk = note.GetProperty("blocks").EnumerateArray()
+            .Single(block => block.GetProperty("kind").GetString() == "ink")
+            .GetProperty("ink");
+        Assert.Equal(
+            "44444444-4444-4444-8444-444444444444",
+            rebuiltInk.GetProperty("strokeIds")[0].GetString());
+        Assert.Equal("#b8373c", rebuiltInk.GetProperty("strokeStyles")[0].GetProperty("color").GetString());
+        Assert.Equal(1.8, rebuiltInk.GetProperty("strokeStyles")[0].GetProperty("width").GetDouble());
+        Assert.Equal(
+            "server",
+            rebuiltInk.GetProperty("futureRoot").GetProperty("from").GetString());
+        Assert.Equal(
+            "red",
+            rebuiltInk.GetProperty("strokeStyles")[0].GetProperty("futureStyle").GetString());
+        Assert.Equal(
+            "pen",
+            rebuiltInk.GetProperty("strokes")[0].GetProperty("futureStroke").GetString());
+        Assert.Equal(
+            5,
+            rebuiltInk.GetProperty("strokes")[0].GetProperty("points")[0]
+                .GetProperty("futurePoint").GetInt32());
         Assert.Equal(3, rebuilt.Files.Count(file => file.Kind == "AudioChunk"));
     }
 
@@ -1314,6 +1387,25 @@ public sealed class NoteMaterialRestoreTests : IDisposable
             files));
     }
 
+    private static void AssertInkUnknownFields(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal(
+            "server",
+            root.GetProperty("futureRoot").GetProperty("from").GetString());
+        Assert.Equal(
+            "red",
+            root.GetProperty("strokeStyles")[0].GetProperty("futureStyle").GetString());
+        Assert.Equal(
+            "pen",
+            root.GetProperty("strokes")[0].GetProperty("futureStroke").GetString());
+        Assert.Equal(
+            5,
+            root.GetProperty("strokes")[0].GetProperty("points")[0]
+                .GetProperty("futurePoint").GetInt32());
+    }
+
     private static async Task<RestoreFixture> CreateMixedRecordingFixtureAsync()
     {
         var noteId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
@@ -1324,7 +1416,23 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         var inkBlockId = Guid.Parse("ffffffff-ffff-4fff-8fff-ffffffffffff");
         var photoBytes = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1 };
         var inkPreview = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 2 };
-        const string ink = "{\"width\":320,\"height\":180,\"strokes\":[{\"width\":2,\"points\":[{\"x\":10,\"y\":20,\"pressure\":0.5}]}]}";
+        const string ink = """
+            {
+              "width": 320,
+              "height": 180,
+              "futureRoot": {"from": "server"},
+              "strokeIds": ["44444444-4444-4444-8444-444444444444"],
+              "strokeStyles": [{"color": "#b8373c", "width": 1.8, "futureStyle": "red"}],
+              "strokes": [
+                {
+                  "color": "#b8373c",
+                  "width": 1.8,
+                  "futureStroke": "pen",
+                  "points": [{"x": 10, "y": 20, "pressure": 0.5, "futurePoint": 5}]
+                }
+              ]
+            }
+            """;
         var inkHash = Hash(Encoding.UTF8.GetBytes(ink));
         var noteJson = $$"""
             {"schemaVersion":1,"id":"{{noteId:D}}","revision":7,"createdAtMillis":7,"title":"交错材料",

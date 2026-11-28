@@ -828,72 +828,37 @@ public sealed class ServerNoteMaterialBundleBuilder
     {
         try
         {
-            using var document = JsonDocument.Parse(raw);
-            var root = document.RootElement;
-            var schemaVersion = Int(root, "schemaVersion", "SchemaVersion");
-            var width = Number(root, "width", "Width");
-            var height = Number(root, "height", "Height");
-            if (schemaVersion != SchemaVersion
-                || width is < 80 or > 2048
-                || height is < 80 or > 4096
-                || (preview.Width is { } previewWidth && Math.Abs(previewWidth - width) > 1)
-                || (preview.Height is { } previewHeight && Math.Abs(previewHeight - height) > 1)
-                || (source.Width is { } sourceWidth && Math.Abs(sourceWidth - width) > 1)
-                || (source.Height is { } sourceHeight && Math.Abs(sourceHeight - height) > 1))
+            var ink = LocalInkDocumentCodec.Parse(raw);
+            if (ink.SchemaVersion != SchemaVersion
+                || ink.Width is < 80 or > 2048
+                || ink.Height is < 80 or > 4096
+                || (preview.Width is { } previewWidth && Math.Abs(previewWidth - ink.Width) > 1)
+                || (preview.Height is { } previewHeight && Math.Abs(previewHeight - ink.Height) > 1)
+                || (source.Width is { } sourceWidth && Math.Abs(sourceWidth - ink.Width) > 1)
+                || (source.Height is { } sourceHeight && Math.Abs(sourceHeight - ink.Height) > 1))
             {
                 throw new LocalNoteStoreException($"手写源尺寸或版本无效：{source.DisplayName}");
             }
 
-            var strokes = new JsonArray();
-            var rawStrokes = Property(root, "strokes", "Strokes");
-            if (rawStrokes.ValueKind != JsonValueKind.Array || rawStrokes.GetArrayLength() == 0)
+            foreach (var stroke in ink.Strokes)
             {
-                throw new LocalNoteStoreException($"手写源没有笔迹：{source.DisplayName}");
-            }
-
-            foreach (var rawStroke in rawStrokes.EnumerateArray())
-            {
-                var points = new JsonArray();
-                foreach (var point in rawStroke.EnumerateArray())
+                foreach (var point in stroke.Points)
                 {
-                    var x = Number(point, "x", "X");
-                    var y = Number(point, "y", "Y");
-                    var pressure = Number(point, "pressure", "Pressure");
-                    if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(pressure)
-                        || x < 0 || x > width || y < 0 || y > height
-                        || pressure is < 0 or > 1)
+                    if (point.X < 0 || point.X > ink.Width
+                        || point.Y < 0 || point.Y > ink.Height
+                        || point.Pressure is < 0 or > 1)
                     {
                         throw new LocalNoteStoreException($"手写笔迹超出固定画布：{source.DisplayName}");
                     }
-
-                    points.Add(new JsonObject
-                    {
-                        ["x"] = x,
-                        ["y"] = y,
-                        ["pressure"] = pressure,
-                    });
                 }
-
-                if (points.Count == 0)
-                {
-                    throw new LocalNoteStoreException($"手写笔迹包含空笔画：{source.DisplayName}");
-                }
-
-                strokes.Add(new JsonObject
-                {
-                    ["width"] = 2.0,
-                    ["points"] = points,
-                });
             }
 
-            return new JsonObject
-            {
-                ["width"] = width,
-                ["height"] = height,
-                ["strokes"] = strokes,
-            };
+            var normalized = JsonNode.Parse(LocalInkDocumentCodec.Serialize(ink)) as JsonObject
+                ?? throw new LocalNoteStoreException($"手写源 JSON 损坏：{source.DisplayName}");
+            normalized.Remove("schemaVersion");
+            return normalized;
         }
-        catch (JsonException ex)
+        catch (InvalidDataException ex)
         {
             throw new LocalNoteStoreException($"手写源 JSON 损坏：{source.DisplayName}", ex);
         }
@@ -1076,25 +1041,6 @@ public sealed class ServerNoteMaterialBundleBuilder
         => value.EndsWith(extension, StringComparison.OrdinalIgnoreCase)
             ? value[..^extension.Length]
             : value;
-
-    private static JsonElement Property(JsonElement node, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (node.TryGetProperty(name, out var value))
-            {
-                return value;
-            }
-        }
-
-        throw new JsonException($"缺少属性 {string.Join("/", names)}。");
-    }
-
-    private static int Int(JsonElement node, params string[] names)
-        => Property(node, names).GetInt32();
-
-    private static double Number(JsonElement node, params string[] names)
-        => Property(node, names).GetDouble();
 
     private static string Sha256(byte[] bytes)
         => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();

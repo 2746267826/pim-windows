@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 cbfdfb2904fff81145376ff27971a033f2d0c0b33c488c10024a72810e8c1c15)
+//   契约快照      : contract/openapi.json (sha256 5f5bffc67f26d70a15507d093d526c62c27270f4627a5feaba97b79be6eb73e7)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -64,7 +64,7 @@ public sealed class ContractOperation
     /// <summary>路由参数的类型校验规则（uuid / int32 / int64 / plain-string）。</summary>
     public System.Collections.Generic.IReadOnlyList<ContractHeader> RouteParameterKinds { get; }
 
-    /// <summary>契约声明的标量 query 参数，按契约顺序序列化。</summary>
+    /// <summary>契约声明的 query 参数，按契约顺序序列化；enum-array 允许重复同名参数。</summary>
     public System.Collections.Generic.IReadOnlyList<ContractQueryParameter> QueryParameters { get; }
 
     /// <summary>契约要求的必需请求 header。</summary>
@@ -165,31 +165,40 @@ public sealed class ContractOperation
 
     /// <summary>
     /// 按契约声明的顺序构造 query string（含前导 <c>?</c>，无参数时返回空串）。
-    /// 名字必须与契约完全一致；required 缺席、重复、未知名字或类型不符都会抛异常。
+    /// 名字必须与契约完全一致；required 缺席、标量重复、未知名字或类型不符都会抛异常。
     /// </summary>
     public string ResolveQuery(params (string Name, string? Value)[] queryValues)
     {
-        var supplied = new System.Collections.Generic.Dictionary<string, string?>(System.StringComparer.Ordinal);
+        var supplied = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<string?>>(System.StringComparer.Ordinal);
         foreach (var (name, value) in queryValues ?? System.Array.Empty<(string, string?)>())
         {
-            if (!supplied.TryAdd(name, value))
+            if (!supplied.TryGetValue(name, out var values))
             {
-                throw new System.ArgumentException($"Query 值重复：{name}", nameof(queryValues));
+                values = new System.Collections.Generic.List<string?>();
+                supplied[name] = values;
             }
+
+            values.Add(value);
         }
 
         foreach (var name in supplied.Keys)
         {
-            if (!QueryParameters.Any(parameter => parameter.Name == name))
+            var parameter = QueryParameters.FirstOrDefault(candidate => candidate.Name == name);
+            if (parameter is null)
             {
                 throw new System.ArgumentException($"契约未声明 Query 参数 {name}（{PathTemplate}）", nameof(queryValues));
+            }
+
+            if (parameter.Kind != "enum-array" && supplied[name].Count > 1)
+            {
+                throw new System.ArgumentException($"Query 值重复：{name}", nameof(queryValues));
             }
         }
 
         var parts = new System.Collections.Generic.List<string>();
         foreach (var parameter in QueryParameters)
         {
-            if (!supplied.TryGetValue(parameter.Name, out var value))
+            if (!supplied.TryGetValue(parameter.Name, out var values))
             {
                 if (parameter.Required)
                 {
@@ -200,7 +209,37 @@ public sealed class ContractOperation
                 continue;
             }
 
-            if (value is null)
+            if (parameter.Kind == "enum-array")
+            {
+                var emitted = 0;
+                foreach (var value in values)
+                {
+                    if (value is null)
+                    {
+                        continue;
+                    }
+
+                    if (parameter.AllowedValues is null || !parameter.AllowedValues.Contains(value, System.StringComparer.Ordinal))
+                    {
+                        throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是契约声明的枚举值", nameof(queryValues));
+                    }
+
+                    parts.Add(
+                        System.Uri.EscapeDataString(parameter.Name) + "=" + System.Uri.EscapeDataString(value));
+                    emitted++;
+                }
+
+                if (emitted == 0 && parameter.Required)
+                {
+                    throw new System.ArgumentException(
+                        $"必需 Query 参数 {parameter.Name} 不能为空（契约路径 {PathTemplate}）", nameof(queryValues));
+                }
+
+                continue;
+            }
+
+            var scalarValue = values[0];
+            if (scalarValue is null)
             {
                 if (parameter.Required)
                 {
@@ -214,42 +253,42 @@ public sealed class ContractOperation
             switch (parameter.Kind)
             {
                 case "uuid":
-                    if (!System.Guid.TryParse(value, out _))
+                    if (!System.Guid.TryParse(scalarValue, out _))
                     {
                         throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是 UUID", nameof(queryValues));
                     }
 
                     break;
                 case "int32":
-                    if (!int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
+                    if (!int.TryParse(scalarValue, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
                     {
                         throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是 int32", nameof(queryValues));
                     }
 
                     break;
                 case "int64":
-                    if (!long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
+                    if (!long.TryParse(scalarValue, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
                     {
                         throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是 int64", nameof(queryValues));
                     }
 
                     break;
                 case "date-time":
-                    if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out _))
+                    if (!System.DateTimeOffset.TryParse(scalarValue, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out _))
                     {
                         throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是 ISO date-time", nameof(queryValues));
                     }
 
                     break;
                 case "boolean":
-                    if (!bool.TryParse(value, out _))
+                    if (!bool.TryParse(scalarValue, out _))
                     {
                         throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是 boolean", nameof(queryValues));
                     }
 
                     break;
                 case "enum":
-                    if (parameter.AllowedValues is null || !parameter.AllowedValues.Contains(value, System.StringComparer.Ordinal))
+                    if (parameter.AllowedValues is null || !parameter.AllowedValues.Contains(scalarValue, System.StringComparer.Ordinal))
                     {
                         throw new System.ArgumentException($"Query 参数 {parameter.Name} 不是契约声明的枚举值", nameof(queryValues));
                     }
@@ -258,7 +297,7 @@ public sealed class ContractOperation
             }
 
             parts.Add(
-                System.Uri.EscapeDataString(parameter.Name) + "=" + System.Uri.EscapeDataString(value));
+                System.Uri.EscapeDataString(parameter.Name) + "=" + System.Uri.EscapeDataString(scalarValue));
         }
 
         return parts.Count == 0 ? string.Empty : "?" + string.Join("&", parts);
@@ -358,7 +397,7 @@ public sealed class ContractOperation
     public static readonly ContractOperation GetCalendarEvents =
         new("GET", "/api/v1/calendar/events", "calendar/events",
             new ContractHeader[] {  },
-            new ContractQueryParameter[] { new("start", "date-time", false), new("end", "date-time", false), new("search", "plain-string", false), new("calendarId", "uuid", false), new("page", "int32", false), new("pageSize", "int32", false) },
+            new ContractQueryParameter[] { new("start", "date-time", true), new("end", "date-time", true), new("search", "plain-string", false), new("calendarId", "uuid", false), new("page", "int32", false), new("pageSize", "int32", false) },
             new ContractHeader[] {  },
             null,
             "application/json",
@@ -382,7 +421,7 @@ public sealed class ContractOperation
     public static readonly ContractOperation GetTasks =
         new("GET", "/api/v1/calendar/tasks", "calendar/tasks",
             new ContractHeader[] {  },
-            new ContractQueryParameter[] { new("inbox", "boolean", false), new("search", "plain-string", false), new("calendarId", "uuid", false), new("status", "plain-string", false), new("priority", "int32", false), new("plannedFrom", "date-time", false), new("plannedTo", "date-time", false), new("dueFrom", "date-time", false), new("dueTo", "date-time", false), new("page", "int32", false), new("pageSize", "int32", false) },
+            new ContractQueryParameter[] { new("inbox", "boolean", false), new("search", "plain-string", false), new("calendarId", "uuid", false), new("status", "enum-array", false, new string[] { "NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED" }), new("priority", "int32", false), new("plannedFrom", "date-time", false), new("plannedTo", "date-time", false), new("dueFrom", "date-time", false), new("dueTo", "date-time", false), new("page", "int32", false), new("pageSize", "int32", false) },
             new ContractHeader[] {  },
             null,
             "application/json",
@@ -849,6 +888,14 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
+            "application/json",
+            new ContractHeader[] {  });
+    public static readonly ContractOperation GetNoteProcessingStatus =
+        new("GET", "/api/v1/native-notes/processing", "native-notes/processing",
+            new ContractHeader[] {  },
+            new ContractQueryParameter[] { new("noteId", "uuid", true), new("versionId", "uuid", true) },
+            new ContractHeader[] {  },
+            null,
             "application/json",
             new ContractHeader[] {  });
 }

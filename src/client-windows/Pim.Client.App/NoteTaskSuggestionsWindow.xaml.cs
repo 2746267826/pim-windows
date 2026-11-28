@@ -26,6 +26,7 @@ public partial class NoteTaskSuggestionsWindow : Window
     private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly DispatcherTimer _draftSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     private readonly SemaphoreSlim _actionGate = new(1, 1);
+    private IReadOnlyList<CalendarResponse> _calendars = [];
     private NoteTaskSuggestionLoadFence _loadFence = null!;
     private NoteTaskSuggestionSelectionFence? _selectionFence;
     private NoteTaskSuggestionDto? _selectedSuggestion;
@@ -40,6 +41,7 @@ public partial class NoteTaskSuggestionsWindow : Window
     private bool _allowClose;
     private bool _pendingCloseAcknowledged;
     private bool _draftSaveInProgress;
+    private string? _eventTimeError;
 
     public NoteTaskSuggestionsWindow(
         Guid noteId,
@@ -114,12 +116,10 @@ public partial class NoteTaskSuggestionsWindow : Window
                     .Select(item => new ChoiceRow(item.Id, item.Name)))
                 .ToArray();
             TaskBookBox.SelectedIndex = 0;
-            CalendarBox.ItemsSource = new[] { new ChoiceRow(null, "不指定日历") }
-                .Concat(calendarsTask.Result
-                    .Where(item => Guid.TryParse(item.Id, out _))
-                    .Select(item => new ChoiceRow(item.Id, item.Name)))
+            _calendars = calendarsTask.Result
+                .Where(item => Guid.TryParse(item.Id, out _))
                 .ToArray();
-            CalendarBox.SelectedIndex = 0;
+            ApplyCalendarChoices(NoteTaskSuggestionKindDto.Task, preferredId: null);
             StatusText.Text = "目录已就绪；源正文为固定版本只读副本。";
             await RefreshSuggestionsAsync(selectId: null);
             UpdateActions();
@@ -303,6 +303,13 @@ public partial class NoteTaskSuggestionsWindow : Window
             var generation = _uiState.DraftGeneration;
             var selectionBeforeSave = _selectionFence;
             var draft = BuildDraft();
+            if (_eventTimeError is not null)
+            {
+                _loadingEditor = false;
+                EditorStateText.Text = $"{_eventTimeError} 当前编辑内容未保存，建议列表未刷新。";
+                UpdateActions();
+                return;
+            }
             _loadingEditor = true;
             _draftSaveTimer.Stop();
             UpdateActions();
@@ -410,6 +417,15 @@ public partial class NoteTaskSuggestionsWindow : Window
             {
                 var generation = _editorGeneration;
                 var previousDraft = BuildDraft();
+                if (_eventTimeError is not null)
+                {
+                    _loadingEditor = false;
+                    _selectionFence = _uiState.BeginSelection(_loadFence, Guid.Parse(previous.Id));
+                    RestoreSuggestionSelection(previous.Id);
+                    EditorStateText.Text = $"{_eventTimeError} 请先修正时间，再切换建议。";
+                    UpdateActions();
+                    return;
+                }
                 await PersistLocalDraftAsync(previous, previousDraft);
                 if (!IsCurrent(ticket))
                 {
@@ -456,12 +472,7 @@ public partial class NoteTaskSuggestionsWindow : Window
             _selectedSuggestion = row.Suggestion;
             _pendingConfirmation = pendingConfirmation;
             _confirmationUnresolved = pendingConfirmation is not null;
-            TitleBox.Text = draft?.Title ?? row.Suggestion.Title;
-            DescriptionBox.Text = draft?.Description ?? row.Suggestion.Description ?? string.Empty;
-            PriorityBox.SelectedItem = draft?.Priority ?? row.Suggestion.Priority;
-            DueDatePicker.SelectedDate = (draft?.Due ?? row.Suggestion.Due)?.LocalDateTime.Date;
-            SelectChoice(TaskBookBox, draft?.TaskBookId ?? row.Suggestion.TaskBookId);
-            SelectChoice(CalendarBox, draft?.CalendarId ?? row.Suggestion.CalendarId);
+            ApplySuggestionToEditor(row.Suggestion, draft);
             if (draft is null)
                 _uiState.ClearDraft();
             else
@@ -499,10 +510,12 @@ public partial class NoteTaskSuggestionsWindow : Window
     {
         if (_loadingEditor || _selectedSuggestion is null)
             return;
+        _eventTimeError = null;
         _editorGeneration = _uiState.MarkDraftDirtyAndRemember();
         EditorStateText.Text = "修改尚未保存；正在安全写入本机草稿。";
         _draftSaveTimer.Stop();
         _draftSaveTimer.Start();
+        UpdateEventTimeHint();
         UpdateActions();
     }
 
@@ -514,6 +527,12 @@ public partial class NoteTaskSuggestionsWindow : Window
             var selectionTicket = _selectionFence;
             var generation = _editorGeneration;
             var draft = BuildDraft();
+            if (_eventTimeError is not null)
+            {
+                EditorStateText.Text = $"{_eventTimeError} 请修正后再保存本机草稿。";
+                UpdateActions();
+                return;
+            }
             _draftSaveInProgress = true;
             UpdateActions();
             try
@@ -557,21 +576,19 @@ public partial class NoteTaskSuggestionsWindow : Window
         {
             var captured = selected;
             var draft = BuildDraft();
+            if (_eventTimeError is not null)
+            {
+                EditorStateText.Text = _eventTimeError;
+                return;
+            }
             EditorStateText.Text = "正在按服务器修订号保存；冲突时本机草稿保留。";
             var updated = await _service.SaveEditAsync(captured, draft, expectedFence: _operationFence);
             if (!IsCurrentSelection(captured) || _selectionFence != selectionTicket)
                 return;
             ReplaceSuggestion(updated);
             _selectedSuggestion = updated;
-            _loadingEditor = true;
-            TitleBox.Text = updated.Title;
-            DescriptionBox.Text = updated.Description ?? string.Empty;
-            PriorityBox.SelectedItem = updated.Priority;
-            DueDatePicker.SelectedDate = updated.Due?.LocalDateTime.Date;
-            SelectChoice(TaskBookBox, updated.TaskBookId);
-            SelectChoice(CalendarBox, updated.CalendarId);
+            ApplySuggestionToEditor(updated, null);
             _uiState.ClearDraft();
-            _loadingEditor = false;
             EditorStateText.Text = "修改已按服务器修订号保存。";
         }, "保存失败；本机草稿仍保留，可刷新后处理修订冲突。" );
     }
@@ -582,11 +599,19 @@ public partial class NoteTaskSuggestionsWindow : Window
             return;
         _draftSaveTimer.Stop();
         var draft = BuildDraft();
+        if (_eventTimeError is not null)
+        {
+            EditorStateText.Text = _eventTimeError;
+            return;
+        }
         var selectionTicket = _selectionFence;
+        var isEvent = selected.Kind == NoteTaskSuggestionKindDto.Event;
         if (MessageBox.Show(
                 this,
-                $"确认把“{draft.Title}”写入所选任务本？此操作会创建实际任务，并使用当前建议修订。",
-                "确认写入任务",
+                isEvent
+                    ? $"确认把“{draft.Title}”写入所选日历？此操作会创建实际日程，并使用当前建议修订。"
+                    : $"确认把“{draft.Title}”写入所选任务本？此操作会创建实际任务，并使用当前建议修订。",
+                isEvent ? "确认写入日程" : "确认写入任务",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
@@ -602,15 +627,8 @@ public partial class NoteTaskSuggestionsWindow : Window
                     return;
                 ReplaceSuggestion(current);
                 _selectedSuggestion = current;
-                _loadingEditor = true;
-                TitleBox.Text = current.Title;
-                DescriptionBox.Text = current.Description ?? string.Empty;
-                PriorityBox.SelectedItem = current.Priority;
-                DueDatePicker.SelectedDate = current.Due?.LocalDateTime.Date;
-                SelectChoice(TaskBookBox, current.TaskBookId);
-                SelectChoice(CalendarBox, current.CalendarId);
+                ApplySuggestionToEditor(current, null);
                 _uiState.ClearDraft();
-                _loadingEditor = false;
             }
 
             EditorStateText.Text = "正在提交固定修订的幂等确认…";
@@ -621,7 +639,8 @@ public partial class NoteTaskSuggestionsWindow : Window
                 return;
             _confirmationUnresolved = false;
             _pendingConfirmation = null;
-            EditorStateText.Text = "任务已创建并完成服务器核实。";
+            EditorStateText.Text = NoteTaskSuggestionPresentation.ReceiptSummary(confirmed);
+            StatusText.Text = EditorStateText.Text;
         }, "确认未完成；本机草稿/幂等确认凭据保留，请先核实服务器状态。" );
         await RefreshPendingStateAsync();
         if (IsSessionCurrent())
@@ -636,7 +655,7 @@ public partial class NoteTaskSuggestionsWindow : Window
         if (MessageBox.Show(
                 this,
                 "放弃这条待处理建议？该操作不删除固定来源或本机笔记，但会清除这条建议的本机编辑草稿。",
-                "放弃任务建议",
+                "放弃建议",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
@@ -782,9 +801,7 @@ public partial class NoteTaskSuggestionsWindow : Window
             && !_confirmationUnresolved;
         DescriptionBox.IsEnabled = TitleBox.IsEnabled;
         PriorityBox.IsEnabled = TitleBox.IsEnabled;
-        DueDatePicker.IsEnabled = TitleBox.IsEnabled;
-        TaskBookBox.IsEnabled = TitleBox.IsEnabled;
-        CalendarBox.IsEnabled = TitleBox.IsEnabled;
+        UpdateEditorFieldStates();
         if (!sessionCurrent && !_sessionInvalid)
             InvalidateSession("账号或服务器已切换；服务器写入已禁用，本机草稿仍可保存。" );
     }
@@ -858,9 +875,14 @@ public partial class NoteTaskSuggestionsWindow : Window
             TitleBox.IsEnabled = true;
             DescriptionBox.IsEnabled = true;
             PriorityBox.IsEnabled = true;
+            TimeZoneBox.IsEnabled = true;
+            StartDatePicker.IsEnabled = true;
+            EndDatePicker.IsEnabled = true;
+            StartTimeBox.IsEnabled = true;
+            EndTimeBox.IsEnabled = true;
             DueDatePicker.IsEnabled = true;
             TaskBookBox.IsEnabled = true;
-            CalendarBox.IsEnabled = true;
+            UpdateCalendarFieldState(canEdit: true);
         }
     }
 
@@ -868,26 +890,368 @@ public partial class NoteTaskSuggestionsWindow : Window
 
     private NoteTaskSuggestionEditDraft BuildDraft()
     {
-        var selected = _selectedSuggestion ?? throw new InvalidOperationException("尚未选择任务建议。");
+        var selected = _selectedSuggestion ?? throw new InvalidOperationException("尚未选择建议。");
+        _eventTimeError = null;
+        var isEvent = selected.Kind == NoteTaskSuggestionKindDto.Event;
+        DateTimeOffset? start = null;
+        DateTimeOffset? end = null;
+        string? timeZoneId = null;
+        DateTimeOffset? due = null;
+        string? taskBookId = null;
+
+        if (isEvent)
+        {
+            timeZoneId = NoteTaskSuggestionEventTime.NormalizeTimeZoneId(TimeZoneBox.Text);
+            if (timeZoneId is not null && !NoteTaskSuggestionEventTime.IsIanaTimeZone(timeZoneId))
+            {
+                _eventTimeError = "日程时区必须是有效的 IANA 时区，例如 Asia/Shanghai。";
+            }
+            else if (timeZoneId is not null)
+            {
+                start = ReadEventTime(
+                    StartDatePicker.SelectedDate,
+                    StartTimeBox.Text,
+                    timeZoneId,
+                    selected.Start,
+                    "开始时间");
+                end = ReadEventTime(
+                    EndDatePicker.SelectedDate,
+                    EndTimeBox.Text,
+                    timeZoneId,
+                    selected.End,
+                    "结束时间");
+            }
+            else
+            {
+                start = selected.Start;
+                end = selected.End;
+            }
+
+            if (start is null || end is null)
+                _eventTimeError ??= "日程开始和结束时间必须同时完整。";
+            else if (end <= start)
+                _eventTimeError ??= "日程结束时间必须晚于开始时间。";
+        }
+        else
+        {
+            due = DueDatePicker.SelectedDate is { } date
+                ? new DateTimeOffset(DateTime.SpecifyKind(date.Date, DateTimeKind.Local)).ToUniversalTime()
+                : null;
+            taskBookId = (TaskBookBox.SelectedItem as ChoiceRow)?.Id;
+        }
+
         return new NoteTaskSuggestionEditDraft(
             selected.Revision,
             TitleBox.Text,
             string.IsNullOrWhiteSpace(DescriptionBox.Text) ? null : DescriptionBox.Text,
             PriorityBox.SelectedItem is int priority ? priority : selected.Priority,
-            DueDatePicker.SelectedDate is { } date
-                ? new DateTimeOffset(DateTime.SpecifyKind(date.Date, DateTimeKind.Local)).ToUniversalTime()
-                : null,
-            (TaskBookBox.SelectedItem as ChoiceRow)?.Id,
-            (CalendarBox.SelectedItem as ChoiceRow)?.Id);
+            due,
+            taskBookId,
+            (CalendarBox.SelectedItem as NoteTaskSuggestionCalendarChoice)?.Id)
+        {
+            Start = start,
+            End = end,
+            TimeZoneId = timeZoneId,
+            DescriptionSpecified = true,
+            DueSpecified = !isEvent,
+            TaskBookIdSpecified = !isEvent,
+            CalendarIdSpecified = true,
+            TimeZoneIdSpecified = isEvent,
+        };
     }
 
     private static bool DraftDiffers(NoteTaskSuggestionDto suggestion, NoteTaskSuggestionEditDraft draft)
-        => suggestion.Title != draft.Title
-            || suggestion.Description != draft.Description
+    {
+        if (suggestion.Title != draft.Title
+            || suggestion.Description != draft.ResolveDescription(suggestion)
             || suggestion.Priority != draft.Priority
-            || suggestion.Due?.LocalDateTime.Date != draft.Due?.LocalDateTime.Date
-            || suggestion.TaskBookId != draft.TaskBookId
-            || suggestion.CalendarId != draft.CalendarId;
+            || suggestion.CalendarId != draft.ResolveCalendarId(suggestion))
+            return true;
+
+        if (suggestion.Kind == NoteTaskSuggestionKindDto.Event)
+        {
+            return suggestion.Start != draft.Start
+                || suggestion.End != draft.End
+                || !string.Equals(
+                    NoteTaskSuggestionEventTime.NormalizeTimeZoneId(suggestion.TimeZoneId),
+                    NoteTaskSuggestionEventTime.NormalizeTimeZoneId(
+                        draft.ResolveTimeZoneId(suggestion)),
+                    StringComparison.Ordinal);
+        }
+
+        return suggestion.Due?.LocalDateTime.Date
+               != draft.ResolveDue(suggestion)?.LocalDateTime.Date
+            || suggestion.TaskBookId != draft.ResolveTaskBookId(suggestion);
+    }
+
+    private DateTimeOffset? ReadEventTime(
+        DateTime? date,
+        string? timeText,
+        string timeZoneId,
+        DateTimeOffset? fallback,
+        string label)
+    {
+        if (date is null && string.IsNullOrWhiteSpace(timeText))
+            return fallback;
+        if (date is null)
+        {
+            _eventTimeError ??= $"{label}必须选择日期。";
+            return null;
+        }
+        if (!NoteTaskSuggestionEventTime.TryFromWallClockOrPreserve(
+                date.Value,
+                timeText,
+                timeZoneId,
+                fallback,
+                out var value,
+                out var error))
+        {
+            _eventTimeError ??= $"{label}：{error}";
+            return null;
+        }
+
+        return value;
+    }
+
+    private void ApplySuggestionToEditor(
+        NoteTaskSuggestionDto suggestion,
+        NoteTaskSuggestionEditDraft? draft)
+    {
+        _loadingEditor = true;
+        try
+        {
+            var isEvent = suggestion.Kind == NoteTaskSuggestionKindDto.Event;
+            EditorTitleText.Text = isEvent ? "编辑日程建议" : "编辑任务建议";
+            ConfirmButton.Content = isEvent ? "确认写入日程" : "确认写入任务";
+            TaskFieldsPanel.Visibility = isEvent ? Visibility.Collapsed : Visibility.Visible;
+            EventFieldsPanel.Visibility = isEvent ? Visibility.Visible : Visibility.Collapsed;
+
+            TitleBox.Text = draft?.Title ?? suggestion.Title;
+            DescriptionBox.Text = (draft is null
+                ? suggestion.Description
+                : draft.ResolveDescription(suggestion)) ?? string.Empty;
+            PriorityBox.SelectedItem = draft?.Priority ?? suggestion.Priority;
+            ApplyCalendarChoices(
+                suggestion.Kind,
+                preferredId: draft is null
+                    ? suggestion.CalendarId
+                    : draft.ResolveCalendarId(suggestion));
+            _eventTimeError = null;
+
+            if (isEvent)
+            {
+                DueDatePicker.SelectedDate = null;
+                SelectChoice(TaskBookBox, null);
+                var timeZoneId = NoteTaskSuggestionEventTime.NormalizeTimeZoneId(
+                    draft is null
+                        ? suggestion.TimeZoneId
+                        : draft.ResolveTimeZoneId(suggestion));
+                TimeZoneBox.Text = timeZoneId ?? string.Empty;
+                SetEventTime(
+                    draft?.Start ?? suggestion.Start,
+                    timeZoneId,
+                    StartDatePicker,
+                    StartTimeBox);
+                SetEventTime(
+                    draft?.End ?? suggestion.End,
+                    timeZoneId,
+                    EndDatePicker,
+                    EndTimeBox);
+            }
+            else
+            {
+                DueDatePicker.SelectedDate = (draft is null
+                    ? suggestion.Due
+                    : draft.ResolveDue(suggestion))?.LocalDateTime.Date;
+                SelectChoice(
+                    TaskBookBox,
+                    draft is null
+                        ? suggestion.TaskBookId
+                        : draft.ResolveTaskBookId(suggestion));
+                TimeZoneBox.Clear();
+                StartDatePicker.SelectedDate = null;
+                EndDatePicker.SelectedDate = null;
+                StartTimeBox.Clear();
+                EndTimeBox.Clear();
+            }
+        }
+        finally
+        {
+            _loadingEditor = false;
+        }
+
+        UpdateEventTimeHint();
+        UpdateEditorFieldStates();
+    }
+
+    private static void SetEventTime(
+        DateTimeOffset? instant,
+        string? timeZoneId,
+        DatePicker datePicker,
+        TextBox timeBox)
+    {
+        if (instant is null)
+        {
+            datePicker.SelectedDate = null;
+            timeBox.Clear();
+            return;
+        }
+
+        if (timeZoneId is not null
+            && NoteTaskSuggestionEventTime.TryToWallClock(
+                instant,
+                timeZoneId,
+                out var date,
+                out var time,
+                out _))
+        {
+            datePicker.SelectedDate = date;
+            timeBox.Text = time;
+            return;
+        }
+
+        datePicker.SelectedDate = null;
+        timeBox.Clear();
+    }
+
+    private void OnTimeZoneChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loadingEditor || _selectedSuggestion is not { Kind: NoteTaskSuggestionKindDto.Event } selected)
+            return;
+
+        var timeZoneId = NoteTaskSuggestionEventTime.NormalizeTimeZoneId(TimeZoneBox.Text);
+        if (timeZoneId is not null && NoteTaskSuggestionEventTime.IsIanaTimeZone(timeZoneId))
+        {
+            if (StartDatePicker.SelectedDate is null && string.IsNullOrWhiteSpace(StartTimeBox.Text))
+                SetEventTime(selected.Start, timeZoneId, StartDatePicker, StartTimeBox);
+            if (EndDatePicker.SelectedDate is null && string.IsNullOrWhiteSpace(EndTimeBox.Text))
+                SetEventTime(selected.End, timeZoneId, EndDatePicker, EndTimeBox);
+        }
+
+        MarkEditorChanged();
+    }
+
+    private void UpdateEventTimeHint()
+    {
+        if (_selectedSuggestion is not { Kind: NoteTaskSuggestionKindDto.Event } selected)
+        {
+            EventTimeHintText.Text = "";
+            return;
+        }
+
+        var timeZoneId = NoteTaskSuggestionEventTime.NormalizeTimeZoneId(TimeZoneBox.Text);
+        if (timeZoneId is null)
+        {
+            EventTimeHintText.Text = selected.Start is not null && selected.End is not null
+                ? "日程未提供 IANA 时区：确认会按已保存的绝对时间创建；修改时间前请先填写 IANA 时区。"
+                : "日程缺少 IANA 时区且时间不完整，请先补全时区与开始、结束时间。";
+            return;
+        }
+        if (!NoteTaskSuggestionEventTime.IsIanaTimeZone(timeZoneId))
+        {
+            EventTimeHintText.Text = "时区无效；请填写 IANA 名称，例如 Asia/Shanghai。";
+            return;
+        }
+        if (_eventTimeError is not null)
+        {
+            EventTimeHintText.Text = _eventTimeError;
+            return;
+        }
+
+        if (StartDatePicker.SelectedDate is { } startDate
+            && EndDatePicker.SelectedDate is { } endDate)
+        {
+            if (!NoteTaskSuggestionEventTime.TryFromWallClockOrPreserve(
+                    startDate,
+                    StartTimeBox.Text,
+                    timeZoneId,
+                    selected.Start,
+                    out var start,
+                    out var startError))
+            {
+                EventTimeHintText.Text = $"开始时间：{startError}";
+            }
+            else if (!NoteTaskSuggestionEventTime.TryFromWallClockOrPreserve(
+                         endDate,
+                         EndTimeBox.Text,
+                         timeZoneId,
+                         selected.End,
+                         out var end,
+                         out var endError))
+            {
+                EventTimeHintText.Text = $"结束时间：{endError}";
+            }
+            else if (end <= start)
+            {
+                EventTimeHintText.Text = "日程结束时间必须晚于开始时间。";
+            }
+            else
+            {
+                EventTimeHintText.Text = "开始和结束时间按该 IANA 时区解释；不存在或重复的夏令时时间会被拒绝。";
+            }
+        }
+        else if (StartDatePicker.SelectedDate is not null)
+        {
+            EventTimeHintText.Text = "开始时间：请填写 HH:mm。";
+        }
+        else if (!string.IsNullOrWhiteSpace(StartTimeBox.Text)
+                 || !string.IsNullOrWhiteSpace(EndTimeBox.Text))
+        {
+            EventTimeHintText.Text = "开始和结束时间必须同时选择日期并填写 HH:mm。";
+        }
+        else
+        {
+            EventTimeHintText.Text = selected.Start is not null && selected.End is not null
+                ? "未改动时间时将保留服务器已保存的日程时间。"
+                : "请补全开始和结束日期与 HH:mm 时间。";
+        }
+    }
+
+    private void UpdateEditorFieldStates()
+    {
+        var canEdit = TitleBox.IsEnabled;
+        var isEvent = _selectedSuggestion?.Kind == NoteTaskSuggestionKindDto.Event;
+        var validTimeZone = NoteTaskSuggestionEventTime.IsIanaTimeZone(TimeZoneBox.Text);
+        TimeZoneBox.IsEnabled = canEdit && isEvent;
+        StartDatePicker.IsEnabled = canEdit && isEvent && validTimeZone;
+        EndDatePicker.IsEnabled = canEdit && isEvent && validTimeZone;
+        StartTimeBox.IsEnabled = canEdit && isEvent && validTimeZone;
+        EndTimeBox.IsEnabled = canEdit && isEvent && validTimeZone;
+        DueDatePicker.IsEnabled = canEdit && !isEvent;
+        TaskBookBox.IsEnabled = canEdit && !isEvent;
+        UpdateCalendarFieldState(canEdit);
+    }
+
+    private void ApplyCalendarChoices(NoteTaskSuggestionKindDto kind, string? preferredId)
+    {
+        var choices = NoteTaskSuggestionCalendarPolicy.BuildChoices(_calendars, kind);
+        var selectableCount = NoteTaskSuggestionCalendarPolicy
+            .SelectableCalendars(_calendars, kind)
+            .Count;
+        var selected = NoteTaskSuggestionCalendarPolicy.ResolveChoice(choices, preferredId);
+        CalendarBox.ItemsSource = choices;
+        CalendarBox.SelectedItem = selected;
+        CalendarFieldLabelText.Text = kind == NoteTaskSuggestionKindDto.Event
+            ? "目标日程日历"
+            : "目标日历（任务可选）";
+        CalendarHintText.Text = NoteTaskSuggestionCalendarPolicy.SelectionHint(
+            kind,
+            selectableCount,
+            preferredId,
+            selected);
+    }
+
+    private void UpdateCalendarFieldState(bool canEdit)
+    {
+        var kind = _selectedSuggestion?.Kind ?? NoteTaskSuggestionKindDto.Task;
+        var selectableCount = NoteTaskSuggestionCalendarPolicy
+            .SelectableCalendars(_calendars, kind)
+            .Count;
+        CalendarBox.IsEnabled = NoteTaskSuggestionCalendarPolicy.ShouldEnablePicker(
+            kind,
+            canEdit,
+            selectableCount);
+    }
 
     private void SelectChoice(ComboBox box, string? id)
         => box.SelectedItem = (box.ItemsSource as IEnumerable<ChoiceRow>)?.FirstOrDefault(row => row.Id == id);
@@ -916,11 +1280,23 @@ public partial class NoteTaskSuggestionsWindow : Window
         _selectedSuggestion = null;
         _selectionFence = null;
         _pendingConfirmation = null;
+        _eventTimeError = null;
         _loadingEditor = true;
         TitleBox.Clear();
         DescriptionBox.Clear();
         PriorityBox.SelectedItem = null;
         DueDatePicker.SelectedDate = null;
+        TimeZoneBox.Clear();
+        StartDatePicker.SelectedDate = null;
+        EndDatePicker.SelectedDate = null;
+        StartTimeBox.Clear();
+        EndTimeBox.Clear();
+        EventTimeHintText.Text = "";
+        ApplyCalendarChoices(NoteTaskSuggestionKindDto.Task, preferredId: null);
+        TaskFieldsPanel.Visibility = Visibility.Visible;
+        EventFieldsPanel.Visibility = Visibility.Collapsed;
+        EditorTitleText.Text = "编辑建议";
+        ConfirmButton.Content = "确认写入任务";
         _uiState.ClearDraft();
         _loadingEditor = false;
         EditorStateText.Text = text;
@@ -976,6 +1352,14 @@ public partial class NoteTaskSuggestionsWindow : Window
             var selectionTicket = _selectionFence;
             var generation = _uiState.DraftGeneration;
             var draft = BuildDraft();
+            if (_eventTimeError is not null)
+            {
+                e.Cancel = true;
+                _loadingEditor = false;
+                EditorStateText.Text = $"{_eventTimeError} 请修正后再关闭窗口。";
+                UpdateActions();
+                return;
+            }
             _loadingEditor = true;
             UpdateActions();
             try
@@ -1019,7 +1403,8 @@ public partial class NoteTaskSuggestionsWindow : Window
 
     private sealed record SuggestionRow(NoteTaskSuggestionDto Suggestion)
     {
-        public string Label => $"{Suggestion.Ordinal}. {Suggestion.Title}";
-        public string Detail => $"优先级 {Suggestion.Priority} · 修订 {Suggestion.Revision[..Math.Min(8, Suggestion.Revision.Length)]}";
+        public string Label =>
+            $"{Suggestion.Ordinal}. [{NoteTaskSuggestionPresentation.KindLabel(Suggestion.Kind)}] {Suggestion.Title}";
+        public string Detail => NoteTaskSuggestionPresentation.Detail(Suggestion);
     }
 }

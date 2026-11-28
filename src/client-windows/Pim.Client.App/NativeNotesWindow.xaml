@@ -239,9 +239,18 @@
                                                        Text="固定材料版本 · 尚无材料"
                                                        Foreground="{StaticResource PimMutedTextBrush}"
                                                        TextWrapping="Wrap" VerticalAlignment="Center" />
-                                            <Button Grid.Column="1" Content="编辑所选笔迹"
-                                                    Style="{StaticResource PimSecondaryButton}"
-                                                    Margin="8,0,0,0" Click="OnEditHandwriting" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                        Margin="8,0,0,0">
+                                                <Button Content="编辑所选笔迹"
+                                                        Style="{StaticResource PimSecondaryButton}"
+                                                        Click="OnEditHandwriting" />
+                                                <Button x:Name="DeleteHandwritingButton"
+                                                        Content="删除所选手写"
+                                                        Style="{StaticResource PimSecondaryButton}"
+                                                        Margin="6,0,0,0" IsEnabled="False"
+                                                        ToolTip="选择手写预览（.png）后，删除它和唯一配对的笔迹源；不会删除照片、录音或历史版本"
+                                                        Click="OnDeleteHandwriting" />
+                                            </StackPanel>
                                         </Grid>
                                         <ListBox x:Name="MaterialsList" Grid.Row="1" Height="140"
                                                  Margin="0,8,0,0"
@@ -339,6 +348,47 @@
                                             Style="{StaticResource PimSecondaryButton}"
                                             Margin="0,8,0,10"
                                             Click="OnPromoteCloudVersion" />
+                                    <Border Background="{StaticResource PimSurfaceBrush}"
+                                            BorderBrush="{StaticResource PimBorderBrush}"
+                                            BorderThickness="1" CornerRadius="8"
+                                            Padding="10" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <DockPanel Margin="0,0,0,4">
+                                                <Button x:Name="RefreshProcessingStatusButton"
+                                                        DockPanel.Dock="Right" Content="刷新状态"
+                                                        Style="{StaticResource PimSecondaryButton}"
+                                                        Padding="9,3"
+                                                        Click="OnRefreshProcessingStatus" />
+                                                <TextBlock Text="服务端处理状态" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource PimTextBrush}" />
+                                            </DockPanel>
+                                            <TextBlock x:Name="ProcessingTargetText" FontSize="11"
+                                                       TextWrapping="Wrap" Margin="0,0,0,3"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                            <TextBlock x:Name="ProcessingOverallText" FontSize="12"
+                                                       TextWrapping="Wrap" Text="未选择笔记"
+                                                       Foreground="{StaticResource PimTextBrush}" />
+                                            <TextBlock x:Name="ProcessingAsrText" FontSize="12"
+                                                       TextWrapping="Wrap" Margin="0,2,0,0"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                            <TextBlock x:Name="ProcessingDerivedText" FontSize="12"
+                                                       TextWrapping="Wrap" Margin="0,2,0,0"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                            <TextBlock x:Name="ProcessingArtifactsText" FontSize="12"
+                                                       TextWrapping="Wrap" Margin="0,2,0,0"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                            <TextBlock x:Name="ProcessingHintText" FontSize="11"
+                                                       TextWrapping="Wrap" Margin="0,5,0,0"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                            <TextBlock x:Name="ProcessingIssuesText" FontSize="11"
+                                                       TextWrapping="Wrap" Margin="0,4,0,0"
+                                                       Visibility="Collapsed"
+                                                       Foreground="{StaticResource PimActivityBrush}" />
+                                            <TextBlock x:Name="ProcessingUpdatedText" FontSize="11"
+                                                       TextWrapping="Wrap" Margin="0,4,0,0"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                        </StackPanel>
+                                    </Border>
                                     <DockPanel Margin="0,4,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="云端记录与分析"
                                                    Foreground="{StaticResource PimTextBrush}"
@@ -362,7 +412,7 @@
                                                 Style="{StaticResource PimSecondaryButton}"
                                                 Margin="0,0,6,6"
                                                 Click="OnSelectCloudResultVersion" />
-                                        <Button Content="从此版本提取任务建议"
+                                        <Button Content="从此版本提取任务与日程建议"
                                                 Style="{StaticResource PimPrimaryButton}"
                                                 Margin="0,0,6,6"
                                                 Click="OnOpenTaskSuggestions" />

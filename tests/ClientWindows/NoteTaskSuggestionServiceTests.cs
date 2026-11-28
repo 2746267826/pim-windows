@@ -18,6 +18,9 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
     private const string VersionId = "66666666-6666-6666-6666-666666666666";
     private const string Revision = "77777777-7777-7777-7777-777777777777";
     private const string NewRevision = "88888888-8888-8888-8888-888888888888";
+    private const string CalendarId = "99999999-9999-9999-9999-999999999999";
+    private const string TaskBookId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    private const string EventReceiptId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
         "pim-task-suggestions-" + Guid.NewGuid().ToString("N"));
@@ -165,6 +168,354 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
         Assert.NotNull(await service.GetPendingConfirmationAsync(Guid.Parse(SuggestionId)));
     }
 
+    [Fact]
+    public async Task EventConfirmationAcceptsNullTaskIdAndUsesEventId()
+    {
+        var handler = new TaskSuggestionHandler { Current = EventSuggestion() };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var suggestion = handler.Current;
+
+        var confirmed = await service.ConfirmAsync(suggestion, Revision);
+
+        Assert.Equal(NoteTaskSuggestionKindDto.Event, confirmed.Kind);
+        Assert.Null(confirmed.TaskId);
+        Assert.Equal(EventReceiptId, confirmed.EventId);
+        Assert.Null(await service.GetPendingConfirmationAsync(Guid.Parse(SuggestionId)));
+    }
+
+    [Fact]
+    public async Task LostEventConfirmResponseReusesFrozenRequestAndVerifiesEventReceipt()
+    {
+        var handler = new TaskSuggestionHandler
+        {
+            Current = EventSuggestion(),
+            LoseFirstConfirmResponse = true,
+        };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var suggestion = handler.Current;
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => service.ConfirmAsync(suggestion, Revision));
+        var frozen = Assert.Single(handler.ConfirmRequests);
+        Assert.NotNull(await service.GetPendingConfirmationAsync(Guid.Parse(SuggestionId)));
+
+        var confirmed = await service.ConfirmAsync(suggestion, Revision);
+
+        Assert.Equal(EventReceiptId, confirmed.EventId);
+        Assert.Null(confirmed.TaskId);
+        Assert.Equal(2, handler.ConfirmRequests.Count);
+        Assert.All(handler.ConfirmRequests, request => Assert.Equal(frozen.RequestId, request.RequestId));
+        Assert.Equal(1, handler.GetSuggestionRequests);
+        Assert.Null(await service.GetPendingConfirmationAsync(Guid.Parse(SuggestionId)));
+    }
+
+    [Fact]
+    public async Task EventConfirmationWithoutEventIdKeepsFrozenRequest()
+    {
+        var handler = new TaskSuggestionHandler
+        {
+            Current = EventSuggestion(),
+            SuppressEventId = true,
+        };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.ConfirmAsync(handler.Current, Revision));
+
+        Assert.Contains("日程", error.Message);
+        Assert.NotNull(await service.GetPendingConfirmationAsync(Guid.Parse(SuggestionId)));
+    }
+
+    [Fact]
+    public async Task EventEditPreservesTimesAndCalendarWhenDraftOnlyChangesTitle()
+    {
+        var handler = new TaskSuggestionHandler { Current = EventSuggestion() };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "人工改写的日程标题", null, 5, null, null, CalendarId);
+
+        var updated = await service.SaveEditAsync(handler.Current, draft);
+
+        Assert.Equal("人工改写的日程标题", updated.Title);
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-11-21T11:00:00Z"),
+            body.RootElement.GetProperty("start").GetDateTimeOffset());
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-11-21T12:00:00Z"),
+            body.RootElement.GetProperty("end").GetDateTimeOffset());
+        Assert.Equal("Asia/Shanghai", body.RootElement.GetProperty("timeZoneId").GetString());
+        Assert.Equal(CalendarId, body.RootElement.GetProperty("calendarId").GetString());
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("due").ValueKind);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("taskBookId").ValueKind);
+    }
+
+    [Fact]
+    public async Task EventEditWithoutIanaZonePreservesServerAbsoluteTimes()
+    {
+        var handler = new TaskSuggestionHandler
+        {
+            Current = EventSuggestion(timeZoneId: null),
+        };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "保留无时区日程的标题编辑", null, 5, null, null, CalendarId);
+
+        var updated = await service.SaveEditAsync(handler.Current, draft);
+
+        Assert.Null(updated.TimeZoneId);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-21T11:00:00Z"), updated.Start);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-21T12:00:00Z"), updated.End);
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("timeZoneId").ValueKind);
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-11-21T11:00:00Z"),
+            body.RootElement.GetProperty("start").GetDateTimeOffset());
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-11-21T12:00:00Z"),
+            body.RootElement.GetProperty("end").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public async Task EventEditSendsEditedIanaTimesAndRange()
+    {
+        var handler = new TaskSuggestionHandler { Current = EventSuggestion() };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var start = DateTimeOffset.Parse("2026-11-21T14:00:00Z");
+        var end = DateTimeOffset.Parse("2026-11-21T15:30:00Z");
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "改到纽约时间", "跨时区编辑", 9, null, null, CalendarId)
+        {
+            Start = start,
+            End = end,
+            TimeZoneId = "America/New_York",
+        };
+
+        var updated = await service.SaveEditAsync(handler.Current, draft);
+
+        Assert.Equal("America/New_York", updated.TimeZoneId);
+        Assert.Equal(start, updated.Start);
+        Assert.Equal(end, updated.End);
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal("America/New_York", body.RootElement.GetProperty("timeZoneId").GetString());
+        Assert.Equal(start, body.RootElement.GetProperty("start").GetDateTimeOffset());
+        Assert.Equal(end, body.RootElement.GetProperty("end").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public async Task EventEditRejectsWindowsTimeZoneBeforeSending()
+    {
+        var handler = new TaskSuggestionHandler { Current = EventSuggestion() };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "错误时区", null, 5, null, null, CalendarId)
+        {
+            Start = DateTimeOffset.Parse("2026-11-21T11:00:00Z"),
+            End = DateTimeOffset.Parse("2026-11-21T12:00:00Z"),
+            TimeZoneId = "China Standard Time",
+        };
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.SaveEditAsync(handler.Current, draft));
+
+        Assert.Contains("IANA", error.Message);
+        Assert.Equal(0, handler.UpdateRequests);
+    }
+
+    [Fact]
+    public async Task ExplicitEventTimeZoneClearSurvivesDraftReloadAndUpdateRequest()
+    {
+        var handler = new TaskSuggestionHandler { Current = EventSuggestion() };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var suggestion = handler.Current;
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "清空日程时区", null, 5, null, null, CalendarId)
+        {
+            Start = suggestion.Start,
+            End = suggestion.End,
+            TimeZoneIdSpecified = true,
+        };
+
+        await service.SaveLocalDraftAsync(Guid.Parse(SuggestionId), draft);
+        var reloaded = await service.LoadDraftAsync(Guid.Parse(SuggestionId));
+
+        Assert.NotNull(reloaded);
+        Assert.True(reloaded.TimeZoneIdSpecified);
+        Assert.Null(reloaded.TimeZoneId);
+        await service.SaveEditAsync(suggestion, reloaded);
+
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("timeZoneId").ValueKind);
+        Assert.Equal(
+            suggestion.Start,
+            body.RootElement.GetProperty("start").GetDateTimeOffset());
+        Assert.Equal(
+            suggestion.End,
+            body.RootElement.GetProperty("end").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public async Task AbsentEventTimeZoneFallsBackToServerSuggestionOnUpdate()
+    {
+        var handler = new TaskSuggestionHandler { Current = EventSuggestion() };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var suggestion = handler.Current;
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "只改日程标题", null, 5, null, null, CalendarId)
+        {
+            Start = suggestion.Start,
+            End = suggestion.End,
+        };
+
+        await service.SaveLocalDraftAsync(Guid.Parse(SuggestionId), draft);
+        var reloaded = await service.LoadDraftAsync(Guid.Parse(SuggestionId));
+
+        Assert.NotNull(reloaded);
+        Assert.False(reloaded.TimeZoneIdSpecified);
+        Assert.Null(reloaded.TimeZoneId);
+        await service.SaveEditAsync(suggestion, reloaded);
+
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal(
+            "Asia/Shanghai",
+            body.RootElement.GetProperty("timeZoneId").GetString());
+    }
+
+    [Fact]
+    public async Task ExplicitTaskFieldClearsSurviveDraftReloadAndUpdateRequest()
+    {
+        var due = DateTimeOffset.Parse("2026-11-20T01:00:00Z");
+        var handler = new TaskSuggestionHandler
+        {
+            Current = Suggestion(
+                description: "旧说明",
+                due: due,
+                taskBookId: TaskBookId,
+                calendarId: CalendarId),
+        };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var suggestion = handler.Current;
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "清空任务字段", null, 3, null, null, null)
+        {
+            DescriptionSpecified = true,
+            DueSpecified = true,
+            TaskBookIdSpecified = true,
+            CalendarIdSpecified = true,
+        };
+
+        await service.SaveLocalDraftAsync(Guid.Parse(SuggestionId), draft);
+        var reloaded = await service.LoadDraftAsync(Guid.Parse(SuggestionId));
+
+        Assert.NotNull(reloaded);
+        Assert.True(reloaded.DescriptionSpecified);
+        Assert.True(reloaded.DueSpecified);
+        Assert.True(reloaded.TaskBookIdSpecified);
+        Assert.True(reloaded.CalendarIdSpecified);
+        Assert.Null(reloaded.Description);
+        Assert.Null(reloaded.Due);
+        Assert.Null(reloaded.TaskBookId);
+        Assert.Null(reloaded.CalendarId);
+        await service.SaveEditAsync(suggestion, reloaded);
+
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("description").ValueKind);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("due").ValueKind);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("taskBookId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, body.RootElement.GetProperty("calendarId").ValueKind);
+    }
+
+    [Fact]
+    public async Task AbsentDraftFieldsFallBackToServerSuggestionOnUpdate()
+    {
+        var due = DateTimeOffset.Parse("2026-11-20T01:00:00Z");
+        var handler = new TaskSuggestionHandler
+        {
+            Current = Suggestion(
+                description: "服务器说明",
+                due: due,
+                taskBookId: TaskBookId,
+                calendarId: CalendarId),
+        };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+        var suggestion = handler.Current;
+        var draft = new NoteTaskSuggestionEditDraft(
+            Revision, "只改标题", null, 3, null, null, null);
+
+        await service.SaveLocalDraftAsync(Guid.Parse(SuggestionId), draft);
+        var reloaded = await service.LoadDraftAsync(Guid.Parse(SuggestionId));
+
+        Assert.NotNull(reloaded);
+        Assert.False(reloaded.DescriptionSpecified);
+        Assert.False(reloaded.DueSpecified);
+        Assert.False(reloaded.TaskBookIdSpecified);
+        Assert.False(reloaded.CalendarIdSpecified);
+        await service.SaveEditAsync(suggestion, reloaded);
+
+        Assert.NotNull(handler.LastUpdateBody);
+        using var body = JsonDocument.Parse(handler.LastUpdateBody);
+        Assert.Equal("服务器说明", body.RootElement.GetProperty("description").GetString());
+        Assert.Equal(due, body.RootElement.GetProperty("due").GetDateTimeOffset());
+        Assert.Equal(TaskBookId, body.RootElement.GetProperty("taskBookId").GetString());
+        Assert.Equal(CalendarId, body.RootElement.GetProperty("calendarId").GetString());
+    }
+
+    [Fact]
+    public async Task PendingEventConfirmationReconcilesUsingEventId()
+    {
+        var handler = new TaskSuggestionHandler
+        {
+            Current = EventSuggestion(),
+            LoseFirstConfirmResponse = true,
+        };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            service.ConfirmAsync(handler.Current, Revision));
+        var result = await service.ReconcilePendingConfirmationsAsync();
+
+        Assert.Equal(new NoteTaskSuggestionReconciliationResult(1, 1, 0), result);
+        Assert.Null(await service.GetPendingConfirmationAsync(Guid.Parse(SuggestionId)));
+    }
+
+    [Fact]
+    public async Task PendingEventConfirmationWithoutEventIdKeepsCredentials()
+    {
+        var handler = new TaskSuggestionHandler
+        {
+            Current = EventSuggestion(),
+            LoseFirstConfirmResponse = true,
+            SuppressEventId = true,
+        };
+        var service = CreateService(handler, () => new CloudNoteAccountScope(
+            "http://127.0.0.1:5858", AccountA));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            service.ConfirmAsync(handler.Current, Revision));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.ReconcilePendingConfirmationsAsync());
+
+        Assert.Contains("日程", error.Message);
+        Assert.NotNull(await service.GetPendingConfirmationAsync(Guid.Parse(SuggestionId)));
+    }
+
     private NoteTaskSuggestionService CreateService(
         TaskSuggestionHandler handler,
         Func<CloudNoteAccountScope?> accountProvider,
@@ -192,13 +543,28 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
     private static NoteTaskSuggestionDto Suggestion(
         string? revision = null,
         string? sourceContentHash = null,
-        string? artifactId = null)
+        string? artifactId = null,
+        NoteTaskSuggestionKindDto kind = NoteTaskSuggestionKindDto.Task,
+        DateTimeOffset? start = null,
+        DateTimeOffset? end = null,
+        string? timeZoneId = null,
+        string? eventId = null,
+        string? description = null,
+        DateTimeOffset? due = null,
+        string? taskBookId = null,
+        string? calendarId = null)
         => new()
         {
             ArtifactId = artifactId ?? ArtifactId,
+            CalendarId = calendarId ?? (kind == NoteTaskSuggestionKindDto.Event ? CalendarId : null),
             CreatedAt = DateTimeOffset.Parse("2026-11-02T00:00:00Z"),
+            Description = description,
+            Due = due,
+            End = end,
+            EventId = eventId,
             ExtractionId = "99999999-9999-9999-9999-999999999999",
             Id = SuggestionId,
+            Kind = kind,
             NoteId = NoteId,
             Ordinal = 1,
             Priority = 3,
@@ -207,11 +573,21 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
             SourceGenerationTaskId = "generation-1",
             SourceInputSha256 = new string('b', 64),
             SourceManifestSha256 = new string('c', 64),
+            Start = start,
             Status = NoteTaskSuggestionStatusDto.Draft,
+            TaskBookId = taskBookId,
+            TimeZoneId = timeZoneId,
             Title = "准备评审材料",
             UpdatedAt = DateTimeOffset.Parse("2026-11-02T00:00:00Z"),
             VersionId = VersionId,
         };
+
+    private static NoteTaskSuggestionDto EventSuggestion(string? timeZoneId = "Asia/Shanghai")
+        => Suggestion(
+            kind: NoteTaskSuggestionKindDto.Event,
+            start: DateTimeOffset.Parse("2026-11-21T11:00:00Z"),
+            end: DateTimeOffset.Parse("2026-11-21T12:00:00Z"),
+            timeZoneId: timeZoneId);
 
     public void Dispose()
     {
@@ -221,12 +597,14 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
 
     private sealed class TaskSuggestionHandler : HttpMessageHandler
     {
-        public NoteTaskSuggestionDto Current { get; private set; } = Suggestion();
+        public NoteTaskSuggestionDto Current { get; set; } = Suggestion();
         public IReadOnlyList<NoteTaskSuggestionDto> ListItems { get; set; } = [Suggestion()];
         public bool LoseFirstConfirmResponse { get; set; }
         public bool KeepDraftAfterLostConfirm { get; set; }
         public bool RejectUpdate { get; set; }
         public bool BlockConfirmResponse { get; set; }
+        public bool SuppressEventId { get; set; }
+        public string? LastUpdateBody { get; private set; }
         public TaskCompletionSource ConfirmStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseConfirmResponse { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int RequestCount { get; private set; }
@@ -259,15 +637,13 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
                     LoseFirstConfirmResponse = false;
                     if (!KeepDraftAfterLostConfirm)
                     {
-                        Current = Copy(Current, NoteTaskSuggestionStatusDto.Confirmed,
-                            taskId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+                        Current = ConfirmedCopy(Current);
                     }
 
                     throw new HttpRequestException("synthetic response lost after server commit");
                 }
 
-                Current = Copy(Current, NoteTaskSuggestionStatusDto.Confirmed,
-                    taskId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+                Current = ConfirmedCopy(Current);
                 return JsonResponse(new NoteTaskSuggestionDtoApiResponse
                 {
                     Code = 0, Data = Current, Message = "ok", Timestamp = DateTimeOffset.UtcNow,
@@ -311,16 +687,19 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
 
                 using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
                 var update = body.RootElement;
+                LastUpdateBody = update.GetRawText();
                 Current = new NoteTaskSuggestionDto
                 {
                     ArtifactId = Current.ArtifactId,
-                    CalendarId = update.GetProperty("calendarId").ValueKind == JsonValueKind.Null
-                        ? null : update.GetProperty("calendarId").GetString(),
+                    CalendarId = ReadNullableString(update, "calendarId"),
                     CreatedAt = Current.CreatedAt,
-                    Description = update.GetProperty("description").ValueKind == JsonValueKind.Null
-                        ? null : update.GetProperty("description").GetString(),
+                    Description = ReadNullableString(update, "description"),
+                    Due = ReadNullableDateTimeOffset(update, "due"),
+                    End = ReadNullableDateTimeOffset(update, "end"),
+                    EventId = Current.EventId,
                     ExtractionId = Current.ExtractionId,
                     Id = Current.Id,
+                    Kind = Current.Kind,
                     NoteId = Current.NoteId,
                     Ordinal = Current.Ordinal,
                     Priority = update.GetProperty("priority").GetInt32(),
@@ -329,10 +708,11 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
                     SourceGenerationTaskId = Current.SourceGenerationTaskId,
                     SourceInputSha256 = Current.SourceInputSha256,
                     SourceManifestSha256 = Current.SourceManifestSha256,
+                    Start = ReadNullableDateTimeOffset(update, "start"),
                     Status = NoteTaskSuggestionStatusDto.Draft,
-                    TaskBookId = update.GetProperty("taskBookId").ValueKind == JsonValueKind.Null
-                        ? null : update.GetProperty("taskBookId").GetString(),
+                    TaskBookId = ReadNullableString(update, "taskBookId"),
                     Title = update.GetProperty("title").GetString()!,
+                    TimeZoneId = ReadNullableString(update, "timeZoneId"),
                     UpdatedAt = DateTimeOffset.UtcNow,
                     VersionId = Current.VersionId,
                 };
@@ -348,8 +728,22 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         }
 
+        private NoteTaskSuggestionDto ConfirmedCopy(NoteTaskSuggestionDto source)
+            => Copy(
+                source,
+                NoteTaskSuggestionStatusDto.Confirmed,
+                taskId: source.Kind == NoteTaskSuggestionKindDto.Task
+                    ? "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+                    : null,
+                eventId: source.Kind == NoteTaskSuggestionKindDto.Event && !SuppressEventId
+                    ? EventReceiptId
+                    : null);
+
         private static NoteTaskSuggestionDto Copy(
-            NoteTaskSuggestionDto source, NoteTaskSuggestionStatusDto status, string? taskId = null)
+            NoteTaskSuggestionDto source,
+            NoteTaskSuggestionStatusDto status,
+            string? taskId = null,
+            string? eventId = null)
             => new()
             {
                 ArtifactId = source.ArtifactId,
@@ -359,8 +753,11 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
                 Description = source.Description,
                 DismissedAt = source.DismissedAt,
                 Due = source.Due,
+                End = source.End,
+                EventId = eventId,
                 ExtractionId = source.ExtractionId,
                 Id = source.Id,
+                Kind = source.Kind,
                 NoteId = source.NoteId,
                 Ordinal = source.Ordinal,
                 Priority = source.Priority,
@@ -369,13 +766,25 @@ public sealed class NoteTaskSuggestionServiceTests : IDisposable
                 SourceGenerationTaskId = source.SourceGenerationTaskId,
                 SourceInputSha256 = source.SourceInputSha256,
                 SourceManifestSha256 = source.SourceManifestSha256,
+                Start = source.Start,
                 Status = status,
                 TaskBookId = source.TaskBookId,
                 TaskId = taskId ?? source.TaskId,
                 Title = source.Title,
+                TimeZoneId = source.TimeZoneId,
                 UpdatedAt = DateTimeOffset.UtcNow,
                 VersionId = source.VersionId,
             };
+
+        private static string? ReadNullableString(JsonElement element, string propertyName)
+            => element.GetProperty(propertyName).ValueKind == JsonValueKind.Null
+                ? null
+                : element.GetProperty(propertyName).GetString();
+
+        private static DateTimeOffset? ReadNullableDateTimeOffset(JsonElement element, string propertyName)
+            => element.GetProperty(propertyName).ValueKind == JsonValueKind.Null
+                ? null
+                : element.GetProperty(propertyName).GetDateTimeOffset();
 
         private static HttpResponseMessage JsonResponse<T>(T value)
             => new(HttpStatusCode.OK)

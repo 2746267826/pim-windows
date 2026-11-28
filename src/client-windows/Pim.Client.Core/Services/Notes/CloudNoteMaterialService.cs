@@ -615,6 +615,49 @@ public sealed class CloudNoteMaterialService
         return RequireResponse(response.Code, response.Message, response.Data);
     }
 
+    /// <summary>
+    /// Reads the owner-scoped high-level status for exactly one immutable
+    /// server material version. The response must echo the requested
+    /// note/version identity before the caller may display it.
+    /// </summary>
+    public async Task<NoteProcessingStatusDto> GetProcessingStatusAsync(
+        Guid noteId,
+        Guid versionId,
+        CancellationToken cancellationToken = default)
+    {
+        if (noteId == Guid.Empty)
+        {
+            throw new ArgumentException("笔记标识不能为空。", nameof(noteId));
+        }
+        if (versionId == Guid.Empty)
+        {
+            throw new ArgumentException("固定版本标识不能为空。", nameof(versionId));
+        }
+
+        using var operation = BeginOperation();
+        RequireOperationCurrent(operation);
+        var response = await _api.GetNoteProcessingStatusAsync(
+                noteId,
+                versionId,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new InvalidDataException("服务器没有返回笔记处理状态。");
+        RequireOperationCurrent(operation);
+        var status = RequireResponse(response.Code, response.Message, response.Data);
+        if (!Guid.TryParse(status.NoteId, out var returnedNoteId)
+            || returnedNoteId != noteId
+            || !Guid.TryParse(status.VersionId, out var returnedVersionId)
+            || returnedVersionId != versionId
+            || !Guid.TryParse(status.ProcessingId, out var processingId)
+            || processingId == Guid.Empty)
+        {
+            throw new InvalidDataException(
+                "服务器返回的笔记处理状态与所选固定版本不一致；界面未更新。");
+        }
+
+        return status;
+    }
+
     public async Task<IReadOnlyList<NoteAsrSourceDto>> GetMaterialSourcesAsync(
         int pageSize = 50,
         CancellationToken cancellationToken = default)
@@ -1139,54 +1182,29 @@ public sealed class CloudNoteMaterialService
         double? blockWidth,
         double? blockHeight)
     {
-        using var document = System.Text.Json.JsonDocument.Parse(inkJson);
-        var root = document.RootElement;
-        var width = root.GetProperty("width").GetDouble();
-        var height = root.GetProperty("height").GetDouble();
-        if (blockWidth is { } expectedWidth && Math.Abs(width - expectedWidth) > 1
-            || blockHeight is { } expectedHeight && Math.Abs(height - expectedHeight) > 1
-            || !root.TryGetProperty("strokes", out var strokes)
-            || strokes.ValueKind != System.Text.Json.JsonValueKind.Array
-            || strokes.GetArrayLength() == 0)
+        LocalInkDocument ink;
+        try
         {
-            throw new InvalidDataException("服务器手写块尺寸或笔迹无效。");
+            ink = LocalInkDocumentCodec.Parse(inkJson);
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new InvalidDataException("服务器手写块尺寸、样式或笔迹无效。", ex);
         }
 
-        var localStrokes = new List<List<object>>();
-        foreach (var stroke in strokes.EnumerateArray())
+        if (ink.Strokes.Any(stroke => stroke.Points.Any(point =>
+                point.X < 0 || point.X > ink.Width || point.Y < 0 || point.Y > ink.Height)))
         {
-            if (!stroke.TryGetProperty("points", out var points)
-                || points.ValueKind != System.Text.Json.JsonValueKind.Array
-                || points.GetArrayLength() == 0)
-            {
-                throw new InvalidDataException("服务器手写块包含空笔画。");
-            }
-
-            var localPoints = new List<object>();
-            foreach (var point in points.EnumerateArray())
-            {
-                var x = point.GetProperty("x").GetDouble();
-                var y = point.GetProperty("y").GetDouble();
-                var pressure = point.GetProperty("pressure").GetDouble();
-                if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(pressure)
-                    || x < 0 || x > width || y < 0 || y > height || pressure is < 0 or > 1)
-                {
-                    throw new InvalidDataException("服务器手写笔迹点超出画布或压力范围。");
-                }
-
-                localPoints.Add(new { x, y, pressure });
-            }
-
-            localStrokes.Add(localPoints);
+            throw new InvalidDataException("服务器手写笔迹点超出画布范围。");
         }
 
-        return System.Text.Json.JsonSerializer.Serialize(new
+        if (blockWidth is { } expectedWidth && Math.Abs(ink.Width - expectedWidth) > 1
+            || blockHeight is { } expectedHeight && Math.Abs(ink.Height - expectedHeight) > 1)
         {
-            schemaVersion = 1,
-            width,
-            height,
-            strokes = localStrokes,
-        }, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            throw new InvalidDataException("服务器手写块尺寸与材料清单不一致。");
+        }
+
+        return LocalInkDocumentCodec.Serialize(ink);
     }
 
     private static int? ToPixel(double? value)

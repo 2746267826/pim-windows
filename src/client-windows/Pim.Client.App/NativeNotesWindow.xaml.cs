@@ -21,6 +21,8 @@ public partial class NativeNotesWindow : Window
     private readonly CloudNoteMaterialService _cloud;
     private readonly ObservableCollection<LocalNoteSummary> _notes = [];
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
+    private readonly HandwritingMaterialSelectionState _materialSelection = new();
+    private readonly MaterialSelectionBinding _materialBinding;
     private readonly NativeNoteOperationCoordinator _operations = new();
     private readonly NativeNoteLibraryLoadState _library = new();
     private readonly NativeNoteLibraryViewState _libraryView = new();
@@ -40,16 +42,21 @@ public partial class NativeNotesWindow : Window
     private bool _loadingCloudResult;
     private bool _restoringCloudSelection;
     private bool _refreshingCloudResults;
+    private bool _refreshingCloudVersions;
     private NoteDerivedArtifactDto? _selectedArtifact;
     private NoteDerivedVersionDto? _selectedDerivedVersion;
     private NoteDerivedVersionSummaryDto? _selectedDerivedVersionSummary;
     private LoadedCloudArtifactFence? _loadedTaskSourceFence;
     private long _taskSourceSelectionGeneration;
+    private long _processingStatusGeneration;
+    private NoteProcessingStatusTarget? _processingStatusTarget;
 
     public NativeNotesWindow()
     {
         InitializeComponent();
         DataContext = _windowState;
+        _materialBinding = new MaterialSelectionBinding(MaterialsList, _materialSelection);
+        _materialBinding.SelectionChanged += (_, _) => UpdateDeleteHandwritingButtonState();
         _store = App.Services.GetRequiredService<LocalNoteStore>();
         _recording = App.Services.GetRequiredService<WindowsRecordingService>();
         _cloud = App.Services.GetRequiredService<CloudNoteMaterialService>();
@@ -399,10 +406,12 @@ public partial class NativeNotesWindow : Window
 
     private async Task RefreshNoteDetailsAsync(LocalNoteDocument note, long selectionGeneration)
     {
+        ResetProcessingStatus("正在读取服务端处理状态…");
         await RefreshVersionsAsync(note.NoteId, note.CurrentVersionId);
         if (IsCurrentNoteSelection(selectionGeneration, note.NoteId))
         {
             await RefreshCloudVersionsAsync(showErrors: false, selectionGeneration);
+            await RefreshProcessingStatusAsync(showErrors: false, selectionGeneration);
             await RefreshCloudResultsAsync(showErrors: false, selectionGeneration);
         }
 
@@ -851,6 +860,247 @@ public partial class NativeNotesWindow : Window
                 ShowFailure("手写材料未能重新打开或保存；原固定版本未修改", ex);
             }
         }
+    }
+
+    private async void OnDeleteHandwriting(object sender, RoutedEventArgs e)
+    {
+        if (_current is null)
+        {
+            MessageBox.Show(this, "请先选择或新建一篇可编辑的本机笔记。", "删除手写",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (MaterialsList.SelectedItem is not LocalNoteMaterial selected)
+        {
+            MessageBox.Show(this, "请先在材料列表选择要删除的手写预览（.png）。", "删除手写",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (selected.Kind == LocalNoteMaterialKind.HandwritingSource)
+        {
+            MessageBox.Show(
+                this,
+                "所选材料是笔迹源，不能单独删除；请选择与它配对的 PNG 预览。",
+                "删除手写",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        if (selected.Kind != LocalNoteMaterialKind.Handwriting)
+        {
+            MessageBox.Show(
+                this,
+                "所选材料不是手写预览；删除手写不会删除照片、录音或其他材料。请改选 PNG 手写预览。",
+                "删除手写",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        if (_current.IsServerSourceReadOnly)
+        {
+            MessageBox.Show(this, "服务器混排原件当前为只读，不能删除手写材料。", "删除手写",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        LocalNoteMaterial source;
+        try
+        {
+            source = LocalInkMaterialPairing.ResolveSource(selected.MaterialId, _current.Materials);
+        }
+        catch (InvalidDataException ex)
+        {
+            MessageBox.Show(
+                this,
+                $"所选手写预览没有唯一配对的笔迹源，已拒绝删除。\n\n{ex.Message}",
+                "删除手写",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                $"从当前固定版本移除手写「{selected.DisplayName}」及其笔迹源？\n\n"
+                + "这会创建新的固定版本；历史版本、照片、录音和其他手写仍会保留。",
+                "删除手写材料",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var previewMaterialId = selected.MaterialId;
+        var sourceMaterialId = source.MaterialId;
+        try
+        {
+            await TryRunNoteOperationAsync(
+                () => DeleteHandwritingAsync(previewMaterialId, sourceMaterialId),
+                "正在结束并保存当前笔记，手写删除未执行。");
+        }
+        catch (Exception ex)
+        {
+            ShowFailure("手写材料未能删除；当前固定版本仍保留该材料", ex);
+        }
+    }
+
+    private async Task DeleteHandwritingAsync(Guid previewMaterialId, Guid sourceMaterialId)
+    {
+        if (!await SavePendingCoreAsync()
+            || _current is null)
+        {
+            return;
+        }
+
+        var note = _current;
+        var noteId = note.NoteId;
+        var selectionGeneration = _cloudUi.NoteGeneration;
+        var account = _cloud.CurrentAccountScope;
+        var accountGeneration = _cloud.AccountGeneration;
+        var selectionFence = _materialSelection.Capture(previewMaterialId);
+        var deleteCommitted = false;
+        try
+        {
+            if (!IsHandwritingSourceCurrent(noteId, selectionGeneration, account, accountGeneration))
+            {
+                ShowHandwritingDeleteNotApplied("删除未执行：当前笔记或账号已变化，请重新打开目标笔记后重试。");
+                return;
+            }
+
+            if (!selectionFence.IsCurrent(
+                    MaterialsList.SelectedItem as LocalNoteMaterial,
+                    _materialSelection.Generation))
+            {
+                ShowHandwritingDeleteNotApplied("删除未执行：材料选择已变化，请重新确认要删除的手写。");
+                return;
+            }
+
+            if (!TrySelectHandwritingPair(previewMaterialId, sourceMaterialId))
+            {
+                ShowHandwritingDeleteNotApplied(
+                    "删除未执行：保存正文后，所选手写预览或笔迹源已不在当前固定版本；请重新选择后再试。");
+                return;
+            }
+
+            var fence = new HandwritingEditFence(
+                note.NoteId,
+                note.CurrentVersionId,
+                selectionGeneration,
+                account,
+                accountGeneration);
+            var saved = await _store.RemoveHandwritingAsync(
+                note.NoteId,
+                previewMaterialId,
+                expectedCurrentVersionId: fence.VersionId);
+            deleteCommitted = true;
+            if (!IsHandwritingFenceCurrent(fence))
+            {
+                if (!_closed)
+                {
+                    ShowHandwritingDeleteNotApplied(
+                        "手写材料已从原笔记移除，但窗口状态已变化；请重新加载该笔记确认。");
+                }
+
+                return;
+            }
+
+            _current = saved;
+            var savedFence = fence with { VersionId = saved.CurrentVersionId };
+            MaterialsList.SelectedItem = null;
+            UpdateMaterials();
+            await RefreshNotesAsync(SearchBox.Text, () => IsHandwritingFenceCurrent(savedFence));
+            if (!IsHandwritingFenceCurrent(savedFence))
+            {
+                if (!_closed)
+                {
+                    ShowHandwritingDeleteNotApplied(
+                        "手写材料已从当前固定版本移除，但刷新过程中窗口状态已变化；请重新加载笔记确认。");
+                }
+
+                return;
+            }
+
+            await RefreshVersionsAsync(
+                saved.NoteId,
+                saved.CurrentVersionId,
+                () => IsHandwritingFenceCurrent(savedFence));
+            if (!IsHandwritingFenceCurrent(savedFence))
+            {
+                if (!_closed)
+                {
+                    ShowHandwritingDeleteNotApplied(
+                        "手写材料已从当前固定版本移除，但刷新过程中窗口状态已变化；请重新加载笔记确认。");
+                }
+
+                return;
+            }
+
+            SaveStateText.Text = "已从当前固定版本移除所选手写材料；历史版本仍保留";
+        }
+        catch (Exception ex)
+        {
+            if (deleteCommitted)
+            {
+                if (!_closed)
+                {
+                    ShowFailure(
+                        "手写材料已从当前固定版本移除，但刷新笔记或版本列表失败；请重新加载笔记确认",
+                        ex);
+                }
+            }
+            else if (IsHandwritingSourceCurrent(noteId, selectionGeneration, account, accountGeneration))
+            {
+                ShowFailure("手写材料未能删除；当前固定版本仍保留该材料", ex);
+            }
+        }
+    }
+
+    private bool TrySelectHandwritingPair(Guid previewMaterialId, Guid sourceMaterialId)
+    {
+        if (_current is null)
+        {
+            return false;
+        }
+
+        var preview = _current.Materials.FirstOrDefault(material =>
+            material.MaterialId == previewMaterialId
+            && material.Kind == LocalNoteMaterialKind.Handwriting);
+        if (preview is null)
+        {
+            return false;
+        }
+
+        LocalNoteMaterial pairedSource;
+        try
+        {
+            pairedSource = LocalInkMaterialPairing.ResolveSource(previewMaterialId, _current.Materials);
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+
+        if (pairedSource.MaterialId != sourceMaterialId)
+        {
+            return false;
+        }
+
+        return _materialBinding.Select(previewMaterialId);
+    }
+
+    private void ShowHandwritingDeleteNotApplied(string message)
+    {
+        SaveStateText.Text = message;
+        MessageBox.Show(
+            this,
+            message,
+            "删除手写",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
     }
 
     private bool IsHandwritingSourceCurrent(
@@ -1754,13 +2004,24 @@ public partial class NativeNotesWindow : Window
         if (_current is null)
         {
             MaterialsText.Text = "固定材料版本 · 尚无材料";
-            MaterialsList.ItemsSource = null;
+            _materialBinding.Bind([]);
+            DeleteHandwritingButton.IsEnabled = false;
             UpdateDocumentFlow();
             ApplyEditorInteractionState();
             return;
         }
 
-        MaterialsList.ItemsSource = _current.Materials;
+        _materialBinding.Bind(_current.Materials);
+        UpdateMaterialPresentation();
+    }
+
+    private void UpdateMaterialPresentation()
+    {
+        if (_current is null)
+        {
+            return;
+        }
+
         var recordings = _current.Materials
             .Where(item => item.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
             .Select(item => item.RecordingId ?? item.MaterialId)
@@ -1774,9 +2035,17 @@ public partial class NativeNotesWindow : Window
             MaterialsText.Text += " · 云端混排原件只读，导出保留完整块序";
         }
 
+        UpdateDeleteHandwritingButtonState();
         UpdateDocumentFlow();
         ApplyEditorInteractionState();
         UpdateWindowChrome();
+    }
+
+    private void UpdateDeleteHandwritingButtonState()
+    {
+        DeleteHandwritingButton.IsEnabled = _current is { IsServerSourceReadOnly: false }
+            && !_finishing
+            && MaterialsList.SelectedItem is LocalNoteMaterial { Kind: LocalNoteMaterialKind.Handwriting };
     }
 
     private void ApplyEditorInteractionState()
@@ -1804,6 +2073,7 @@ public partial class NativeNotesWindow : Window
         DocumentFlowPanel.IsEnabled = !_finishing;
         MaterialsList.IsEnabled = !_finishing;
         CloudPanel.IsEnabled = !_finishing;
+        UpdateDeleteHandwritingButtonState();
     }
 
     private void UpdateDocumentFlow()
@@ -2350,18 +2620,20 @@ public partial class NativeNotesWindow : Window
         RecordButton.IsEnabled = _recording.IsRecording;
         FinishButton.IsEnabled = false;
         CloudPanelToggleButton.IsEnabled = false;
+        DeleteHandwritingButton.IsEnabled = false;
         _layout.CollapseCloud();
         ApplyResponsiveLayout();
         CloudPanelToggleButton.Content = "版本与云端";
         _loading = false;
         MaterialsText.Text = "选择或新建笔记以开始";
-        MaterialsList.ItemsSource = null;
+        _materialBinding.Bind([]);
         VersionsBox.ItemsSource = null;
         CloudVersionsList.ItemsSource = null;
         CloudArtifactsList.ItemsSource = null;
         _selectedArtifact = null;
         _selectedDerivedVersion = null;
         _selectedDerivedVersionSummary = null;
+        ResetProcessingStatus("未选择笔记");
         _cloudUi.ClearDraft();
         _loadingCloudResult = true;
         CloudResultBox.Text = string.Empty;
@@ -2444,6 +2716,7 @@ public partial class NativeNotesWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _closed = true;
+        Interlocked.Increment(ref _processingStatusGeneration);
         _saveTimer.Stop();
         _notesRefreshCancellation?.Cancel();
         _recording.StateChanged -= OnRecordingStateChanged;
@@ -2589,6 +2862,7 @@ public partial class NativeNotesWindow : Window
                         ? $"已上传 {result.Upload.VersionId[..8]}，但服务器当前版本已被另一端更新；双方版本均保留。"
                         : $"已上传并完成固定版本 {result.Upload.VersionId[..8]}。";
                     await RefreshCloudVersionsAsync(showErrors: false);
+                    await RefreshProcessingStatusAsync(showErrors: false);
                     await RefreshCloudResultsAsync(showErrors: false);
                 },
                 "正在结束并保存当前笔记，云端上传未开始。");
@@ -2610,12 +2884,30 @@ public partial class NativeNotesWindow : Window
         try
         {
             await TryRunNoteOperationAsync(
-                () => RefreshCloudVersionsAsync(showErrors: true),
+                async () =>
+                {
+                    await RefreshCloudVersionsAsync(showErrors: true);
+                    await RefreshProcessingStatusAsync(showErrors: false);
+                },
                 "正在结束并保存当前笔记，云端版本未刷新。");
         }
         catch (Exception ex)
         {
             ShowFailure("读取云端固定版本失败", ex);
+        }
+    }
+
+    private async void OnRefreshProcessingStatus(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await TryRunNoteOperationAsync(
+                () => RefreshProcessingStatusAsync(showErrors: true),
+                "正在结束并保存当前笔记，处理状态未刷新。");
+        }
+        catch (Exception ex)
+        {
+            ShowFailure("读取笔记处理状态失败", ex);
         }
     }
 
@@ -2677,8 +2969,16 @@ public partial class NativeNotesWindow : Window
                     + $"{version.CreatedAt.ToLocalTime():MM-dd HH:mm}"))
                 .ToArray();
             CloudVersionsList.ItemsSource = rows;
-            CloudVersionsList.SelectedItem = rows.FirstOrDefault(row => row.Version.IsCurrent)
-                ?? rows.FirstOrDefault();
+            _refreshingCloudVersions = true;
+            try
+            {
+                CloudVersionsList.SelectedItem = rows.FirstOrDefault(row => row.Version.IsCurrent)
+                    ?? rows.FirstOrDefault();
+            }
+            finally
+            {
+                _refreshingCloudVersions = false;
+            }
             CloudStatusText.Text = _cloud.IsAvailable
                 ? $"服务器共有 {rows.Length} 个固定材料版本。上传不会自动启动模型。"
                 : "当前未登录；本机笔记仍可离线编辑和录音。";
@@ -2703,11 +3003,192 @@ public partial class NativeNotesWindow : Window
         }
     }
 
-    private void OnCloudVersionSelected(object sender, SelectionChangedEventArgs e)
+    private async Task RefreshProcessingStatusAsync(
+        bool showErrors,
+        long? expectedSelectionGeneration = null)
+    {
+        var target = ResolveProcessingStatusTarget();
+        if (target is null)
+        {
+            ShowProcessingStatusUnavailable(
+                _current is null
+                    ? "未选择笔记"
+                    : "当前笔记尚无已上传固定材料版本；上传后可读取服务端处理状态。");
+            return;
+        }
+
+        var accountScope = _cloud.CurrentAccountScope;
+        if (accountScope is null)
+        {
+            ShowProcessingStatusUnavailable("请先登录云端账号，再读取服务端处理状态。");
+            return;
+        }
+
+        var noteId = _current?.NoteId;
+        var accountGeneration = _cloud.AccountGeneration;
+        var generation = Interlocked.Increment(ref _processingStatusGeneration);
+        var request = new NoteProcessingStatusRequest(
+            generation,
+            target.NoteId,
+            target.VersionId,
+            accountScope,
+            accountGeneration);
+        _processingStatusTarget = target;
+        ProcessingTargetText.Text = $"目标：{target.Label}";
+        ProcessingOverallText.Text = "正在读取服务端处理状态…";
+        ProcessingAsrText.Text = string.Empty;
+        ProcessingDerivedText.Text = string.Empty;
+        ProcessingArtifactsText.Text = string.Empty;
+        ProcessingHintText.Text = string.Empty;
+        ProcessingIssuesText.Text = string.Empty;
+        ProcessingIssuesText.Visibility = Visibility.Collapsed;
+        ProcessingUpdatedText.Text = string.Empty;
+        RefreshProcessingStatusButton.IsEnabled = false;
+        try
+        {
+            var status = await _cloud.GetProcessingStatusAsync(target.NoteId, target.VersionId);
+            if (!IsCurrentProcessingStatusRequest(
+                    request,
+                    target,
+                    noteId,
+                    expectedSelectionGeneration)
+                || _closed)
+            {
+                return;
+            }
+
+            var view = NoteProcessingStatusView.From(status);
+            ProcessingOverallText.Text = view.OverallText;
+            ProcessingAsrText.Text = view.AsrText;
+            ProcessingDerivedText.Text = view.DerivedText;
+            ProcessingArtifactsText.Text = view.ArtifactsText;
+            ProcessingHintText.Text = view.HintText;
+            ProcessingIssuesText.Text = view.IssuesText;
+            ProcessingIssuesText.Visibility = string.IsNullOrWhiteSpace(view.IssuesText)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            ProcessingUpdatedText.Text =
+                $"服务端更新于 {view.UpdatedAt.ToLocalTime():MM-dd HH:mm:ss}";
+        }
+        catch (Exception ex)
+        {
+            if (_closed)
+            {
+                return;
+            }
+
+            if (!IsCurrentProcessingStatusRequest(
+                    request,
+                    target,
+                    noteId,
+                    expectedSelectionGeneration))
+            {
+                if (request.Generation == Interlocked.Read(ref _processingStatusGeneration))
+                {
+                    ShowProcessingStatusUnavailable(
+                        _cloud.CurrentAccountScope is null
+                            ? "登录状态已切换；请重新登录后刷新服务端处理状态。"
+                            : "账号、笔记或版本已切换；请重新选择笔记后再刷新。");
+                }
+                return;
+            }
+
+            ProcessingOverallText.Text = "服务端处理状态暂不可用；本机笔记与导出不受影响。";
+            ProcessingAsrText.Text = string.Empty;
+            ProcessingDerivedText.Text = string.Empty;
+            ProcessingArtifactsText.Text = string.Empty;
+            ProcessingHintText.Text = string.Empty;
+            ProcessingIssuesText.Text = string.Empty;
+            ProcessingIssuesText.Visibility = Visibility.Collapsed;
+            ProcessingUpdatedText.Text = string.Empty;
+            if (showErrors)
+            {
+                ShowFailure("读取笔记处理状态失败", ex);
+            }
+        }
+        finally
+        {
+            if (!_closed
+                && IsCurrentProcessingStatusRequest(
+                    request,
+                    target,
+                    noteId,
+                    expectedSelectionGeneration))
+            {
+                RefreshProcessingStatusButton.IsEnabled = true;
+            }
+        }
+    }
+
+    private NoteProcessingStatusTarget? ResolveProcessingStatusTarget()
+    {
+        if (_current is null)
+        {
+            return null;
+        }
+
+        if (_current.ServerSource is { } source)
+        {
+            return NoteProcessingStatusTarget.FromServerSource(source);
+        }
+
+        if (CloudVersionsList.SelectedItem is not CloudVersionRow row
+            || !Guid.TryParse(row.Version.NoteId, out var noteId)
+            || !Guid.TryParse(row.Version.VersionId, out var versionId))
+        {
+            return null;
+        }
+
+        return NoteProcessingStatusTarget.ForUploadedVersion(
+            _current.NoteId,
+            noteId,
+            versionId);
+    }
+
+    private bool IsCurrentProcessingStatusRequest(
+        NoteProcessingStatusRequest request,
+        NoteProcessingStatusTarget target,
+        Guid? currentNoteId,
+        long? expectedSelectionGeneration)
+        => (expectedSelectionGeneration is null
+            || expectedSelectionGeneration.Value == _cloudUi.NoteGeneration)
+           && _current?.NoteId == currentNoteId
+           && Equals(_processingStatusTarget, target)
+           && request.IsCurrent(
+               Interlocked.Read(ref _processingStatusGeneration),
+               target.NoteId,
+               target.VersionId,
+               _cloud.CurrentAccountScope,
+               _cloud.AccountGeneration);
+
+    private void ResetProcessingStatus(string overallText)
+    {
+        Interlocked.Increment(ref _processingStatusGeneration);
+        _processingStatusTarget = null;
+        ProcessingTargetText.Text = string.Empty;
+        ProcessingOverallText.Text = overallText;
+        ProcessingAsrText.Text = string.Empty;
+        ProcessingDerivedText.Text = string.Empty;
+        ProcessingArtifactsText.Text = string.Empty;
+        ProcessingHintText.Text = string.Empty;
+        ProcessingIssuesText.Text = string.Empty;
+        ProcessingIssuesText.Visibility = Visibility.Collapsed;
+        ProcessingUpdatedText.Text = string.Empty;
+        RefreshProcessingStatusButton.IsEnabled = false;
+    }
+
+    private void ShowProcessingStatusUnavailable(string message)
+        => ResetProcessingStatus(message);
+
+    private async void OnCloudVersionSelected(object sender, SelectionChangedEventArgs e)
     {
         if (CloudVersionsList.SelectedItem is not CloudVersionRow row)
         {
             PromoteCloudVersionButton.IsEnabled = false;
+            if (!_refreshingCloudVersions)
+            {
+                await RefreshProcessingStatusAsync(showErrors: false);
+            }
             return;
         }
 
@@ -2717,6 +3198,10 @@ public partial class NativeNotesWindow : Window
             : row.Version.IsCurrent
                 ? $"版本 {row.Version.VersionId[..8]} 是服务器当前固定版本。"
                 : $"版本 {row.Version.VersionId[..8]} 是历史固定版本。";
+        if (!_refreshingCloudVersions)
+        {
+            await RefreshProcessingStatusAsync(showErrors: false);
+        }
     }
 
     private async void OnPromoteCloudVersion(object sender, RoutedEventArgs e)
@@ -2757,6 +3242,7 @@ public partial class NativeNotesWindow : Window
                         current is null ? null : Guid.Parse(current.Version.VersionId));
                     CloudStatusText.Text = $"服务器当前版本已切换为 {promoted.VersionId[..8]}。";
                     await RefreshCloudVersionsAsync(showErrors: false);
+                    await RefreshProcessingStatusAsync(showErrors: false);
                 },
                 "正在结束并保存当前笔记，云端当前版本未切换。");
         }
@@ -3138,7 +3624,7 @@ public partial class NativeNotesWindow : Window
             MessageBox.Show(
                 this,
                 "请先选择一个已加载的云端结果固定版本。",
-                "从笔记提取任务",
+                "从笔记提取任务与日程",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
             return;
@@ -3150,13 +3636,13 @@ public partial class NativeNotesWindow : Window
             || versionId != summaryVersionId
             || _selectedDerivedVersion.Kind != _selectedArtifact.Kind)
         {
-            CloudResultStateText.Text = "所选结果身份不完整或不匹配；未打开任务提取。";
+            CloudResultStateText.Text = "所选结果身份不完整或不匹配；未打开任务与日程提取。";
             return;
         }
 
         if (_cloud.CurrentAccountScope is null)
         {
-            CloudResultStateText.Text = "请先登录云端账号，再从固定结果提取任务。";
+            CloudResultStateText.Text = "请先登录云端账号，再从固定结果提取任务与日程。";
             return;
         }
 
@@ -3211,7 +3697,7 @@ public partial class NativeNotesWindow : Window
         }
         catch (InvalidOperationException)
         {
-            CloudResultStateText.Text = "账号或服务器刚刚切换；请刷新登录状态后重新打开任务提取。";
+            CloudResultStateText.Text = "账号或服务器刚刚切换；请刷新登录状态后重新打开任务与日程提取。";
         }
     }
 

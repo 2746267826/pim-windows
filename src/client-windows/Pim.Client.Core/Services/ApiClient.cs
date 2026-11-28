@@ -125,6 +125,16 @@ public class ApiClient
         }
     }
 
+    internal bool IsSameDeployment(string baseUrl)
+    {
+        var normalized = NormalizeServerUrl(baseUrl);
+        var uri = new Uri(normalized.TrimEnd('/') + "/api/v1/");
+        lock (_clientSync)
+        {
+            return SameCanonicalApiRoot(_httpClient.BaseAddress, uri);
+        }
+    }
+
     public static string NormalizeServerUrl(string baseUrl)
     {
         var trimmed = baseUrl.Trim().TrimEnd('/');
@@ -328,12 +338,17 @@ public class ApiClient
         DateTimeOffset? dueTo = null,
         int page = 1,
         int pageSize = 100,
+        IReadOnlyList<string?>? statuses = null,
         CancellationToken ct = default)
     {
         if (page < 1)
             throw new ArgumentOutOfRangeException(nameof(page));
         if (pageSize is < 1 or > 200)
             throw new ArgumentOutOfRangeException(nameof(pageSize));
+
+        var statusValues = TaskStatusQuery.Normalize(status, statuses)
+            .Select(status => (Name: "status", Value: (string?)status))
+            .ToArray();
 
         return SendAsync<TaskResponsePagedResultApiResponse>(
             ContractOperation.GetTasks,
@@ -345,7 +360,7 @@ public class ApiClient
                 ("inbox", inbox?.ToString().ToLowerInvariant()),
                 ("search", search),
                 ("calendarId", calendarId?.ToString("D")),
-                ("status", status),
+                .. statusValues,
                 ("priority", priority?.ToString(CultureInfo.InvariantCulture)),
                 ("plannedFrom", FormatQueryDateTime(plannedFrom)),
                 ("plannedTo", FormatQueryDateTime(plannedTo)),
@@ -988,6 +1003,22 @@ public class ApiClient
             [("taskId", RequireGuid(taskId, nameof(taskId)).ToString("D"))],
             null,
             ct);
+
+    /// <summary><c>GET /api/v1/native-notes/processing?noteId=&amp;versionId=</c>。</summary>
+    public Task<NoteProcessingStatusDtoApiResponse?> GetNoteProcessingStatusAsync(
+        Guid noteId,
+        Guid versionId,
+        CancellationToken ct = default)
+        => SendAsync<NoteProcessingStatusDtoApiResponse>(
+            ContractOperation.GetNoteProcessingStatus,
+            null,
+            null,
+            ct,
+            queryValues:
+            [
+                ("noteId", RequireGuid(noteId, nameof(noteId)).ToString("D")),
+                ("versionId", RequireGuid(versionId, nameof(versionId)).ToString("D")),
+            ]);
 
     /// <summary><c>GET /api/v1/native-notes/derived-artifacts?noteId=</c>。</summary>
     public Task<NoteDerivedArtifactDtoIReadOnlyListApiResponse?> GetNoteDerivedArtifactsAsync(

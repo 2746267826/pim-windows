@@ -37,6 +37,26 @@ public sealed class WpfApplicationFixture : IDisposable
         _dispatcherReady.Task.GetAwaiter().GetResult().Invoke(action);
     }
 
+    public Task RunAsync(Func<Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _dispatcherReady.Task.GetAwaiter().GetResult().InvokeAsync(async () =>
+        {
+            try
+            {
+                await action();
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        });
+        return completion.Task;
+    }
+
     public void Dispose()
     {
         var dispatcher = _dispatcherReady.Task.GetAwaiter().GetResult();

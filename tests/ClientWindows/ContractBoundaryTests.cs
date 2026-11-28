@@ -376,6 +376,50 @@ public class ContractBoundaryBehaviorTests
                 ("pageSize", "50")));
         Assert.Throws<ArgumentException>(() => events.ResolveQuery(("start", "tomorrow")));
         Assert.Throws<ArgumentException>(() => ContractOperation.GetTasks.ResolveQuery(("inbox", "yes")));
+
+        var tasks = ContractOperation.GetTasks;
+        var tasksStatus = Assert.Single(
+            tasks.QueryParameters, parameter => parameter.Name == "status");
+        Assert.Equal("enum-array", tasksStatus.Kind);
+        Assert.Equal(
+            new[] { "NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED" },
+            tasksStatus.AllowedValues);
+        Assert.Equal(
+            "?inbox=true&status=NEEDS-ACTION&status=IN-PROCESS",
+            tasks.ResolveQuery(
+                ("inbox", "true"),
+                ("status", "NEEDS-ACTION"),
+                ("status", "IN-PROCESS")));
+        Assert.Throws<ArgumentException>(() => tasks.ResolveQuery(("status", "needs-action")));
+        Assert.Throws<ArgumentException>(() => tasks.ResolveQuery(("page", "1"), ("page", "2")));
+    }
+
+    [Fact]
+    public async Task TaskStatusQueryRepeatsValuesAndRejectsInvalidOrConflictingInputBeforeSending()
+    {
+        var handler = new RecordingHandler();
+        var api = new ApiClient(() => handler);
+
+        await api.GetTasksAsync(
+            statuses: ["NEEDS-ACTION", "IN-PROCESS", "NEEDS-ACTION"],
+            pageSize: 25);
+        await api.GetTasksAsync(statuses: []);
+
+        Assert.Equal(
+            [
+                "?status=NEEDS-ACTION&status=IN-PROCESS&page=1&pageSize=25",
+                "?page=1&pageSize=100",
+            ],
+            handler.Requests.Select(request => request.Query).ToArray());
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => api.GetTasksAsync(statuses: ["NEEDS-ACTION", ""]));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => api.GetTasksAsync(
+                status: "NEEDS-ACTION",
+                statuses: ["IN-PROCESS"]));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => api.GetTasksAsync(statuses: ["needs-action"]));
+        Assert.Equal(2, handler.Requests.Count);
     }
 
     [Fact]
@@ -1102,6 +1146,11 @@ public class ContractBoundaryBehaviorTests
             (api, _) => api.StopNoteDerivedTaskAsync(
                 Guid.Parse("66666666-6666-6666-6666-666666666666")),
             ExpectedPath: "/api/v1/native-notes/derived-tasks/66666666-6666-6666-6666-666666666666/stop"),
+        new("GET", "/api/v1/native-notes/processing", null,
+            (api, _) => api.GetNoteProcessingStatusAsync(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                Guid.Parse("22222222-2222-2222-2222-222222222222")),
+            ExpectedQuery: "?noteId=11111111-1111-1111-1111-111111111111&versionId=22222222-2222-2222-2222-222222222222"),
         new("GET", "/api/v1/native-notes/derived-artifacts", null,
             (api, _) => api.GetNoteDerivedArtifactsAsync(
                 Guid.Parse("11111111-1111-1111-1111-111111111111")),

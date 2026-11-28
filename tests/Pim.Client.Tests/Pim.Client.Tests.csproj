@@ -29,10 +29,14 @@
     <Compile Include="../ClientWindows/BrowserBridgeServiceTests.cs" />
     <Compile Include="../ClientWindows/CloudNoteMaterialServiceTests.cs" />
     <Compile Include="../ClientWindows/NoteTaskSuggestionServiceTests.cs" />
+    <Compile Include="../ClientWindows/NoteTaskSuggestionEventTests.cs" />
+    <Compile Include="../ClientWindows/NoteTaskSuggestionCalendarPolicyTests.cs" />
     <Compile Include="../ClientWindows/AppKnowledgeServiceTests.cs" />
     <Compile Include="../ClientWindows/NoteMaterialRestoreTests.cs" />
+    <Compile Include="../ClientWindows/NoteProcessingStatusTests.cs" />
     <Compile Include="../ClientWindows/ContractBoundaryTests.cs" />
     <Compile Include="../ClientWindows/EndpointHeartbeatReporterTests.cs" />
+    <Compile Include="../ClientWindows/GlobalHotKeyCoordinatorTests.cs" />
     <Compile Include="../ClientWindows/HeartbeatTickRunnerTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsCollectorUploadGateTests.cs" />
     <Compile Include="../ClientWindows/KeyStatsFixAdvisorTests.cs" />
@@ -53,7 +57,9 @@
     <Compile Include="../ClientWindows/LocalNoteStoreTests.cs" />
     <Compile Include="../ClientWindows/NativeNotePresentationTests.cs" />
     <Compile Include="../ClientWindows/NativeNoteInteractionStateTests.cs" />
+    <Compile Include="../ClientWindows/LocalInkEditorTests.cs" />
     <Compile Include="../ClientWindows/LocalInkDocumentCodecTests.cs" />
+    <Compile Include="../ClientWindows/LocalInkPreferenceStoreTests.cs" />
     <Compile Include="../ClientWindows/ModelInstallStoreTests.cs" />
     <Compile Include="../ClientWindows/RuntimeInstallStoreTests.cs" />
     <Compile Include="../ClientWindows/NativeTrackerTimelineTests.cs" />
@@ -65,6 +71,7 @@
     <Compile Include="../ClientWindows/TrackerPageAttributionTests.cs" />
     <Compile Include="../ClientWindows/TrackerStateManagerTests.cs" />
     <Compile Include="../ClientWindows/TrackerHistoryStoreTests.cs" />
+    <Compile Include="../ClientWindows/WindowPlacementTests.cs" />
     <Compile Include="../ClientWindows/WindowsNotificationActionRouterTests.cs" />
     <Compile Include="../ClientWindows/Wo400TokenRenewalTests.cs" />
   </ItemGroup>

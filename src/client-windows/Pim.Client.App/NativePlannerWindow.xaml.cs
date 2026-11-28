@@ -18,14 +18,26 @@ public partial class NativePlannerWindow : Window
     private readonly NativePlannerUiState _eventUi = new();
     private readonly NativePlannerUiState _taskUi = new();
     private bool _loading;
+    private bool _suppressSelection;
     private bool _closed;
 
     public NativePlannerWindow()
+        : this(
+            App.Services.GetRequiredService<CalendarTaskService>(),
+            App.Services.GetRequiredService<AuthService>(),
+            App.Services.GetRequiredService<ApiClient>())
+    {
+    }
+
+    internal NativePlannerWindow(
+        CalendarTaskService planner,
+        AuthService auth,
+        ApiClient api)
     {
         InitializeComponent();
-        _planner = App.Services.GetRequiredService<CalendarTaskService>();
-        _auth = App.Services.GetRequiredService<AuthService>();
-        _api = App.Services.GetRequiredService<ApiClient>();
+        _planner = planner;
+        _auth = auth;
+        _api = api;
         _api.ExternalScopeChanged += OnExternalScopeChanged;
 
         EventRangeBox.ItemsSource = new[]
@@ -39,16 +51,6 @@ public partial class NativePlannerWindow : Window
         CalendarFilterBox.ItemsSource = new[] { CalendarChoice.All };
         CalendarFilterBox.SelectedIndex = 0;
         EventCalendarBox.ItemsSource = Array.Empty<CalendarChoice>();
-
-        TaskStatusFilterBox.ItemsSource = new[]
-        {
-            StatusChoice.All,
-            new StatusChoice("待处理", "NEEDS-ACTION"),
-            new StatusChoice("进行中", "IN-PROCESS"),
-            new StatusChoice("已完成", "COMPLETED"),
-            new StatusChoice("已取消", "CANCELLED"),
-        };
-        TaskStatusFilterBox.SelectedIndex = 0;
 
         TaskPriorityBox.ItemsSource = Enumerable.Range(1, 9).ToArray();
         TaskPriorityBox.SelectedItem = 5;
@@ -82,7 +84,7 @@ public partial class NativePlannerWindow : Window
 
     private async void OnEventFilterChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (IsLoaded && !_loading)
+        if (IsLoaded && !_loading && !_suppressSelection)
         {
             await RefreshEventsAsync();
         }
@@ -90,13 +92,13 @@ public partial class NativePlannerWindow : Window
 
     private async void OnEventSearchChanged(object sender, TextChangedEventArgs e)
     {
-        if (IsLoaded && !_loading)
+        if (IsLoaded && !_loading && !_suppressSelection)
         {
             await RefreshEventsAsync();
         }
     }
 
-    private async Task RefreshEventsAsync()
+    internal async Task RefreshEventsAsync()
     {
         var generation = _eventUi.BeginLoad();
         var account = CurrentAccount();
@@ -105,8 +107,7 @@ public partial class NativePlannerWindow : Window
         await _eventGate.WaitAsync();
         try
         {
-            if (_closed || !_eventUi.IsLoadCurrent(generation, account)
-                || account != CurrentAccount())
+            if (_closed || account != CurrentAccount())
             {
                 return;
             }
@@ -114,6 +115,11 @@ public partial class NativePlannerWindow : Window
             if (account is null)
             {
                 ClearEventUi("请先登录 PIM 账户；日程只从当前账户读取。");
+                return;
+            }
+
+            if (!_eventUi.IsLoadCurrent(generation, account))
+            {
                 return;
             }
 
@@ -158,8 +164,7 @@ public partial class NativePlannerWindow : Window
             if (!_closed && _eventUi.IsLoadCurrent(generation, account)
                 && account == CurrentAccount())
             {
-                EventList.ItemsSource = null;
-                EventListStateText.Text = "读取日程失败。";
+                ClearEventUi("读取日程失败。");
                 ShowFailure("读取日程失败", ex);
             }
         }
@@ -173,7 +178,7 @@ public partial class NativePlannerWindow : Window
     private async void OnRefreshTasks(object sender, RoutedEventArgs e)
         => await RefreshTasksAsync();
 
-    private async void OnTaskFilterChanged(object sender, SelectionChangedEventArgs e)
+    private async void OnTaskFilterChanged(object? sender, EventArgs e)
     {
         if (IsLoaded && !_loading)
         {
@@ -189,7 +194,7 @@ public partial class NativePlannerWindow : Window
         }
     }
 
-    private async Task RefreshTasksAsync()
+    internal async Task RefreshTasksAsync()
     {
         var generation = _taskUi.BeginLoad();
         var account = CurrentAccount();
@@ -197,8 +202,7 @@ public partial class NativePlannerWindow : Window
         await _taskGate.WaitAsync();
         try
         {
-            if (_closed || !_taskUi.IsLoadCurrent(generation, account)
-                || account != CurrentAccount())
+            if (_closed || account != CurrentAccount())
             {
                 return;
             }
@@ -209,11 +213,16 @@ public partial class NativePlannerWindow : Window
                 return;
             }
 
+            if (!_taskUi.IsLoadCurrent(generation, account))
+            {
+                return;
+            }
+
             TaskListStateText.Text = "正在读取任务…";
-            var status = (TaskStatusFilterBox.SelectedItem as StatusChoice)?.Status;
+            var statuses = TaskStatusFilter.SelectedStatuses;
             var workspace = await _planner.GetTaskWorkspaceAsync(
                 string.IsNullOrWhiteSpace(TaskSearchBox.Text) ? null : TaskSearchBox.Text.Trim(),
-                status);
+                statuses: statuses);
             if (_closed || !_taskUi.IsLoadCurrent(generation, account)
                 || account != CurrentAccount()
                 || !_taskUi.CommitLoad(generation, account))
@@ -243,8 +252,7 @@ public partial class NativePlannerWindow : Window
             if (!_closed && _taskUi.IsLoadCurrent(generation, account)
                 && account == CurrentAccount())
             {
-                TaskList.ItemsSource = null;
-                TaskListStateText.Text = "读取任务失败。";
+                ClearTaskUi("读取任务失败。");
                 ShowFailure("读取任务失败", ex);
             }
         }
@@ -556,24 +564,33 @@ public partial class NativePlannerWindow : Window
         Guid? selectedId,
         PlannerDataFence fence)
     {
-        var editable = calendars
-            .Where(calendar => calendar.CanEdit)
-            .Select(calendar => new CalendarChoice(
-                calendar.Name,
-                Guid.Parse(calendar.Id),
-                fence))
-            .ToArray();
-        var choices = new[] { CalendarChoice.All }
-            .Concat(editable)
-            .ToArray();
-        CalendarFilterBox.ItemsSource = choices;
-        CalendarFilterBox.SelectedItem = choices.FirstOrDefault(choice => choice.Id == selectedId)
-            ?? choices[0];
+        var wasSuppressed = _suppressSelection;
+        _suppressSelection = true;
+        try
+        {
+            var editable = calendars
+                .Where(calendar => calendar.CanEdit)
+                .Select(calendar => new CalendarChoice(
+                    calendar.Name,
+                    Guid.Parse(calendar.Id),
+                    fence))
+                .ToArray();
+            var choices = new[] { CalendarChoice.All }
+                .Concat(editable)
+                .ToArray();
+            CalendarFilterBox.ItemsSource = choices;
+            CalendarFilterBox.SelectedItem = choices.FirstOrDefault(choice => choice.Id == selectedId)
+                ?? choices[0];
 
-        var priorEventCalendar = (EventCalendarBox.SelectedItem as CalendarChoice)?.Id;
-        EventCalendarBox.ItemsSource = editable;
-        EventCalendarBox.SelectedItem =
-            editable.FirstOrDefault(choice => choice.Id == priorEventCalendar) ?? editable.FirstOrDefault();
+            var priorEventCalendar = (EventCalendarBox.SelectedItem as CalendarChoice)?.Id;
+            EventCalendarBox.ItemsSource = editable;
+            EventCalendarBox.SelectedItem =
+                editable.FirstOrDefault(choice => choice.Id == priorEventCalendar) ?? editable.FirstOrDefault();
+        }
+        finally
+        {
+            _suppressSelection = wasSuppressed;
+        }
     }
 
     private void ApplyTaskBooks(IReadOnlyList<TaskBookDto> books, PlannerDataFence fence)
@@ -593,12 +610,21 @@ public partial class NativePlannerWindow : Window
 
     private void ClearEventUi(string state)
     {
-        EventList.ItemsSource = null;
-        EventDetailText.Text = "选择日程查看详情。";
-        EventListStateText.Text = state;
-        CalendarFilterBox.ItemsSource = new[] { CalendarChoice.All };
-        CalendarFilterBox.SelectedIndex = 0;
-        EventCalendarBox.ItemsSource = Array.Empty<CalendarChoice>();
+        var wasSuppressed = _suppressSelection;
+        _suppressSelection = true;
+        try
+        {
+            EventList.ItemsSource = null;
+            EventDetailText.Text = "选择日程查看详情。";
+            EventListStateText.Text = state;
+            CalendarFilterBox.ItemsSource = new[] { CalendarChoice.All };
+            CalendarFilterBox.SelectedIndex = 0;
+            EventCalendarBox.ItemsSource = Array.Empty<CalendarChoice>();
+        }
+        finally
+        {
+            _suppressSelection = wasSuppressed;
+        }
     }
 
     private void ClearTaskUi(string state)
@@ -607,6 +633,9 @@ public partial class NativePlannerWindow : Window
         TaskDetailText.Text = "选择任务查看详情。";
         TaskListStateText.Text = state;
         CompleteTaskButton.IsEnabled = false;
+        TaskBooksList.ItemsSource = null;
+        TaskBookBox.ItemsSource = new[] { TaskBookChoice.None };
+        TaskBookBox.SelectedIndex = 0;
     }
 
     private PlannerAccountIdentity? CurrentAccount()
@@ -676,8 +705,16 @@ public partial class NativePlannerWindow : Window
         var message = exception is HttpRequestException
             ? "无法连接服务器。请检查网络、服务器地址与登录状态。"
             : exception.Message;
+        if (FailureDialog is { } show)
+        {
+            show(title, message);
+            return;
+        }
+
         MessageBox.Show(this, message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
     }
+
+    internal Action<string, string>? FailureDialog { get; set; }
 
     private void OnClosed(object? sender, EventArgs e)
     {
@@ -710,12 +747,6 @@ public partial class NativePlannerWindow : Window
 
     private sealed record RangeChoice(string Label, int Days)
     {
-        public override string ToString() => Label;
-    }
-
-    private sealed record StatusChoice(string Label, string? Status)
-    {
-        public static StatusChoice All { get; } = new("全部状态", null);
         public override string ToString() => Label;
     }
 
