@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="服务器笔记目录" Width="780" Height="580" MinWidth="620" MinHeight="420"
         WindowStartupLocation="CenterOwner" Background="{StaticResource PimMutedSurfaceBrush}"
-        Loaded="OnLoaded">
+        Loaded="OnLoaded" Closing="OnClosing" Closed="OnClosed">
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />

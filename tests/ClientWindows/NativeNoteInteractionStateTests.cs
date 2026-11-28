@@ -6,6 +6,27 @@ namespace Pim.Client.Tests;
 public sealed class NativeNoteInteractionStateTests
 {
     [Fact]
+    public void CloudSourceRestoreGateRejectsRepeatAndAllowsRetryAfterFailure()
+    {
+        var state = new CloudNoteSourceActionState();
+
+        Assert.True(state.TryBegin(CloudNoteSourceAction.Restore));
+        Assert.True(state.IsBusy);
+        Assert.True(state.IsRestoring);
+        Assert.False(state.TryBegin(CloudNoteSourceAction.Restore));
+        Assert.False(state.TryBegin(CloudNoteSourceAction.Select));
+        Assert.False(state.TryBegin(CloudNoteSourceAction.Refresh));
+        Assert.False(state.Complete(CloudNoteSourceAction.Refresh));
+        Assert.True(state.IsRestoring);
+
+        Assert.True(state.Complete(CloudNoteSourceAction.Restore));
+        Assert.False(state.IsBusy);
+        Assert.False(state.IsRestoring);
+        Assert.True(state.TryBegin(CloudNoteSourceAction.Restore));
+        Assert.True(state.Complete(CloudNoteSourceAction.Restore));
+    }
+
+    [Fact]
     public void OlderLibraryResultCannotOverwriteTheNewestQuery()
     {
         var state = new NativeNoteLibraryLoadState();

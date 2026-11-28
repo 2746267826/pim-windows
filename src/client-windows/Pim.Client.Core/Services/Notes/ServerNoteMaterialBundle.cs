@@ -521,9 +521,7 @@ public sealed class ServerNoteMaterialBundleBuilder
             throw new LocalNoteStoreException("服务器混合材料 input 与原始 note source 不一致。");
         }
 
-        var recordingMarkerAliases = ServerNoteRecordingMarkers.BuildAliases(
-            source,
-            version.Materials);
+        var recordingMarkerAliases = ServerNoteRecordingMarkers.BuildStableAliases(source);
         var seenMarkers = new HashSet<Guid>();
         foreach (var block in blocks)
         {
