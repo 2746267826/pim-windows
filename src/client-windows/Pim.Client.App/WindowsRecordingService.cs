@@ -247,6 +247,7 @@ public sealed class WindowsRecordingService : IAsyncDisposable
             if (wave.DataBytes == 0)
             {
                 ResetState();
+                PublishState();
                 TryDelete(writer.Path);
                 if (captureFailure is not null)
                 {
