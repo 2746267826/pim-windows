@@ -194,6 +194,39 @@ public sealed class LocalNoteStore
         }
     }
 
+    public async Task<LocalNoteDocument> FinalizeAsync(
+        Guid noteId,
+        string title,
+        string markdown,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var note = await LoadNoteLockedAsync(noteId, cancellationToken);
+            var normalizedTitle = NormalizeTitle(title);
+            var normalizedMarkdown = markdown ?? string.Empty;
+            if (note.IsServerSourceReadOnly
+                && (!string.Equals(note.Title, normalizedTitle, StringComparison.Ordinal)
+                    || !string.Equals(note.Markdown, normalizedMarkdown, StringComparison.Ordinal)))
+            {
+                throw new LocalNoteStoreException("该服务器混合材料版本在当前编辑器中只读；修改纯文本会丢失原始块顺序和身份。");
+            }
+
+            return await CreateCheckpointLockedAsync(
+                note,
+                normalizedTitle,
+                normalizedMarkdown,
+                note.Materials,
+                LocalNoteCheckpointReason.Finished,
+                cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<LocalNoteDocument> AddMaterialsAsync(
         Guid noteId,
         IReadOnlyList<LocalNoteMaterialInput> inputs,

@@ -58,6 +58,47 @@ public sealed class LocalNoteStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task FinalizeCreatesDurableCheckpointEvenWhenContentIsUnchanged()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("课堂记录");
+        var saved = await store.SaveAsync(note.NoteId, "课堂记录", "# 连续正文\n第一段。");
+
+        var finished = await store.FinalizeAsync(note.NoteId, "课堂记录", saved.Markdown);
+
+        Assert.NotEqual(saved.CurrentVersionId, finished.CurrentVersionId);
+        Assert.Equal(saved.Title, finished.Title);
+        Assert.Equal(saved.Markdown, finished.Markdown);
+        var finishedVersion = await store.LoadVersionAsync(note.NoteId, finished.CurrentVersionId);
+        Assert.Equal(LocalNoteCheckpointReason.Finished, finishedVersion.Reason);
+        Assert.Equal(saved.CurrentVersionId, finishedVersion.ParentVersionId);
+        Assert.Equal(saved.Markdown, finishedVersion.Markdown);
+
+        var previous = await store.LoadVersionAsync(note.NoteId, saved.CurrentVersionId);
+        Assert.Equal("# 连续正文\n第一段。", previous.Markdown);
+        var reloaded = await store.LoadAsync(note.NoteId);
+        Assert.Equal(finished.CurrentVersionId, reloaded.CurrentVersionId);
+
+        var unchangedSave = await store.SaveAsync(note.NoteId, finished.Title, finished.Markdown);
+        Assert.Equal(finished.CurrentVersionId, unchangedSave.CurrentVersionId);
+    }
+
+    [Fact]
+    public async Task FinalizeSavesLatestTextAsTheFinishedVersion()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("草稿");
+
+        var finished = await store.FinalizeAsync(note.NoteId, "最终标题", "结束前最后一段");
+
+        var version = await store.LoadVersionAsync(note.NoteId, finished.CurrentVersionId);
+        Assert.Equal(LocalNoteCheckpointReason.Finished, version.Reason);
+        Assert.Equal("最终标题", version.Title);
+        Assert.Equal("结束前最后一段", version.Markdown);
+        Assert.Equal(note.CurrentVersionId, version.ParentVersionId);
+    }
+
+    [Fact]
     public async Task ContentAddressedMaterialIsSharedWithoutChangingOldSnapshot()
     {
         var store = new LocalNoteStore(_root);

@@ -18,6 +18,7 @@ public enum LocalNoteCheckpointReason
 {
     Initial,
     ManualSave,
+    Finished,
     MaterialAdded,
     RecordingAdded,
     ImportedPackage,

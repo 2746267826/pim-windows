@@ -19,12 +19,18 @@ public partial class NativeNotesWindow : Window
     private readonly CloudNoteMaterialService _cloud;
     private readonly ObservableCollection<LocalNoteSummary> _notes = [];
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
     private readonly CloudNotesUiState _cloudUi = new();
     private LocalNoteDocument? _current;
     private bool _loading;
     private bool _closing;
     private bool _allowClose;
     private bool _closed;
+    private bool _finishing;
+    private bool _notesLoading;
+    private string? _notesLoadError;
+    private Func<Task>? _noticeRetry;
+    private Func<Task>? _editorStateRetry;
     private bool _loadingCloudResult;
     private bool _restoringCloudSelection;
     private bool _refreshingCloudResults;
@@ -46,11 +52,31 @@ public partial class NativeNotesWindow : Window
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
+        => await InitializeLibraryAsync();
+
+    private async Task InitializeLibraryAsync()
     {
+        _notesLoading = true;
+        _notesLoadError = null;
+        ApplyNotesPresentation();
+        if (_current is null)
+        {
+            ShowEditorLoading("正在准备笔记库…", "正文、照片、手写和录音先保存在本机。");
+        }
+
         try
         {
             await _store.EnsureInitializedAsync();
-            await RefreshNotesAsync();
+            if (!await RefreshNotesAsync())
+            {
+                ShowEmptyEditor();
+                ShowEditorError(
+                    "本机笔记库暂时打不开",
+                    "原有笔记没有被改动。检查磁盘权限后可以重试。",
+                    InitializeLibraryAsync);
+                return;
+            }
+
             await RefreshCloudVersionsAsync(showErrors: false);
             if (_notes.Count > 0)
             {
@@ -63,7 +89,7 @@ public partial class NativeNotesWindow : Window
 
             if (_recording.IsRecording)
             {
-                RecordButton.Content = "■ 停止并保存";
+                RecordButton.Content = "■ 停止本段";
                 OnRecordingStateChanged(
                     null,
                     new WindowsRecordingState(
@@ -76,11 +102,22 @@ public partial class NativeNotesWindow : Window
         }
         catch (Exception ex)
         {
-            ShowFailure("打开本机笔记库失败", ex);
+            _notesLoading = false;
+            _notesLoadError = ex.Message;
+            ApplyNotesPresentation();
+            ShowEmptyEditor();
+            ShowEditorError(
+                "本机笔记库暂时打不开",
+                "原有笔记没有被改动。检查磁盘权限后可以重试。",
+                InitializeLibraryAsync);
+            ShowFailure("打开本机笔记库失败", ex, InitializeLibraryAsync);
         }
     }
 
     private async void OnNewNote(object sender, RoutedEventArgs e)
+        => await CreateNewNoteAsync();
+
+    private async Task CreateNewNoteAsync()
     {
         try
         {
@@ -90,18 +127,26 @@ public partial class NativeNotesWindow : Window
             }
 
             var note = await _store.CreateAsync();
+            ClearNotice();
+            if (!string.IsNullOrEmpty(SearchBox.Text))
+            {
+                _loading = true;
+                SearchBox.Text = string.Empty;
+                _loading = false;
+            }
+
             await RefreshNotesAsync();
             NotesList.SelectedItem = _notes.FirstOrDefault(summary => summary.NoteId == note.NoteId);
         }
         catch (Exception ex)
         {
-            ShowFailure("新建笔记失败", ex);
+            ShowFailure("新建笔记失败", ex, CreateNewNoteAsync);
         }
     }
 
     private async void OnSearchChanged(object sender, TextChangedEventArgs e)
     {
-        if (!IsLoaded)
+        if (!IsLoaded || _loading)
         {
             return;
         }
@@ -132,49 +177,109 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        if (!await SavePendingAsync())
+        {
+            _loading = true;
+            NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == _current?.NoteId);
+            _loading = false;
+            RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
+            return;
+        }
+
+        await LoadNoteAsync(summary, selectionGeneration, artifactGeneration);
+    }
+
+    private async Task LoadNoteAsync(
+        LocalNoteSummary summary,
+        long selectionGeneration,
+        long artifactGeneration)
+    {
+        var previousNoteId = _current?.NoteId;
+        ShowEditorLoading("正在打开笔记…", "正在读取正文、固定版本和本机材料。");
+        LocalNoteDocument note;
         try
         {
-            if (!await SavePendingAsync())
-            {
-                _loading = true;
-                NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == _current?.NoteId);
-                _loading = false;
-                RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
-                return;
-            }
-
-            var note = await _store.LoadAsync(summary.NoteId);
-            if (!IsSelectedNoteRequest(selectionGeneration, summary.NoteId))
-            {
-                return;
-            }
-
-            _cloudUi.ClearDraft();
-            CloudResultBox.IsEnabled = true;
-            _loading = true;
-            _current = note;
-            TitleBox.IsEnabled = true;
-            MarkdownBox.IsEnabled = true;
-            TitleBox.Text = note.Title;
-            MarkdownBox.Text = note.Markdown;
-            UpdateMaterials();
-            await RefreshVersionsAsync(note.NoteId, note.CurrentVersionId);
-            if (IsCurrentNoteSelection(selectionGeneration, note.NoteId))
-            {
-                await RefreshCloudVersionsAsync(showErrors: false, selectionGeneration);
-                await RefreshCloudResultsAsync(showErrors: false, selectionGeneration);
-            }
-            SaveStateText.Text = "已加载固定版本";
+            note = await _store.LoadAsync(summary.NoteId);
         }
         catch (Exception ex)
         {
             if (selectionGeneration == _cloudUi.NoteGeneration)
             {
                 _loading = true;
-                NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == _current?.NoteId);
+                NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == previousNoteId);
                 _loading = false;
                 RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
-                ShowFailure("打开笔记失败", ex);
+                if (previousNoteId is null)
+                {
+                    ShowEditorError(
+                        "无法打开这篇笔记",
+                        "原笔记没有被改动。可以重试读取。",
+                        () => RetryOpenNoteAsync(summary.NoteId));
+                }
+                else
+                {
+                    ShowDocument();
+                    UpdateWindowChrome();
+                }
+
+                ShowFailure(
+                    "打开笔记失败；原笔记没有被改动",
+                    ex,
+                    () => RetryOpenNoteAsync(summary.NoteId));
+            }
+
+            if (selectionGeneration == _cloudUi.NoteGeneration)
+            {
+                _loading = false;
+            }
+
+            RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
+            return;
+        }
+
+        if (!IsSelectedNoteRequest(selectionGeneration, summary.NoteId))
+        {
+            if (_current is null)
+            {
+                ShowEditorEmpty();
+            }
+            else
+            {
+                ShowDocument();
+                UpdateWindowChrome();
+            }
+
+            RestoreCloudResultEditor(selectionGeneration, artifactGeneration);
+            return;
+        }
+
+        _cloudUi.ClearDraft();
+        CloudResultBox.IsEnabled = true;
+        _loading = true;
+        _current = note;
+        TitleBox.IsEnabled = true;
+        MarkdownBox.IsEnabled = true;
+        TitleBox.Text = note.Title;
+        MarkdownBox.Text = note.Markdown;
+        UpdateMaterials();
+        ShowDocument();
+        UpdateWindowChrome();
+
+        try
+        {
+            await RefreshNoteDetailsAsync(note, selectionGeneration);
+        }
+        catch (Exception ex)
+        {
+            if (selectionGeneration == _cloudUi.NoteGeneration)
+            {
+                ShowFailure(
+                    "笔记已打开，但固定版本信息暂未刷新",
+                    ex,
+                    () => RetryRefreshLoadedNoteAsync(
+                        note.NoteId,
+                        note.CurrentVersionId,
+                        selectionGeneration));
             }
         }
         finally
@@ -188,6 +293,62 @@ public partial class NativeNotesWindow : Window
         }
     }
 
+    private async Task RefreshNoteDetailsAsync(LocalNoteDocument note, long selectionGeneration)
+    {
+        await RefreshVersionsAsync(note.NoteId, note.CurrentVersionId);
+        if (IsCurrentNoteSelection(selectionGeneration, note.NoteId))
+        {
+            await RefreshCloudVersionsAsync(showErrors: false, selectionGeneration);
+            await RefreshCloudResultsAsync(showErrors: false, selectionGeneration);
+        }
+
+        SaveStateText.Text = "已加载固定版本";
+        ClearNotice();
+    }
+
+    private async Task RetryRefreshLoadedNoteAsync(
+        Guid noteId,
+        Guid versionId,
+        long selectionGeneration)
+    {
+        if (_current?.NoteId != noteId || _current.CurrentVersionId != versionId)
+        {
+            return;
+        }
+
+        try
+        {
+            await RefreshNoteDetailsAsync(_current, selectionGeneration);
+        }
+        catch (Exception ex)
+        {
+            if (selectionGeneration == _cloudUi.NoteGeneration)
+            {
+                ShowFailure(
+                    "笔记已打开，但固定版本信息仍未能刷新",
+                    ex,
+                    () => RetryRefreshLoadedNoteAsync(noteId, versionId, selectionGeneration));
+            }
+        }
+    }
+
+    private async Task RetryOpenNoteAsync(Guid noteId)
+    {
+        var summary = _notes.FirstOrDefault(note => note.NoteId == noteId);
+        if (summary is null)
+        {
+            await RefreshNotesAsync(SearchBox.Text);
+            return;
+        }
+
+        var selectionGeneration = _cloudUi.BeginNoteSelection();
+        var artifactGeneration = _cloudUi.BeginArtifactSelection();
+        _loading = true;
+        NotesList.SelectedItem = summary;
+        _loading = false;
+        await LoadNoteAsync(summary, selectionGeneration, artifactGeneration);
+    }
+
     private void OnEditorChanged(object sender, TextChangedEventArgs e)
     {
         if (_loading || _current is null || _closing)
@@ -195,6 +356,7 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        UpdateWindowChrome();
         SaveStateText.Text = "正在等待本机自动保存…";
         _saveTimer.Stop();
         _saveTimer.Start();
@@ -569,6 +731,153 @@ public partial class NativeNotesWindow : Window
         }
     }
 
+    private async void OnFinishNote(object sender, RoutedEventArgs e)
+    {
+        if (_current is null)
+        {
+            MessageBox.Show(
+                this,
+                "请先选择或新建一篇笔记。",
+                "结束记录",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                "结束这次记录？\n\n"
+                + "会先停止当前录音，并把最新正文和材料保存为本机固定版本。"
+                + "本次不会自动上传，也不会启动转写或模型任务。",
+                "结束这次记录",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        await FinishCurrentNoteAsync();
+    }
+
+    private async Task FinishCurrentNoteAsync()
+    {
+        if (_current is null || _finishing)
+        {
+            return;
+        }
+
+        _finishing = true;
+        _saveTimer.Stop();
+        FinishButton.IsEnabled = false;
+        RecordButton.IsEnabled = false;
+        NotesList.IsEnabled = false;
+        SearchBox.IsEnabled = false;
+        await _saveGate.WaitAsync();
+        try
+        {
+            if (_recording.IsRecording)
+            {
+                if (_recording.CurrentNoteId != _current.NoteId)
+                {
+                    ShowNotice(
+                        "当前录音属于另一篇笔记。请先切回那篇笔记结束后再结束本篇；"
+                        + "本篇正文仍保留在窗口中。");
+                    return;
+                }
+
+                var recording = await _recording.StopAsync();
+                if (recording is null)
+                {
+                    RecordingStatusText.Text = "本段没有生成可用音频，继续保存正文。";
+                }
+                else
+                {
+                    _current = recording.Note;
+                    RecordingStatusText.Text =
+                        $"本段录音 {recording.Wave.Duration:mm\\:ss} 已保存到本机。";
+                }
+            }
+
+            var noteId = _current.NoteId;
+            var finishedTitle = TitleBox.Text;
+            var finishedMarkdown = MarkdownBox.Text;
+            var finishedNote = await _store.FinalizeAsync(noteId, finishedTitle, finishedMarkdown);
+            _current = finishedNote;
+            UpdateMaterials();
+            UpdateWindowChrome();
+            ShowDocument();
+            RecordingStatusText.Text = "本次记录已结束；可继续补录，或稍后手动上传。";
+            ClearNotice();
+
+            var finishedVersionId = finishedNote.CurrentVersionId;
+            await RefreshNotesAsync(SearchBox.Text);
+            try
+            {
+                await RefreshVersionsAsync(noteId, finishedVersionId);
+            }
+            catch (Exception refreshException)
+            {
+                ShowFailure(
+                    "已结束并保存本机固定版本，但版本列表暂未刷新",
+                    refreshException,
+                    () => RefreshFinishedVersionsAsync(noteId, finishedVersionId));
+            }
+
+            SaveStateText.Text = NativeNotePresentation.SessionFinished(finishedVersionId);
+            var hasNewerEdits = !string.Equals(TitleBox.Text, finishedNote.Title, StringComparison.Ordinal)
+                || !string.Equals(MarkdownBox.Text, finishedNote.Markdown, StringComparison.Ordinal);
+            if (hasNewerEdits)
+            {
+                SaveStateText.Text += " 当前窗口仍有新的未保存修改。";
+                _saveTimer.Start();
+            }
+        }
+        catch (Exception ex)
+        {
+            RecordingStatusText.Text = "结束未完成；正文仍保留在窗口中";
+            ShowFailure(
+                "结束记录失败；正文仍保留在窗口中，可以重试",
+                ex,
+                FinishCurrentNoteAsync);
+        }
+        finally
+        {
+            _finishing = false;
+            if (_current is not null)
+            {
+                UpdateMaterials();
+            }
+            else
+            {
+                FinishButton.IsEnabled = false;
+            }
+
+            NotesList.IsEnabled = true;
+            SearchBox.IsEnabled = true;
+            _saveGate.Release();
+        }
+    }
+
+    private async Task RefreshFinishedVersionsAsync(Guid noteId, Guid versionId)
+    {
+        try
+        {
+            await RefreshVersionsAsync(noteId, versionId);
+            if (_current?.NoteId == noteId)
+            {
+                SaveStateText.Text = NativeNotePresentation.SessionFinished(versionId);
+                ClearNotice();
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowFailure(
+                "已结束并保存本机固定版本，但版本列表仍未能刷新",
+                ex,
+                () => RefreshFinishedVersionsAsync(noteId, versionId));
+        }
+    }
+
     private async void OnExport(object sender, RoutedEventArgs e)
     {
         if (_current is null)
@@ -635,17 +944,14 @@ public partial class NativeNotesWindow : Window
                 var recording = await _recording.StopAsync();
                 if (recording is null)
                 {
-                    SaveStateText.Text = "录音没有产生可用音频文件";
+                    SaveStateText.Text = "本段录音没有产生可用音频；正文仍保留在窗口中";
+                    RecordingStatusText.Text = "本段未生成音频，可以继续记录或结束整篇。";
                     return;
                 }
 
                 if (_current.NoteId == recording.NoteId)
                 {
                     _current = recording.Note;
-                    _loading = true;
-                    TitleBox.Text = _current.Title;
-                    MarkdownBox.Text = _current.Markdown;
-                    _loading = false;
                 }
                 else
                 {
@@ -670,8 +976,9 @@ public partial class NativeNotesWindow : Window
                 }
 
                 UpdateMaterials();
-                RecordingStatusText.Text = $"已保存 {recording.Wave.Duration:mm\\:ss} 原始 WAV 到固定材料版本";
-                SaveStateText.Text = "录音原始 WAV 已保存；云端尚未提交";
+                RecordingStatusText.Text =
+                    $"本段录音 {recording.Wave.Duration:mm\\:ss} 已保存；可继续写或补录。";
+                SaveStateText.Text = "本段原始 WAV 已保存到本机固定版本；云端尚未提交";
                 await RefreshNotesAsync(SearchBox.Text);
                 await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
                 return;
@@ -683,11 +990,11 @@ public partial class NativeNotesWindow : Window
             }
 
             await _recording.StartAsync(_current.NoteId);
-            RecordButton.Content = "■ 停止并保存";
+            RecordButton.Content = "■ 停止本段";
         }
         catch (Exception ex)
         {
-            RecordingStatusText.Text = "录音未开始";
+            RecordingStatusText.Text = "录音操作未完成；正文仍保留";
             ShowFailure("主动录音失败", ex);
         }
     }
@@ -698,8 +1005,10 @@ public partial class NativeNotesWindow : Window
         {
             if (state.IsRecording)
             {
-                RecordingStatusText.Text = $"录音中 {state.Elapsed:mm\\:ss} · 实际输入峰值 {state.PeakLevel:P0}";
-                RecordButton.IsEnabled = true;
+                RecordingStatusText.Text =
+                    $"本段录音中 {state.Elapsed:mm\\:ss} · 实际输入峰值 {state.PeakLevel:P0}";
+                RecordButton.IsEnabled = !_finishing;
+                UpdateWindowChrome();
                 return;
             }
 
@@ -715,8 +1024,11 @@ public partial class NativeNotesWindow : Window
 
             if (RecordButton is not null)
             {
-                RecordButton.IsEnabled = _current is null || !_current.IsServerSourceReadOnly;
+                RecordButton.IsEnabled = !_finishing
+                    && (_current is null || !_current.IsServerSourceReadOnly);
             }
+
+            UpdateWindowChrome();
         });
     }
 
@@ -765,50 +1077,131 @@ public partial class NativeNotesWindow : Window
             return true;
         }
 
-        var title = TitleBox.Text;
-        var markdown = MarkdownBox.Text;
-        if (string.Equals(_current.Title, title, StringComparison.Ordinal)
-            && string.Equals(_current.Markdown, markdown, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
+        await _saveGate.WaitAsync();
         try
         {
-            _current = await _store.SaveAsync(_current.NoteId, title, markdown);
-            UpdateMaterials();
-            SaveStateText.Text = "已保存为新的固定版本";
-            await RefreshNotesAsync(SearchBox.Text);
-            await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
+            if (_current is null || _loading)
+            {
+                return true;
+            }
+
+            var title = TitleBox.Text;
+            var markdown = MarkdownBox.Text;
+            if (string.Equals(_current.Title, title, StringComparison.Ordinal)
+                && string.Equals(_current.Markdown, markdown, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            try
+            {
+                _current = await _store.SaveAsync(_current.NoteId, title, markdown);
+                UpdateMaterials();
+                UpdateWindowChrome();
+                SaveStateText.Text = "已保存为新的本机固定版本";
+                ClearNotice();
+                await RefreshNotesAsync(SearchBox.Text);
+                await RefreshVersionsAsync(_current.NoteId, _current.CurrentVersionId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                SaveStateText.Text = "保存失败，当前正文仍保留在窗口中";
+                ShowFailure("本机自动保存失败；正文仍在窗口中", ex, SavePendingAsync);
+                return false;
+            }
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
+    }
+
+    private async Task<bool> RefreshNotesAsync(string? query = null, Func<bool>? applyGuard = null)
+    {
+        var wasShowingLoadError = _notesLoadError is not null;
+        _notesLoading = true;
+        _notesLoadError = null;
+        ApplyNotesPresentation();
+        var selectedId = _current?.NoteId;
+        try
+        {
+            var rows = await _store.ListAsync(query);
+            if (applyGuard is not null && !applyGuard())
+            {
+                return false;
+            }
+
+            _notes.Clear();
+            foreach (var row in rows)
+            {
+                _notes.Add(row);
+            }
+
+            if (selectedId is { } id)
+            {
+                NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == id);
+            }
+
+            if (wasShowingLoadError)
+            {
+                ClearNotice();
+            }
+
             return true;
         }
         catch (Exception ex)
         {
-            SaveStateText.Text = "保存失败，当前正文仍保留在窗口中";
-            ShowFailure("本机自动保存失败", ex);
+            _notesLoadError = ex.Message;
+            ShowFailure(
+                "读取本机笔记库失败；原有笔记没有被改动",
+                ex,
+                async () => await RefreshNotesAsync(query));
             return false;
+        }
+        finally
+        {
+            _notesLoading = false;
+            ApplyNotesPresentation();
         }
     }
 
-    private async Task RefreshNotesAsync(string? query = null, Func<bool>? applyGuard = null)
+    private void ApplyNotesPresentation()
     {
-        var selectedId = _current?.NoteId;
-        var rows = await _store.ListAsync(query);
-        if (applyGuard is not null && !applyGuard())
+        var presentation = NativeNotePresentation.Library(
+            _notesLoading,
+            _notesLoadError is not null,
+            _notes.Count,
+            SearchBox.Text);
+        var isError = presentation.State == NativeNoteLibraryState.Error;
+        var dangerBrush = (System.Windows.Media.Brush)FindResource("PimDangerBrush");
+        var primaryBrush = (System.Windows.Media.Brush)FindResource("PimPrimaryBrush");
+        var textBrush = (System.Windows.Media.Brush)FindResource("PimTextBrush");
+        var borderBrush = (System.Windows.Media.Brush)FindResource("PimBorderBrush");
+        NotesStatePanel.Visibility = presentation.State == NativeNoteLibraryState.Ready
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        NotesStatePanel.BorderBrush = isError ? dangerBrush : borderBrush;
+        NotesStateTitleText.Foreground = isError ? dangerBrush : textBrush;
+        NotesStateIconText.Foreground = isError ? dangerBrush : primaryBrush;
+        NotesLoadingBar.Visibility = presentation.ShowProgress ? Visibility.Visible : Visibility.Collapsed;
+        NotesStateCreateButton.Visibility =
+            presentation.ShowCreateAction ? Visibility.Visible : Visibility.Collapsed;
+        NotesStateClearSearchButton.Visibility =
+            presentation.ShowClearSearchAction ? Visibility.Visible : Visibility.Collapsed;
+        NotesStateRetryButton.Visibility =
+            presentation.ShowRetryAction ? Visibility.Visible : Visibility.Collapsed;
+        NotesStateTitleText.Text = presentation.Title;
+        NotesStateDetailText.Text = string.IsNullOrWhiteSpace(_notesLoadError)
+            ? presentation.Detail
+            : $"{presentation.Detail}\n{_notesLoadError}";
+        NotesStateIconText.Text = presentation.State switch
         {
-            return;
-        }
-
-        _notes.Clear();
-        foreach (var row in rows)
-        {
-            _notes.Add(row);
-        }
-
-        if (selectedId is { } id)
-        {
-            NotesList.SelectedItem = _notes.FirstOrDefault(note => note.NoteId == id);
-        }
+            NativeNoteLibraryState.Loading => "…",
+            NativeNoteLibraryState.EmptySearch => "⌕",
+            NativeNoteLibraryState.Error => "!",
+            _ => "✎",
+        };
     }
 
     private void UpdateMaterials()
@@ -817,6 +1210,8 @@ public partial class NativeNotesWindow : Window
         {
             MaterialsText.Text = "固定材料版本 · 尚无材料";
             MaterialsList.ItemsSource = null;
+            FinishButton.IsEnabled = false;
+            CloudPanelToggleButton.IsEnabled = false;
             return;
         }
 
@@ -834,11 +1229,159 @@ public partial class NativeNotesWindow : Window
         AddPhotoButton.IsEnabled = !_current.IsServerSourceReadOnly;
         AddHandwritingButton.IsEnabled = !_current.IsServerSourceReadOnly;
         AddRecordingButton.IsEnabled = !_current.IsServerSourceReadOnly;
-        RecordButton.IsEnabled = _recording.IsRecording || !_current.IsServerSourceReadOnly;
+        RecordButton.IsEnabled = !_finishing
+            && (_recording.IsRecording || !_current.IsServerSourceReadOnly);
+        FinishButton.IsEnabled = !_finishing;
+        CloudPanelToggleButton.IsEnabled = !_finishing;
         if (_current.IsServerSourceReadOnly)
         {
             MaterialsText.Text += " · 云端混排原件只读，导出保留完整块序";
         }
+
+        UpdateWindowChrome();
+    }
+
+    private void ShowEditorLoading(string title, string detail)
+    {
+        DocumentScroll.Visibility = Visibility.Collapsed;
+        EditorStatePanel.Visibility = Visibility.Visible;
+        EditorStateProgress.Visibility = Visibility.Visible;
+        EditorStateTitleText.Text = title;
+        EditorStateTitleText.Foreground =
+            (System.Windows.Media.Brush)FindResource("PimTextBrush");
+        EditorStateDetailText.Text = detail;
+        EditorStateCreateButton.Visibility = Visibility.Collapsed;
+        EditorStateRetryButton.Visibility = Visibility.Collapsed;
+        FinishButton.IsEnabled = false;
+        CloudPanelToggleButton.IsEnabled = false;
+        _editorStateRetry = null;
+    }
+
+    private void ShowEditorEmpty()
+    {
+        DocumentScroll.Visibility = Visibility.Collapsed;
+        EditorStatePanel.Visibility = Visibility.Visible;
+        EditorStateProgress.Visibility = Visibility.Collapsed;
+        EditorStateTitleText.Text = "从一页空白开始";
+        EditorStateTitleText.Foreground =
+            (System.Windows.Media.Brush)FindResource("PimTextBrush");
+        EditorStateDetailText.Text = "新建一篇笔记，正文、照片、手写和录音都会先保存在本机。";
+        EditorStateCreateButton.Visibility = Visibility.Visible;
+        EditorStateRetryButton.Visibility = Visibility.Collapsed;
+        FinishButton.IsEnabled = false;
+        CloudPanelToggleButton.IsEnabled = false;
+        _editorStateRetry = null;
+    }
+
+    private void ShowEditorError(string title, string detail, Func<Task> retry)
+    {
+        DocumentScroll.Visibility = Visibility.Collapsed;
+        EditorStatePanel.Visibility = Visibility.Visible;
+        EditorStateProgress.Visibility = Visibility.Collapsed;
+        EditorStateTitleText.Text = title;
+        EditorStateTitleText.Foreground =
+            (System.Windows.Media.Brush)FindResource("PimDangerBrush");
+        EditorStateDetailText.Text = detail;
+        EditorStateCreateButton.Visibility = Visibility.Collapsed;
+        EditorStateRetryButton.Visibility = Visibility.Visible;
+        FinishButton.IsEnabled = false;
+        CloudPanelToggleButton.IsEnabled = false;
+        _editorStateRetry = retry;
+    }
+
+    private void ShowDocument()
+    {
+        DocumentScroll.Visibility = Visibility.Visible;
+        EditorStatePanel.Visibility = Visibility.Collapsed;
+        FinishButton.IsEnabled = _current is not null && !_finishing;
+        CloudPanelToggleButton.IsEnabled = _current is not null && !_finishing;
+        _editorStateRetry = null;
+    }
+
+    private void ClearNotice()
+    {
+        _noticeRetry = null;
+        EditorNoticePanel.Visibility = Visibility.Collapsed;
+        RetryNoticeButton.Visibility = Visibility.Collapsed;
+        EditorNoticeText.Text = string.Empty;
+    }
+
+    private void OnDismissNotice(object sender, RoutedEventArgs e)
+        => ClearNotice();
+
+    private async void OnRetryNotice(object sender, RoutedEventArgs e)
+    {
+        if (_noticeRetry is not { } retry)
+        {
+            return;
+        }
+
+        RetryNoticeButton.IsEnabled = false;
+        try
+        {
+            await retry();
+        }
+        finally
+        {
+            RetryNoticeButton.IsEnabled = true;
+        }
+    }
+
+    private async void OnRetryEditorState(object sender, RoutedEventArgs e)
+    {
+        if (_editorStateRetry is not { } retry)
+        {
+            return;
+        }
+
+        EditorStateRetryButton.IsEnabled = false;
+        try
+        {
+            await retry();
+        }
+        finally
+        {
+            EditorStateRetryButton.IsEnabled = true;
+        }
+    }
+
+    private void OnClearSearch(object sender, RoutedEventArgs e)
+        => SearchBox.Text = string.Empty;
+
+    private async void OnRetryNotes(object sender, RoutedEventArgs e)
+    {
+        var refreshed = await RefreshNotesAsync(SearchBox.Text);
+        if (!refreshed)
+        {
+            return;
+        }
+
+        ClearNotice();
+        if (_current is not null)
+        {
+            return;
+        }
+
+        if (_notes.Count > 0)
+        {
+            NotesList.SelectedIndex = 0;
+        }
+        else if (string.IsNullOrWhiteSpace(SearchBox.Text))
+        {
+            ShowEmptyEditor();
+        }
+    }
+
+    private void OnToggleCloudPanel(object sender, RoutedEventArgs e)
+    {
+        if (_current is null)
+        {
+            return;
+        }
+
+        CloudPanel.Visibility = CloudPanel.Visibility == Visibility.Visible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private void ShowEmptyEditor()
@@ -859,6 +1402,10 @@ public partial class NativeNotesWindow : Window
         AddHandwritingButton.IsEnabled = false;
         AddRecordingButton.IsEnabled = false;
         RecordButton.IsEnabled = _recording.IsRecording;
+        FinishButton.IsEnabled = false;
+        CloudPanelToggleButton.IsEnabled = false;
+        CloudPanel.Visibility = Visibility.Collapsed;
+        CloudPanelToggleButton.Content = "版本与云端";
         _loading = false;
         MaterialsText.Text = "选择或新建笔记以开始";
         MaterialsList.ItemsSource = null;
@@ -874,12 +1421,39 @@ public partial class NativeNotesWindow : Window
         _loadingCloudResult = false;
         CloudResultStateText.Text = "未选择笔记";
         SaveStateText.Text = "";
+        ClearNotice();
+        ShowEditorEmpty();
+        UpdateWindowChrome();
+    }
+
+    private void UpdateWindowChrome()
+    {
+        if (_current is null)
+        {
+            Title = _notes.Count == 0 ? "笔记库" : "选择一篇笔记";
+            EditorContextText.Text = _notes.Count == 0
+                ? "从一页空白开始"
+                : "选择一篇笔记继续";
+            return;
+        }
+
+        Title = NativeNotePresentation.WindowTitle(TitleBox.Text);
+        EditorContextText.Text = _recording.IsRecording
+            ? "正在记录 · 本机草稿"
+            : "本机草稿 · 自动保存";
     }
 
     private async void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         if (_allowClose)
         {
+            return;
+        }
+
+        if (_finishing)
+        {
+            e.Cancel = true;
+            ShowNotice("正在结束并保存本机固定版本，请稍候再关闭窗口。");
             return;
         }
 
@@ -1070,7 +1644,9 @@ public partial class NativeNotesWindow : Window
             return;
         }
 
+        _loading = true;
         SearchBox.Text = string.Empty;
+        _loading = false;
         await RefreshNotesAsync();
         NotesList.SelectedItem = _notes.FirstOrDefault(item => item.NoteId == noteId);
     }
@@ -1691,6 +2267,7 @@ public partial class NativeNotesWindow : Window
     {
         LocalNoteCheckpointReason.Initial => "创建",
         LocalNoteCheckpointReason.ManualSave => "正文保存",
+        LocalNoteCheckpointReason.Finished => "结束记录",
         LocalNoteCheckpointReason.MaterialAdded => "材料",
         LocalNoteCheckpointReason.RecordingAdded => "录音",
         LocalNoteCheckpointReason.ImportedPackage => "导入",
@@ -1734,9 +2311,23 @@ public partial class NativeNotesWindow : Window
         return (string.IsNullOrWhiteSpace(safe) ? "笔记" : safe) + ".pimnote.zip";
     }
 
-    private void ShowFailure(string operation, Exception exception)
+    private void ShowFailure(
+        string operation,
+        Exception exception,
+        Func<Task>? retry = null)
     {
         SaveStateText.Text = operation;
-        MessageBox.Show(this, $"{operation}：{exception.Message}", "PIM 笔记", MessageBoxButton.OK, MessageBoxImage.Warning);
+        var detail = string.IsNullOrWhiteSpace(exception.Message)
+            ? operation
+            : $"{operation}：{exception.Message}";
+        ShowNotice(detail, retry);
+    }
+
+    private void ShowNotice(string message, Func<Task>? retry = null)
+    {
+        _noticeRetry = retry;
+        EditorNoticeText.Text = message;
+        RetryNoticeButton.Visibility = retry is null ? Visibility.Collapsed : Visibility.Visible;
+        EditorNoticePanel.Visibility = Visibility.Visible;
     }
 }
