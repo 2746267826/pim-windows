@@ -18,6 +18,7 @@ public enum LocalNoteCheckpointReason
 {
     Initial,
     ManualSave,
+    Finished,
     MaterialAdded,
     RecordingAdded,
     ImportedPackage,
@@ -120,7 +121,10 @@ public sealed record LocalNoteMaterialInput(
     string? MediaType = null,
     int? Width = null,
     int? Height = null,
-    long? DurationMilliseconds = null);
+    long? DurationMilliseconds = null,
+    Guid? RecordingId = null,
+    int? RecordingSegment = null,
+    int? RecordingChunkIndex = null);
 
 public sealed record LocalNoteBundleExport(
     Guid NoteId,

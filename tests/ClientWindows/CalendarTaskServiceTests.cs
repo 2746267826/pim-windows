@@ -152,12 +152,23 @@ public sealed class CalendarTaskServiceTests
         Assert.Equal(TaskId, createdTask.Id);
         Assert.Equal("COMPLETED", completed.Status);
 
+        var eventCall = Assert.Single(
+            handler.Calls,
+            call => call.Method == "POST" && call.Path == "/api/v1/calendar/events");
         var eventBody = Assert.Single(
             handler.Calls,
             call => call.Method == "POST" && call.Path == "/api/v1/calendar/events").Body!;
         using var eventDocument = JsonDocument.Parse(eventBody);
         Assert.Equal(CalendarId, eventDocument.RootElement.GetProperty("calendarId").GetString());
         Assert.Equal("设计评审", eventDocument.RootElement.GetProperty("title").GetString());
+        var operationIdPair = Assert.Single(
+            eventCall.Query.TrimStart('?').Split(
+                '&',
+                StringSplitOptions.RemoveEmptyEntries),
+            pair => pair.StartsWith("clientOperationId=", StringComparison.Ordinal));
+        Assert.True(Guid.TryParse(
+            Uri.UnescapeDataString(operationIdPair["clientOperationId=".Length..]),
+            out _));
 
         var taskBody = Assert.Single(
             handler.Calls,
@@ -174,6 +185,69 @@ public sealed class CalendarTaskServiceTests
     }
 
     [Fact]
+    public async Task RetryingTheSameDraftReusesTheSuppliedOperationId()
+    {
+        var handler = new PlannerHandler(failFirstEvent: true);
+        var api = new ApiClient(() => handler);
+        api.SetAccessToken("synthetic-planner-token");
+        var service = new CalendarTaskService(api);
+        var start = new DateTimeOffset(2026, 11, 1, 9, 0, 0, TimeSpan.Zero);
+        var operationId = Guid.Parse("99999999-9999-9999-9999-999999999999");
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            service.CreateEventAsync(
+                Guid.Parse(CalendarId),
+                "设计评审",
+                start,
+                start.AddHours(1),
+                isAllDay: false,
+                location: null,
+                description: null,
+                clientOperationId: operationId));
+        await service.CreateEventAsync(
+            Guid.Parse(CalendarId),
+            "设计评审",
+            start,
+            start.AddHours(1),
+            isAllDay: false,
+            location: null,
+            description: null,
+            clientOperationId: operationId);
+
+        var queries = handler.Calls
+            .Where(call => call.Method == "POST" && call.Path == "/api/v1/calendar/events")
+            .Select(call => call.Query)
+            .ToArray();
+        Assert.Equal(
+            [
+                "?clientOperationId=99999999-9999-9999-9999-999999999999",
+                "?clientOperationId=99999999-9999-9999-9999-999999999999",
+            ],
+            queries);
+    }
+
+    [Fact]
+    public async Task MismatchedServerOperationIdIsRejected()
+    {
+        var api = new ApiClient(() => new PlannerHandler(
+            eventOperationId: Guid.NewGuid().ToString("D")));
+        api.SetAccessToken("synthetic-planner-token");
+        var service = new CalendarTaskService(api);
+        var start = new DateTimeOffset(2026, 11, 1, 9, 0, 0, TimeSpan.Zero);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.CreateEventAsync(
+                Guid.Parse(CalendarId),
+                "设计评审",
+                start,
+                start.AddHours(1),
+                isAllDay: false,
+                location: null,
+                description: null,
+                clientOperationId: Guid.Parse("99999999-9999-9999-9999-999999999999")));
+    }
+
+    [Fact]
     public async Task MismatchedServerIdentityIsRejected()
     {
         var api = new ApiClient(() => new PlannerHandler(updateTaskId: Guid.NewGuid().ToString("D")));
@@ -184,9 +258,13 @@ public sealed class CalendarTaskServiceTests
             service.SetTaskCompletedAsync(Guid.Parse(TaskId)));
     }
 
-    private sealed class PlannerHandler(string? updateTaskId = null) : HttpMessageHandler
+    private sealed class PlannerHandler(
+        string? updateTaskId = null,
+        string? eventOperationId = null,
+        bool failFirstEvent = false) : HttpMessageHandler
     {
         public List<(string Method, string Path, string Query, string? Body)> Calls { get; } = [];
+        private bool _eventFailed;
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -252,8 +330,18 @@ public sealed class CalendarTaskServiceTests
 
             if (path == "/api/v1/calendar/events" && request.Method == HttpMethod.Post)
             {
+                if (failFirstEvent && !_eventFailed)
+                {
+                    _eventFailed = true;
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                }
+
+                var operationId = eventOperationId ?? string.Empty;
+                var operationIdJson = operationId.Length == 0
+                    ? string.Empty
+                    : $",\n                        \"clientOperationId\": \"{operationId}\"";
                 return Json(
-                    """
+                    $$"""
                     {
                       "code": 0,
                       "data": {
@@ -264,7 +352,7 @@ public sealed class CalendarTaskServiceTests
                         "dtEnd": "2026-11-01T10:00:00Z",
                         "source": "Local",
                         "status": "CONFIRMED",
-                        "uid": "event-1"
+                        "uid": "event-1"{{operationIdJson}}
                       },
                       "message": "created",
                       "timestamp": "2026-11-01T00:00:00Z"

@@ -59,6 +59,114 @@ public sealed class LocalNoteStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task FinalizeCreatesDurableCheckpointEvenWhenContentIsUnchanged()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("课堂记录");
+        var saved = await store.SaveAsync(note.NoteId, "课堂记录", "# 连续正文\n第一段。");
+
+        var finished = await store.FinalizeAsync(note.NoteId, "课堂记录", saved.Markdown);
+
+        Assert.NotEqual(saved.CurrentVersionId, finished.CurrentVersionId);
+        Assert.Equal(saved.Title, finished.Title);
+        Assert.Equal(saved.Markdown, finished.Markdown);
+        var finishedVersion = await store.LoadVersionAsync(note.NoteId, finished.CurrentVersionId);
+        Assert.Equal(LocalNoteCheckpointReason.Finished, finishedVersion.Reason);
+        Assert.Equal(saved.CurrentVersionId, finishedVersion.ParentVersionId);
+        Assert.Equal(saved.Markdown, finishedVersion.Markdown);
+
+        var previous = await store.LoadVersionAsync(note.NoteId, saved.CurrentVersionId);
+        Assert.Equal("# 连续正文\n第一段。", previous.Markdown);
+        var reloaded = await store.LoadAsync(note.NoteId);
+        Assert.Equal(finished.CurrentVersionId, reloaded.CurrentVersionId);
+
+        var unchangedSave = await store.SaveAsync(note.NoteId, finished.Title, finished.Markdown);
+        Assert.Equal(finished.CurrentVersionId, unchangedSave.CurrentVersionId);
+    }
+
+    [Fact]
+    public async Task FinalizeSavesLatestTextAsTheFinishedVersion()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("草稿");
+
+        var finished = await store.FinalizeAsync(note.NoteId, "最终标题", "结束前最后一段");
+
+        var version = await store.LoadVersionAsync(note.NoteId, finished.CurrentVersionId);
+        Assert.Equal(LocalNoteCheckpointReason.Finished, version.Reason);
+        Assert.Equal("最终标题", version.Title);
+        Assert.Equal("结束前最后一段", version.Markdown);
+        Assert.Equal(note.CurrentVersionId, version.ParentVersionId);
+    }
+
+    [Fact]
+    public async Task MarkerOrderIsPersistedThroughSaveExportImportAndFinish()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("混排顺序");
+        var first = await store.AddMaterialsAsync(note.NoteId,
+        [
+            new LocalNoteMaterialInput(
+                new MemoryStream(Encoding.UTF8.GetBytes("first")),
+                "第一张.png",
+                LocalNoteMaterialKind.Photo,
+                "image/png"),
+            new LocalNoteMaterialInput(
+                new MemoryStream(Encoding.UTF8.GetBytes("second")),
+                "第二张.png",
+                LocalNoteMaterialKind.Photo,
+                "image/png"),
+        ]);
+        var firstPhoto = first.Materials[0];
+        var secondPhoto = first.Materials[1];
+        var markdown = string.Join(
+            "\n\n",
+            "开头",
+            NativeNoteDocumentLayout.CreateMarker(secondPhoto.MaterialId),
+            "中间",
+            NativeNoteDocumentLayout.CreateMarker(firstPhoto.MaterialId),
+            "结尾");
+
+        var saved = await store.SaveAsync(note.NoteId, "混排顺序", markdown);
+        Assert.Equal(
+            [secondPhoto.MaterialId, firstPhoto.MaterialId],
+            saved.Materials.Select(material => material.MaterialId));
+
+        var exportPath = Path.Combine(_root, "exports", "ordered.pimnote.zip");
+        await store.ExportAsync(note.NoteId, saved.CurrentVersionId, exportPath);
+        using (var archive = ZipFile.OpenRead(exportPath))
+        {
+            var noteEntry = archive.GetEntry("note.md")
+                ?? throw new InvalidDataException("missing note.md");
+            await using var noteStream = noteEntry.Open();
+            using var reader = new StreamReader(noteStream, Encoding.UTF8);
+            Assert.Equal(markdown, await reader.ReadToEndAsync());
+        }
+
+        var imported = await store.ImportAsync(exportPath);
+        var importedNote = await store.LoadAsync(imported.NoteId);
+        Assert.Equal(
+            [secondPhoto.DisplayName, firstPhoto.DisplayName],
+            importedNote.Materials.Select(material => material.DisplayName));
+        Assert.Equal(
+            [secondPhoto.MaterialId, firstPhoto.MaterialId],
+            NativeNoteDocumentLayout.Parse(importedNote.Markdown, importedNote.Materials)
+                .Segments
+                .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+                .Select(segment => segment.MaterialId!.Value));
+
+        var finished = await store.FinalizeAsync(note.NoteId, "最终混排", importedNote.Markdown);
+        Assert.Equal(
+            [secondPhoto.MaterialId, firstPhoto.MaterialId],
+            finished.Materials.Select(material => material.MaterialId));
+        var finishedVersion = await store.LoadVersionAsync(note.NoteId, finished.CurrentVersionId);
+        Assert.Equal(LocalNoteCheckpointReason.Finished, finishedVersion.Reason);
+        Assert.Equal(
+            [secondPhoto.MaterialId, firstPhoto.MaterialId],
+            finishedVersion.MaterialIds);
+    }
+
+    [Fact]
     public async Task ContentAddressedMaterialIsSharedWithoutChangingOldSnapshot()
     {
         var store = new LocalNoteStore(_root);
@@ -127,6 +235,50 @@ public sealed class LocalNoteStoreTests : IDisposable
         using var memory = new MemoryStream();
         await recordingStream.CopyToAsync(memory);
         Assert.Equal(wavBytes, memory.ToArray());
+    }
+
+    [Fact]
+    public async Task RecordingCheckpointKeepsOneRecordingIdentityAcrossSameNoteSegments()
+    {
+        var store = new LocalNoteStore(_root);
+        var note = await store.CreateAsync("补录");
+        var recordingId = Guid.NewGuid();
+
+        var first = await store.AddMaterialsAsync(
+            note.NoteId,
+            [
+                new LocalNoteMaterialInput(
+                    new MemoryStream(CreateSyntheticWave(sampleCount: 1600)),
+                    "补录 1.wav",
+                    LocalNoteMaterialKind.Recording,
+                    "audio/wav",
+                    DurationMilliseconds: 100,
+                    RecordingId: recordingId,
+                    RecordingSegment: 1,
+                    RecordingChunkIndex: 1),
+            ],
+            LocalNoteCheckpointReason.RecordingAdded);
+        var second = await store.AddMaterialsAsync(
+            note.NoteId,
+            [
+                new LocalNoteMaterialInput(
+                    new MemoryStream(CreateSyntheticWave(sampleCount: 3200)),
+                    "补录 2.wav",
+                    LocalNoteMaterialKind.Recording,
+                    "audio/wav",
+                    DurationMilliseconds: 200,
+                    RecordingId: recordingId,
+                    RecordingSegment: 2,
+                    RecordingChunkIndex: 1),
+            ],
+            LocalNoteCheckpointReason.RecordingAdded);
+
+        Assert.Equal(recordingId, Assert.Single(first.Materials).RecordingId);
+        Assert.Equal(2, second.Materials.Count);
+        Assert.Equal([recordingId, recordingId], second.Materials.Select(material => material.RecordingId));
+        Assert.Equal([1, 2], second.Materials.Select(material => material.RecordingSegment));
+        var version = await store.LoadVersionAsync(note.NoteId, second.CurrentVersionId);
+        Assert.Equal(LocalNoteCheckpointReason.RecordingAdded, version.Reason);
     }
 
     [Fact]

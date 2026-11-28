@@ -10,9 +10,12 @@ namespace Pim.Client.App;
 public partial class CloudNoteSourcesWindow : Window
 {
     private readonly CloudNoteMaterialService _cloud;
+    private readonly NativeNoteOperationCoordinator? _operations;
+    private readonly CloudNoteSourceActionState _actions = new();
     private CloudNoteAccountScope? _loadedScope;
     private long? _loadedAccountGeneration;
     private long _refreshGeneration;
+    private bool _closed;
 
     public CloudNoteSourcesWindow()
     {
@@ -20,13 +23,48 @@ public partial class CloudNoteSourcesWindow : Window
         _cloud = App.Services.GetRequiredService<CloudNoteMaterialService>();
     }
 
+    internal CloudNoteSourcesWindow(NativeNoteOperationCoordinator operations)
+        : this()
+    {
+        _operations = operations;
+    }
+
     public Guid? SelectedNoteId { get; private set; }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
-        => await RefreshAsync();
+        => await RefreshThroughBarrierAsync();
 
     private async void OnRefresh(object sender, RoutedEventArgs e)
-        => await RefreshAsync();
+        => await RefreshThroughBarrierAsync();
+
+    private async Task RefreshThroughBarrierAsync()
+    {
+        if (!TryBeginAction(
+                CloudNoteSourceAction.Refresh,
+                "正在读取或恢复服务器笔记，请稍后再刷新目录。"))
+        {
+            return;
+        }
+
+        try
+        {
+            if (_operations is null)
+            {
+                await RefreshAsync();
+                return;
+            }
+
+            var started = await _operations.TryRunExclusiveAsync(RefreshAsync);
+            if (!started)
+            {
+                StatusText.Text = "正在结束并保存本机笔记，请稍后再刷新服务器目录。";
+            }
+        }
+        finally
+        {
+            CompleteAction(CloudNoteSourceAction.Refresh);
+        }
+    }
 
     private async Task RefreshAsync()
     {
@@ -103,6 +141,12 @@ public partial class CloudNoteSourcesWindow : Window
 
     private async void OnRestore(object sender, RoutedEventArgs e)
     {
+        if (_actions.IsBusy)
+        {
+            StatusText.Text = "正在处理服务器目录操作，请稍后再恢复。";
+            return;
+        }
+
         if (!IsLoadedScopeCurrent())
         {
             StatusText.Text = "账号或服务器已切换；请刷新目录后再恢复。";
@@ -128,10 +172,47 @@ public partial class CloudNoteSourcesWindow : Window
             return;
         }
 
+        if (!TryBeginAction(
+                CloudNoteSourceAction.Restore,
+                "正在处理服务器目录操作，请稍后再恢复。"))
+        {
+            return;
+        }
+
+        var restored = false;
+        try
+        {
+            if (_operations is null)
+            {
+                restored = await RestoreAsync(versionId);
+            }
+            else
+            {
+                StatusText.Text = "正在等待本机笔记保存完成后恢复…";
+                var started = await _operations.TryRunExclusiveAsync(
+                    async () => restored = await RestoreAsync(versionId));
+                if (!started)
+                {
+                    StatusText.Text = "正在结束并保存本机笔记，本次恢复未开始。";
+                }
+            }
+        }
+        finally
+        {
+            CompleteAction(CloudNoteSourceAction.Restore);
+        }
+
+        if (restored)
+        {
+            DialogResult = true;
+        }
+    }
+
+    private async Task<bool> RestoreAsync(Guid versionId)
+    {
         try
         {
             StatusText.Text = "正在下载并校验固定材料…";
-            IsEnabled = false;
             var result = await _cloud.RestoreVersionAsync(
                 versionId,
                 userConfirmedLocalCopy: true,
@@ -139,7 +220,7 @@ public partial class CloudNoteSourcesWindow : Window
                 expectedAccountGeneration: _loadedAccountGeneration);
             SelectedNoteId = result.Import.NoteId;
             StatusText.Text = "恢复完成；本机副本已创建。";
-            DialogResult = true;
+            return true;
         }
         catch (Exception ex)
         {
@@ -150,15 +231,18 @@ public partial class CloudNoteSourcesWindow : Window
                 "恢复服务器笔记失败",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
-        }
-        finally
-        {
-            IsEnabled = true;
+            return false;
         }
     }
 
     private void SelectCurrent()
     {
+        if (_actions.IsBusy)
+        {
+            StatusText.Text = "正在处理服务器目录操作，请稍后再选择。";
+            return;
+        }
+
         if (!IsLoadedScopeCurrent())
         {
             StatusText.Text = "账号或服务器已切换；请刷新目录后再选择。";
@@ -181,9 +265,78 @@ public partial class CloudNoteSourcesWindow : Window
             return;
         }
 
-        SelectedNoteId = noteId;
-        DialogResult = true;
+        if (!TryBeginAction(
+                CloudNoteSourceAction.Select,
+                "正在处理服务器目录操作，请稍后再选择。"))
+        {
+            return;
+        }
+
+        NativeNoteOperationLease? lease = null;
+        var selected = false;
+        try
+        {
+            if (_operations is not null)
+            {
+                lease = _operations.TryBeginOperation();
+                if (lease is null)
+                {
+                    StatusText.Text = "正在结束并保存本机笔记，本次选择未生效。";
+                    return;
+                }
+            }
+
+            SelectedNoteId = noteId;
+            selected = true;
+        }
+        finally
+        {
+            lease?.Dispose();
+            CompleteAction(CloudNoteSourceAction.Select);
+        }
+
+        if (selected)
+        {
+            DialogResult = true;
+        }
     }
+
+    private bool TryBeginAction(CloudNoteSourceAction action, string busyMessage)
+    {
+        if (_closed || !_actions.TryBegin(action))
+        {
+            if (!_closed)
+            {
+                StatusText.Text = busyMessage;
+            }
+
+            return false;
+        }
+
+        IsEnabled = false;
+        return true;
+    }
+
+    private void CompleteAction(CloudNoteSourceAction action)
+    {
+        if (_actions.Complete(action) && !_closed)
+        {
+            IsEnabled = true;
+        }
+    }
+
+    private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (!_actions.IsRestoring)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        StatusText.Text = "正在恢复服务器笔记，完成前请保持窗口打开。";
+    }
+
+    private void OnClosed(object? sender, EventArgs e) => _closed = true;
 
     private bool IsLoadedScopeCurrent()
         => _loadedScope is { } loadedScope

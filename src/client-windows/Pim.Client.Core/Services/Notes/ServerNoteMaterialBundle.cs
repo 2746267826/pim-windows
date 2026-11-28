@@ -88,6 +88,11 @@ public sealed class ServerNoteMaterialBundleBuilder
     {
         WriteIndented = false,
     };
+    private sealed record ServerBlockMaterial(
+        Guid MarkerMaterialId,
+        JsonObject Block,
+        string MarkdownProjection,
+        ServerNoteMaterialFile File);
 
     private readonly LocalNoteStore _store;
 
@@ -142,9 +147,8 @@ public sealed class ServerNoteMaterialBundleBuilder
             return BuildFromServerSource(note, version, serverSource, materialById);
         }
 
-        var blocks = new List<JsonObject>();
-        var markdownBlocks = new List<string>();
-        var outputs = new List<ServerNoteMaterialFile>();
+        var blockMaterialOrder = new List<ServerBlockMaterial>();
+        var blockMaterials = new Dictionary<Guid, ServerBlockMaterial>();
         var photos = version.Materials
             .Where(material => material.Kind == LocalNoteMaterialKind.Photo)
             .OrderBy(material => material.AddedAt)
@@ -162,7 +166,7 @@ public sealed class ServerNoteMaterialBundleBuilder
             var blockId = StableId("photo-block", version.VersionId, photo.MaterialId);
             var assetId = photo.MaterialId;
             var path = $"assets/{assetId:D}.{extension}";
-            blocks.Add(new JsonObject
+            var block = new JsonObject
             {
                 ["id"] = blockId.ToString("D"),
                 ["kind"] = "photo",
@@ -171,26 +175,98 @@ public sealed class ServerNoteMaterialBundleBuilder
                 ["sha256"] = photo.ContentSha256,
                 ["width"] = photo.Width,
                 ["height"] = photo.Height,
-            });
-            markdownBlocks.Add($"![照片]({path})");
-            outputs.Add(new ServerNoteMaterialFile(
+            };
+            var file = new ServerNoteMaterialFile(
                 path,
                 "Photo",
                 photo.ContentSha256,
                 photo.Length,
                 null,
                 materialById[photo.MaterialId].AbsolutePath,
-                blockId: blockId.ToString("D")));
+                blockId: blockId.ToString("D"));
+            var descriptor = new ServerBlockMaterial(
+                photo.MaterialId,
+                block,
+                $"![照片]({path})",
+                file);
+            blockMaterialOrder.Add(descriptor);
+            blockMaterials.Add(photo.MaterialId, descriptor);
         }
 
-        BuildHandwritingBlocks(
+        BuildHandwritingBlockMaterials(
             version,
             materialById,
-            blocks,
-            markdownBlocks,
-            outputs);
+            blockMaterialOrder,
+            blockMaterials);
+
+        var blocks = new List<JsonObject>();
+        var markdownBlocks = new List<string>();
+        var outputs = new List<ServerNoteMaterialFile>();
+        var markdownText = new StringBuilder();
+        var emittedBlockMaterials = new HashSet<Guid>();
+        var markdownBlockIndex = 0;
+
+        void FlushMarkdown()
+        {
+            var text = markdownText.ToString();
+            markdownText.Clear();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            blocks.Add(new JsonObject
+            {
+                ["id"] = MarkdownBlockId(version.VersionId, markdownBlockIndex++).ToString("D"),
+                ["kind"] = "markdown",
+                ["text"] = text,
+            });
+            markdownBlocks.Add(text);
+        }
+
+        void AppendBlockMaterial(ServerBlockMaterial descriptor)
+        {
+            FlushMarkdown();
+            blocks.Add(descriptor.Block);
+            markdownBlocks.Add(descriptor.MarkdownProjection);
+            outputs.Add(descriptor.File);
+        }
+
+        var layout = NativeNoteDocumentLayout.Parse(version.Markdown, version.Materials);
+        foreach (var segment in layout.Segments)
+        {
+            if (segment.Kind == NativeNoteDocumentSegmentKind.Material
+                && segment.Material is { } material
+                && (material.Kind is LocalNoteMaterialKind.Photo
+                    or LocalNoteMaterialKind.Handwriting)
+                && blockMaterials.TryGetValue(material.MaterialId, out var descriptor))
+            {
+                if (emittedBlockMaterials.Add(descriptor.MarkerMaterialId))
+                {
+                    AppendBlockMaterial(descriptor);
+                }
+
+                continue;
+            }
+
+            // Recordings have no server block kind. Their local anchors are
+            // rewritten below to the stable restored recording-chunk identity.
+            markdownText.Append(segment.Text);
+        }
+
+        FlushMarkdown();
+        foreach (var descriptor in blockMaterialOrder)
+        {
+            if (emittedBlockMaterials.Add(descriptor.MarkerMaterialId))
+            {
+                blocks.Add(descriptor.Block);
+                markdownBlocks.Add(descriptor.MarkdownProjection);
+                outputs.Add(descriptor.File);
+            }
+        }
 
         var recordings = new List<JsonObject>();
+        var recordingMarkerIds = new Dictionary<Guid, Guid>();
         var recordingMaterials = version.Materials
             .Where(material => material.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
             .OrderBy(material => material.AddedAt)
@@ -205,15 +281,43 @@ public sealed class ServerNoteMaterialBundleBuilder
             cancellationToken.ThrowIfCancellationRequested();
             var recordingId = recordingGroup.Key;
             var chunks = new List<JsonObject>();
-            var recordingFiles = new List<(LocalNoteMaterial Material, string Path, long Samples)>();
+            var recordingFiles = new List<(
+                LocalNoteMaterial Material,
+                string Path,
+                long Samples,
+                int Segment,
+                int ChunkIndex,
+                string Format)>();
             var currentSegment = 1;
             foreach (var material in recordingGroup)
             {
                 var source = materialById[material.MaterialId].AbsolutePath;
-                var samples = await ValidatePcm16WaveAsync(source, cancellationToken);
+                var format = material.MediaType.ToLowerInvariant() switch
+                {
+                    "audio/wav" or "audio/x-wav" => "wav",
+                    "audio/ogg" => "opus",
+                    _ => throw new LocalNoteStoreException(
+                        $"录音分片格式不受支持：{material.DisplayName}"),
+                };
+                long samples;
+                if (format == "wav")
+                {
+                    samples = await ValidatePcm16WaveAsync(source, cancellationToken);
+                }
+                else
+                {
+                    if (material.RecordingSamples is not > 0)
+                    {
+                        throw new LocalNoteStoreException(
+                            $"录音 Opus 分片缺少样本数：{material.DisplayName}");
+                    }
+
+                    samples = material.RecordingSamples.Value;
+                }
                 if (material.RecordingSamples is { } expectedSamples && expectedSamples != samples)
                 {
-                    throw new LocalNoteStoreException($"录音 WAV 样本数与固定清单不一致：{material.DisplayName}");
+                    throw new LocalNoteStoreException(
+                        $"录音分片样本数与固定清单不一致：{material.DisplayName}");
                 }
 
                 var segment = material.RecordingSegment ?? 1;
@@ -226,13 +330,30 @@ public sealed class ServerNoteMaterialBundleBuilder
                 }
 
                 currentSegment = segment;
-                chunks.Add(new JsonObject
+                var chunk = new JsonObject
                 {
                     ["segment"] = segment,
                     ["index"] = index,
                     ["samples"] = samples,
-                });
-                recordingFiles.Add((material, source, samples));
+                };
+                if (format == "opus")
+                {
+                    chunk["format"] = format;
+                    chunk["mimeType"] = "audio/ogg";
+                }
+
+                chunks.Add(chunk);
+                recordingFiles.Add((material, source, samples, segment, index, format));
+            }
+
+            var markerMaterialId = ServerNoteMaterialStableId.ForRecordingChunk(
+                recordingId,
+                recordingFiles[0].Segment,
+                recordingFiles[0].ChunkIndex,
+                recordingFiles[0].Samples);
+            foreach (var material in recordingGroup)
+            {
+                recordingMarkerIds[material.MaterialId] = markerMaterialId;
             }
 
             var recordingJson = new JsonObject
@@ -253,12 +374,10 @@ public sealed class ServerNoteMaterialBundleBuilder
                 "RecordingManifest",
                 recordingJsonText,
                 recordingId: recordingId.ToString("D")));
-            foreach (var (material, source, samples) in recordingFiles)
+            foreach (var (material, source, samples, segment, index, format) in recordingFiles)
             {
-                var segment = material.RecordingSegment ?? 1;
-                var index = material.RecordingChunkIndex ?? 1;
                 outputs.Add(new ServerNoteMaterialFile(
-                    $"{prefix}/s{segment:D4}-c{index:D6}.wav",
+                    $"{prefix}/s{segment:D4}-c{index:D6}.{format}",
                     "AudioChunk",
                     material.ContentSha256,
                     material.Length,
@@ -285,13 +404,21 @@ public sealed class ServerNoteMaterialBundleBuilder
                 $"服务器材料格式暂不支持：{string.Join("、", unsupported.Select(item => item.DisplayName))}");
         }
 
-        blocks.Insert(0, new JsonObject
+        if (!blocks.Any(block => string.Equals(
+                block["kind"]?.GetValue<string>(),
+                "markdown",
+                StringComparison.Ordinal)))
         {
-            ["id"] = StableId("markdown-block", version.VersionId).ToString("D"),
-            ["kind"] = "markdown",
-            ["text"] = version.Markdown,
-        });
-        markdownBlocks.Insert(0, version.Markdown);
+            blocks.Insert(0, new JsonObject
+            {
+                ["id"] = MarkdownBlockId(version.VersionId, 0).ToString("D"),
+                ["kind"] = "markdown",
+                ["text"] = string.Empty,
+            });
+            markdownBlocks.Insert(0, string.Empty);
+        }
+
+        RewriteRecordingMarkers(blocks, markdownBlocks, recordingMarkerIds);
 
         var noteJson = new JsonObject
         {
@@ -376,7 +503,7 @@ public sealed class ServerNoteMaterialBundleBuilder
         ServerNoteSourceIntegrity.Validate(source, version.Title, version.Markdown, version.Materials);
 
         var blockIds = new HashSet<string>(StringComparer.Ordinal);
-        var blocks = new JsonArray();
+        var blocks = new List<JsonObject>();
         foreach (var sourceBlock in source.Blocks)
         {
             if (!blockIds.Add(sourceBlock.Id))
@@ -398,7 +525,7 @@ public sealed class ServerNoteMaterialBundleBuilder
                 throw new LocalNoteStoreException("服务器混合材料块身份或材料映射已损坏。");
             }
 
-            blocks.Add(JsonNode.Parse(sourceBlock.RawJson)
+            blocks.Add(JsonNode.Parse(sourceBlock.RawJson) as JsonObject
                 ?? throw new LocalNoteStoreException("服务器混合材料块 JSON 无效。"));
         }
 
@@ -424,10 +551,31 @@ public sealed class ServerNoteMaterialBundleBuilder
             throw new LocalNoteStoreException("服务器混合材料 input 与原始 note source 不一致。");
         }
 
+        var recordingMarkerAliases = ServerNoteRecordingMarkers.BuildStableAliases(source);
+        var seenMarkers = new HashSet<Guid>();
+        foreach (var block in blocks)
+        {
+            if (string.Equals(
+                    block["kind"]?.GetValue<string>(),
+                    "markdown",
+                    StringComparison.Ordinal)
+                && block["text"]?.GetValue<string>() is { } text)
+            {
+                block["text"] = NativeNoteDocumentLayout.RewriteMaterialMarkers(
+                    text,
+                    recordingMarkerAliases,
+                    seenMarkers);
+            }
+        }
+
+        var documentMarkdown = NativeNoteDocumentLayout.RewriteMaterialMarkers(
+            source.DocumentMarkdown,
+            recordingMarkerAliases,
+            new HashSet<Guid>());
         noteNode["id"] = note.NoteId.ToString("D");
         noteNode["revision"] = version.CreatedAt.ToUnixTimeMilliseconds();
         noteNode["title"] = version.Title;
-        noteNode["blocks"] = blocks;
+        noteNode["blocks"] = new JsonArray(blocks.Select(block => (JsonNode)block).ToArray());
         var noteJson = noteNode.ToJsonString(JsonOptions);
         var noteBytes = Encoding.UTF8.GetBytes(noteJson);
 
@@ -493,7 +641,7 @@ public sealed class ServerNoteMaterialBundleBuilder
                         throw new LocalNoteStoreException("服务器 Markdown 文件路径无效。");
                     }
 
-                    outputs.Add(Inline(file.Path, file.Kind, source.DocumentMarkdown));
+                    outputs.Add(Inline(file.Path, file.Kind, documentMarkdown));
                     break;
                 case "RecordingManifest":
                     if (file.InlineJson is null
@@ -594,12 +742,47 @@ public sealed class ServerNoteMaterialBundleBuilder
         return recording;
     }
 
-    private static void BuildHandwritingBlocks(
-        LocalNoteVersion version,
-        IReadOnlyDictionary<Guid, LocalNoteMaterialFile> materialById,
+    private static void RewriteRecordingMarkers(
         List<JsonObject> blocks,
         List<string> markdownBlocks,
-        List<ServerNoteMaterialFile> outputs)
+        IReadOnlyDictionary<Guid, Guid> recordingMarkerIds)
+    {
+        if (recordingMarkerIds.Count == 0)
+        {
+            return;
+        }
+
+        var seenStableIds = new HashSet<Guid>();
+        for (var index = 0; index < blocks.Count; index++)
+        {
+            if (!string.Equals(
+                    blocks[index]["kind"]?.GetValue<string>(),
+                    "markdown",
+                    StringComparison.Ordinal)
+                || blocks[index]["text"]?.GetValue<string>() is not { } text)
+            {
+                continue;
+            }
+
+            var rewritten = NativeNoteDocumentLayout.RewriteMaterialMarkers(
+                text,
+                recordingMarkerIds,
+                seenStableIds);
+            if (string.Equals(rewritten, text, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            blocks[index]["text"] = rewritten;
+            markdownBlocks[index] = rewritten;
+        }
+    }
+
+    private static void BuildHandwritingBlockMaterials(
+        LocalNoteVersion version,
+        IReadOnlyDictionary<Guid, LocalNoteMaterialFile> materialById,
+        List<ServerBlockMaterial> blockMaterialOrder,
+        Dictionary<Guid, ServerBlockMaterial> blockMaterials)
     {
         var previews = version.Materials
             .Where(material => material.Kind == LocalNoteMaterialKind.Handwriting)
@@ -644,21 +827,27 @@ public sealed class ServerNoteMaterialBundleBuilder
             var inkHash = Sha256(Encoding.UTF8.GetBytes(inkRaw));
             var blockId = StableId("ink-block", version.VersionId, preview.MaterialId);
             var path = $"assets/{blockId:D}-{inkHash}.png";
-            blocks.Add(new JsonObject
+            var block = new JsonObject
             {
                 ["id"] = blockId.ToString("D"),
                 ["kind"] = "ink",
                 ["ink"] = JsonNode.Parse(inkRaw),
-            });
-            markdownBlocks.Add($"![手写卡片]({path})\n<!-- 可编辑笔迹、身份和尺寸保存在同包 note.json 中 -->");
-            outputs.Add(new ServerNoteMaterialFile(
+            };
+            var file = new ServerNoteMaterialFile(
                 path,
                 "InkPreview",
                 preview.ContentSha256,
                 preview.Length,
                 null,
                 materialById[preview.MaterialId].AbsolutePath,
-                blockId: blockId.ToString("D")));
+                blockId: blockId.ToString("D"));
+            var descriptor = new ServerBlockMaterial(
+                preview.MaterialId,
+                block,
+                $"![手写卡片]({path})\n<!-- 可编辑笔迹、身份和尺寸保存在同包 note.json 中 -->",
+                file);
+            blockMaterialOrder.Add(descriptor);
+            blockMaterials.Add(preview.MaterialId, descriptor);
         }
     }
 
@@ -863,6 +1052,19 @@ public sealed class ServerNoteMaterialBundleBuilder
         bytes[7] = (byte)((bytes[7] & 0x0F) | 0x50);
         bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80);
         return new Guid(bytes);
+    }
+
+    private static Guid MarkdownBlockId(Guid versionId, int index)
+    {
+        if (index == 0)
+        {
+            return StableId("markdown-block", versionId);
+        }
+
+        return StableId(
+            "markdown-block",
+            versionId,
+            new Guid(index, 0, 0, new byte[8]));
     }
 
     private static string RemoveKnownExtension(string value, string extension)

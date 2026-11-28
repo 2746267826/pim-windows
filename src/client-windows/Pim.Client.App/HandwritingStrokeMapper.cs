@@ -8,7 +8,7 @@ namespace Pim.Client.App;
 
 internal static class HandwritingStrokeMapper
 {
-    private static readonly Guid StrokeIdProperty = new("a2c08a04-765b-4bb2-9b06-c7cf9c41ea02");
+    internal static readonly Guid StrokeIdProperty = new("a2c08a04-765b-4bb2-9b06-c7cf9c41ea02");
 
     public static DrawingAttributes ToDrawingAttributes(LocalInkStyle style)
     {

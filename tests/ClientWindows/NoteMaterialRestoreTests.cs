@@ -180,6 +180,398 @@ public sealed class NoteMaterialRestoreTests : IDisposable
     }
 
     [Fact]
+    public async Task RestoreOpusChunkRebuildsWithOggMediaTypeAndExtension()
+    {
+        var fixture = await CreateMixedRecordingFixtureAsync(opusChunk: (1, 2));
+        var store = new LocalNoteStore(_root);
+        var service = CreateService(
+            CreateApi(new RestoreHandler(fixture)),
+            store,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+
+        var restoredResult = await service.RestoreVersionAsync(
+            fixture.VersionId,
+            userConfirmedLocalCopy: true);
+        var restored = await store.LoadAsync(restoredResult.Import.NoteId);
+        var opus = Assert.Single(restored.Materials, material =>
+            material.Kind == LocalNoteMaterialKind.RecordingSegment
+            && material.RecordingSegment == 1
+            && material.RecordingChunkIndex == 2);
+        Assert.Equal("audio/ogg", opus.MediaType);
+        Assert.EndsWith(".opus", opus.RelativePath, StringComparison.Ordinal);
+        Assert.Equal(1600, opus.RecordingSamples);
+
+        var rebuilt = await new ServerNoteMaterialBundleBuilder(store)
+            .BuildAsync(restored.NoteId, restored.CurrentVersionId);
+        using var input = JsonDocument.Parse(rebuilt.InputJson);
+        var chunk = Assert.Single(
+            input.RootElement.GetProperty("recordings")[0].GetProperty("chunks")
+                .EnumerateArray(),
+            item => item.GetProperty("segment").GetInt32() == 1
+                && item.GetProperty("index").GetInt32() == 2);
+        Assert.Equal("opus", chunk.GetProperty("format").GetString());
+        Assert.Equal("audio/ogg", chunk.GetProperty("mimeType").GetString());
+        Assert.Equal(1600, chunk.GetProperty("samples").GetInt64());
+        Assert.Contains(
+            rebuilt.Files,
+            file => file.Kind == "AudioChunk"
+                && file.Path.EndsWith("-c000002.opus", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UploadRestoreFinishRoundTripKeepsEachAnchorOnceAndStableOrder()
+    {
+        var sourceStore = new LocalNoteStore(Path.Combine(_root, "upload-source"));
+        var note = await sourceStore.CreateAsync("上传混排");
+        var imageBytes = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
+        await using (var photo = new MemoryStream(imageBytes))
+        {
+            note = await sourceStore.AddMaterialsAsync(note.NoteId,
+            [
+                new LocalNoteMaterialInput(photo, "照片.png", LocalNoteMaterialKind.Photo, "image/png"),
+            ]);
+        }
+
+        const string Ink =
+            """{"schemaVersion":1,"width":320,"height":180,"strokes":[[{"x":10,"y":20,"pressure":0.5}]]}""";
+        await using (var inkPreview = new MemoryStream(imageBytes))
+        {
+            note = await sourceStore.AddHandwritingAsync(
+                note.NoteId,
+                inkPreview,
+                Ink,
+                "手写",
+                320,
+                180);
+        }
+
+        var wave = SyntheticWave(5);
+        await using (var recording = new MemoryStream(wave))
+        {
+            note = await sourceStore.AddMaterialsAsync(note.NoteId,
+            [
+                new LocalNoteMaterialInput(
+                    recording,
+                    "录音.wav",
+                    LocalNoteMaterialKind.Recording,
+                    "audio/wav"),
+            ]);
+        }
+
+        var photoMaterial = note.Materials.Single(
+            material => material.Kind == LocalNoteMaterialKind.Photo);
+        var handwritingMaterial = note.Materials.Single(
+            material => material.Kind == LocalNoteMaterialKind.Handwriting);
+        var recordingMaterial = note.Materials.Single(
+            material => material.Kind == LocalNoteMaterialKind.Recording);
+        var markdown = string.Join(
+            "\n\n",
+            "开头",
+            NativeNoteDocumentLayout.CreateMarker(photoMaterial.MaterialId),
+            "照片重复锚点",
+            NativeNoteDocumentLayout.CreateMarker(photoMaterial.MaterialId),
+            "中间",
+            NativeNoteDocumentLayout.CreateMarker(recordingMaterial.MaterialId),
+            "录音重复锚点",
+            NativeNoteDocumentLayout.CreateMarker(recordingMaterial.MaterialId),
+            "录音之后",
+            NativeNoteDocumentLayout.CreateMarker(handwritingMaterial.MaterialId),
+            "手写重复锚点",
+            NativeNoteDocumentLayout.CreateMarker(handwritingMaterial.MaterialId),
+            "结尾");
+        note = await sourceStore.SaveAsync(note.NoteId, note.Title, markdown);
+        var bundle = await new ServerNoteMaterialBundleBuilder(sourceStore)
+            .BuildAsync(note.NoteId, note.CurrentVersionId);
+
+        using var input = JsonDocument.Parse(bundle.InputJson);
+        var blocks = input.RootElement.GetProperty("note").GetProperty("blocks")
+            .EnumerateArray()
+            .ToArray();
+        Assert.Equal(
+            ["markdown", "photo", "markdown", "ink", "markdown"],
+            blocks.Select(block => block.GetProperty("kind").GetString()));
+        var markdownBlockText = string.Join(
+            "\n",
+            blocks
+                .Where(block => block.GetProperty("kind").GetString() == "markdown")
+                .Select(block => block.GetProperty("text").GetString()));
+        Assert.DoesNotContain(
+            NativeNoteDocumentLayout.CreateMarker(photoMaterial.MaterialId),
+            markdownBlockText,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            NativeNoteDocumentLayout.CreateMarker(handwritingMaterial.MaterialId),
+            markdownBlockText,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            NativeNoteDocumentLayout.CreateMarker(recordingMaterial.MaterialId),
+            markdownBlockText,
+            StringComparison.Ordinal);
+        var expectedRecordingMaterialId =
+            Assert.Single(NativeNoteDocumentLayout.ReferencedMaterialIds(markdownBlockText));
+        var expectedRecordingMarker =
+            NativeNoteDocumentLayout.CreateMarker(expectedRecordingMaterialId);
+        Assert.NotEqual(recordingMaterial.MaterialId, expectedRecordingMaterialId);
+        Assert.Contains(expectedRecordingMarker, markdownBlockText, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            markdownBlockText.Split(expectedRecordingMarker, StringSplitOptions.None).Length - 1);
+        Assert.Single(input.RootElement.GetProperty("recordings").EnumerateArray());
+
+        var fixture = await CreateFixtureFromBundleAsync(bundle);
+        var restoredStore = new LocalNoteStore(Path.Combine(_root, "restored"));
+        var service = CreateService(
+            CreateApi(new RestoreHandler(fixture)),
+            restoredStore,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+        var restoredImport = await service.RestoreVersionAsync(
+            fixture.VersionId,
+            userConfirmedLocalCopy: true);
+        var restored = await restoredStore.LoadAsync(restoredImport.Import.NoteId);
+
+        Assert.True(restored.IsServerSourceReadOnly);
+        var restoredRecording = restored.Materials
+            .Where(material => material.Kind == LocalNoteMaterialKind.RecordingSegment)
+            .OrderBy(material => material.RecordingSegment)
+            .ThenBy(material => material.RecordingChunkIndex)
+            .First();
+        Assert.Equal(expectedRecordingMaterialId, restoredRecording.MaterialId);
+        Assert.Contains(expectedRecordingMarker, restored.Markdown, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            restored.Markdown.Split(expectedRecordingMarker, StringSplitOptions.None).Length - 1);
+        var restoredLayout = NativeNoteDocumentLayout.ParseServerSource(
+            restored.ServerSource!,
+            restored.Materials);
+        var renderedIds = restoredLayout.Segments
+            .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+            .Select(segment => segment.MaterialId!.Value)
+            .ToArray();
+        Assert.Equal(3, renderedIds.Length);
+        Assert.Equal(3, renderedIds.Distinct().Count());
+        Assert.Contains(expectedRecordingMaterialId, renderedIds);
+        Assert.Equal(
+            photoMaterial.MaterialId,
+            restored.Materials.Single(
+                material => material.Kind == LocalNoteMaterialKind.Photo).MaterialId);
+        Assert.Equal(
+            [
+                LocalNoteMaterialKind.Photo,
+                LocalNoteMaterialKind.RecordingSegment,
+                LocalNoteMaterialKind.Handwriting,
+            ],
+            restoredLayout.Segments
+                .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+                .Select(segment => segment.Material!.Kind));
+
+        var secondStore = new LocalNoteStore(Path.Combine(_root, "restored-again"));
+        var secondService = CreateService(
+            CreateApi(new RestoreHandler(fixture)),
+            secondStore,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+        var secondImport = await secondService.RestoreVersionAsync(
+            fixture.VersionId,
+            userConfirmedLocalCopy: true);
+        var secondRestore = await secondStore.LoadAsync(secondImport.Import.NoteId);
+        Assert.Equal(
+            restored.Materials.Select(material =>
+                (material.MaterialId, material.Kind, material.DisplayName)),
+            secondRestore.Materials.Select(material =>
+                (material.MaterialId, material.Kind, material.DisplayName)));
+
+        var materialOrder = restored.Materials.Select(material => material.MaterialId).ToArray();
+        var finished = await restoredStore.FinalizeAsync(
+            restored.NoteId,
+            restored.Title,
+            restored.Markdown);
+        Assert.Equal(
+            materialOrder,
+            finished.Materials.Select(material => material.MaterialId));
+        var finishedVersion = await restoredStore.LoadVersionAsync(
+            finished.NoteId,
+            finished.CurrentVersionId);
+        Assert.Equal(LocalNoteCheckpointReason.Finished, finishedVersion.Reason);
+        Assert.True(finishedVersion.ServerSource is not null);
+        Assert.Equal(
+            restored.ServerSource!.Blocks.Select(block => (block.Id, block.Kind, block.RawJson)),
+            finishedVersion.ServerSource!.Blocks.Select(block => (block.Id, block.Kind, block.RawJson)));
+
+        var restoredFinished = await restoredStore.RestoreVersionAsync(
+            finished.NoteId,
+            finished.CurrentVersionId);
+        Assert.Equal(restored.Markdown, restoredFinished.Markdown);
+        Assert.Equal(
+            materialOrder,
+            restoredFinished.Materials.Select(material => material.MaterialId));
+        var finishedLayout = NativeNoteDocumentLayout.ParseServerSource(
+            restoredFinished.ServerSource!,
+            restoredFinished.Materials);
+        Assert.Equal(
+            renderedIds,
+            finishedLayout.Segments
+                .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+                .Select(segment => segment.MaterialId!.Value));
+
+        var rebuilt = await new ServerNoteMaterialBundleBuilder(restoredStore)
+            .BuildAsync(finished.NoteId, finished.CurrentVersionId);
+        using var rebuiltInput = JsonDocument.Parse(rebuilt.InputJson);
+        var rebuiltMarkdownText = string.Join(
+            "\n",
+            rebuiltInput.RootElement.GetProperty("note").GetProperty("blocks")
+                .EnumerateArray()
+                .Where(block => block.GetProperty("kind").GetString() == "markdown")
+                .Select(block => block.GetProperty("text").GetString()));
+        Assert.Contains(expectedRecordingMarker, rebuiltMarkdownText, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            rebuiltMarkdownText.Split(expectedRecordingMarker, StringSplitOptions.None).Length - 1);
+        Assert.Equal(
+            blocks.Select(block => block.GetProperty("kind").GetString()),
+            rebuiltInput.RootElement.GetProperty("note").GetProperty("blocks")
+                .EnumerateArray()
+                .Select(block => block.GetProperty("kind").GetString()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LegacyMultiChunkSourceReuploadMapsEveryRecordingAnchorToStableFirstChunk(
+        bool stableSourceIds)
+    {
+        var fixture = await CreateRecordingAnchorFixtureAsync();
+        var parsed = ServerNoteMaterialRestoreParser.Parse(
+            fixture.InputJson,
+            fixture.ManifestJson,
+            fixture.Markdown);
+        var audioFiles = parsed.Files
+            .Where(file => file.Kind == "AudioChunk")
+            .OrderBy(file => file.Segment)
+            .ThenBy(file => file.ChunkIndex)
+            .ToArray();
+        Assert.Equal(3, audioFiles.Length);
+        var recordingId = Guid.Parse(audioFiles[0].RecordingId!);
+        var stableIds = audioFiles
+            .Select(file => ServerNoteMaterialStableId.ForRecordingChunk(
+                recordingId,
+                file.Segment!.Value,
+                file.ChunkIndex!.Value,
+                file.Samples!.Value))
+            .ToArray();
+        var sourceIds = stableSourceIds
+            ? stableIds
+            : CreateLegacyChunkIds(stableIds);
+        var expectedFirstId = stableIds[0];
+        var expectedFirstMarker = NativeNoteDocumentLayout.CreateMarker(expectedFirstId);
+
+        var legacyStore = new LocalNoteStore(Path.Combine(_root, "legacy-source"));
+        var legacyImport = await legacyStore.ImportServerRestoreAsync(
+            await CreateLegacyServerPackageAsync(fixture, sourceIds));
+        var legacy = await legacyStore.LoadAsync(legacyImport.NoteId);
+        var legacyChunks = legacy.Materials
+            .Where(material => material.Kind == LocalNoteMaterialKind.RecordingSegment)
+            .ToArray();
+        Assert.Equal(sourceIds, legacyChunks.Select(material => material.MaterialId));
+        Assert.Equal(
+            [(1, 1), (1, 2), (2, 1)],
+            legacyChunks.Select(material => (
+                material.RecordingSegment!.Value,
+                material.RecordingChunkIndex!.Value)));
+        var legacySourceChunk = Assert.Single(
+            legacy.ServerSource!.Files.Where(file => file.Kind == "AudioChunk"),
+            file => file.Segment == 1 && file.ChunkIndex == 1);
+        Assert.Equal(sourceIds[0], legacySourceChunk.MaterialId);
+        var legacyLayout = NativeNoteDocumentLayout.ParseServerSource(
+            legacy.ServerSource,
+            legacy.Materials);
+        Assert.Equal(
+            [stableSourceIds ? expectedFirstId : sourceIds[0]],
+            legacyLayout.Segments
+                .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+                .Select(segment => segment.MaterialId!.Value));
+
+        var bundle = await new ServerNoteMaterialBundleBuilder(legacyStore)
+            .BuildAsync(legacy.NoteId, legacy.CurrentVersionId);
+        using var input = JsonDocument.Parse(bundle.InputJson);
+        var markdownText = string.Join(
+            "\n",
+            input.RootElement.GetProperty("note").GetProperty("blocks")
+                .EnumerateArray()
+                .Where(block => block.GetProperty("kind").GetString() == "markdown")
+                .Select(block => block.GetProperty("text").GetString()));
+        Assert.Contains(expectedFirstMarker, markdownText, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            markdownText.Split(expectedFirstMarker, StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain(
+            NativeNoteDocumentLayout.CreateMarker(recordingId),
+            markdownText,
+            StringComparison.Ordinal);
+        foreach (var sourceId in sourceIds.Where(id => id != expectedFirstId))
+        {
+            Assert.DoesNotContain(
+                NativeNoteDocumentLayout.CreateMarker(sourceId),
+                markdownText,
+                StringComparison.Ordinal);
+        }
+
+        string documentMarkdown;
+        await using (var markdown = bundle.Files.Single(file => file.Kind == "Markdown").OpenRead())
+        using (var reader = new StreamReader(markdown, Encoding.UTF8))
+        {
+            documentMarkdown = await reader.ReadToEndAsync();
+        }
+        Assert.Equal(markdownText, documentMarkdown);
+
+        using var manifest = JsonDocument.Parse(bundle.ManifestJson);
+        Assert.Equal(
+            [(1, 1), (1, 2), (2, 1)],
+            manifest.RootElement.GetProperty("files").EnumerateArray()
+                .Where(file => file.GetProperty("kind").GetString() == "AudioChunk")
+                .Select(file => (
+                    file.GetProperty("segment").GetInt32(),
+                    file.GetProperty("chunkIndex").GetInt32())));
+        var recording = Assert.Single(input.RootElement.GetProperty("recordings").EnumerateArray());
+        Assert.Equal(
+            [(1, 1, 5L), (1, 2, 7L), (2, 1, 11L)],
+            recording.GetProperty("chunks").EnumerateArray()
+                .Select(chunk => (
+                    chunk.GetProperty("segment").GetInt32(),
+                    chunk.GetProperty("index").GetInt32(),
+                    chunk.GetProperty("samples").GetInt64())));
+
+        var restoredStore = new LocalNoteStore(Path.Combine(_root, "legacy-restored"));
+        var service = CreateService(
+            CreateApi(new RestoreHandler(await CreateFixtureFromBundleAsync(bundle))),
+            restoredStore,
+            () => new CloudNoteAccountScope("http://127.0.0.1:5858", AccountId));
+        var restoredImport = await service.RestoreVersionAsync(
+            bundle.VersionId,
+            userConfirmedLocalCopy: true);
+        var restored = await restoredStore.LoadAsync(restoredImport.Import.NoteId);
+        var restoredChunks = restored.Materials
+            .Where(material => material.Kind == LocalNoteMaterialKind.RecordingSegment)
+            .ToArray();
+        Assert.Equal(stableIds, restoredChunks.Select(material => material.MaterialId));
+        Assert.Equal(
+            [(1, 1), (1, 2), (2, 1)],
+            restoredChunks.Select(material => (
+                material.RecordingSegment!.Value,
+                material.RecordingChunkIndex!.Value)));
+        Assert.Contains(expectedFirstMarker, restored.Markdown, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            restored.Markdown.Split(expectedFirstMarker, StringSplitOptions.None).Length - 1);
+        var restoredLayout = NativeNoteDocumentLayout.ParseServerSource(
+            restored.ServerSource!,
+            restored.Materials);
+        Assert.Equal(
+            [expectedFirstId],
+            restoredLayout.Segments
+                .Where(segment => segment.Kind == NativeNoteDocumentSegmentKind.Material)
+                .Select(segment => segment.MaterialId!.Value));
+    }
+
+    [Fact]
     public void SourceIntegrityValidatesLargeInterleavedPhotoSource()
     {
         const int photoCount = 1_000;
@@ -606,6 +998,336 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 shortHash.ToJsonString()));
     }
 
+    private async Task<LocalNoteServerRestorePackage> CreateLegacyServerPackageAsync(
+        RestoreFixture fixture,
+        IReadOnlyList<Guid> audioMaterialIds)
+    {
+        var parsed = ServerNoteMaterialRestoreParser.Parse(
+            fixture.InputJson,
+            fixture.ManifestJson,
+            fixture.Markdown);
+        if (parsed.Blocks.Any(block => block.Kind != "markdown")
+            || parsed.Files.Any(file => file.Kind is "Photo" or "InkPreview"))
+        {
+            throw new InvalidOperationException("旧版录音 source 测试只支持 Markdown 与录音材料。");
+        }
+
+        var bytesByPath = fixture.Files.ToDictionary(file => file.Path, file => file.Bytes);
+        var audioFiles = parsed.Files
+            .Where(file => file.Kind == "AudioChunk")
+            .OrderBy(file => file.Segment)
+            .ThenBy(file => file.ChunkIndex)
+            .ToArray();
+        if (audioFiles.Length != audioMaterialIds.Count)
+        {
+            throw new InvalidOperationException("旧版录音 source 的分片与材料标识数量不一致。");
+        }
+
+        var staging = Path.Combine(_root, "legacy-staging", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staging);
+        var materialIdsByPath = new Dictionary<string, Guid>(StringComparer.Ordinal);
+        var materials = new List<LocalNoteServerMaterialInput>(audioFiles.Length);
+        for (var index = 0; index < audioFiles.Length; index++)
+        {
+            var file = audioFiles[index];
+            var materialId = audioMaterialIds[index];
+            var stagedPath = Path.Combine(staging, $"{index:D4}-{Path.GetFileName(file.Path)}");
+            await File.WriteAllBytesAsync(stagedPath, bytesByPath[file.Path]);
+            materialIdsByPath.Add(file.Path, materialId);
+            materials.Add(new LocalNoteServerMaterialInput(
+                materialId,
+                LocalNoteMaterialKind.RecordingSegment,
+                $"录音-{index + 1:D3}-s{file.Segment:D4}-c{file.ChunkIndex:D6}.wav",
+                file.Sha256,
+                "audio/wav",
+                file.SizeBytes,
+                stagedPath,
+                ExpectedSamples: file.Samples,
+                RecordingId: Guid.Parse(file.RecordingId!),
+                RecordingSegment: file.Segment,
+                RecordingChunkIndex: file.ChunkIndex));
+        }
+
+        var noteJson = Encoding.UTF8.GetString(
+            bytesByPath[parsed.Files.Single(file => file.Kind == "Document").Path]);
+        var recordingManifest = parsed.Files.Single(file => file.Kind == "RecordingManifest");
+        var manifestJson = Encoding.UTF8.GetString(bytesByPath[recordingManifest.Path]);
+        var serverSource = new LocalNoteServerSource(
+            parsed.NoteId,
+            parsed.VersionId,
+            fixture.InputJson,
+            fixture.ManifestJson,
+            noteJson,
+            parsed.Markdown,
+            parsed.Blocks
+                .Select(block => new LocalNoteServerSourceBlock(
+                    block.Id,
+                    block.Kind,
+                    block.RawJson,
+                    []))
+                .ToArray(),
+            parsed.Files
+                .Select(file => new LocalNoteServerSourceFile(
+                    file.Path,
+                    file.Kind,
+                    file.Sha256,
+                    file.SizeBytes,
+                    file.BlockId,
+                    file.RecordingId,
+                    file.Segment,
+                    file.ChunkIndex,
+                    file.Samples,
+                    materialIdsByPath.GetValueOrDefault(file.Path),
+                    file.Kind switch
+                    {
+                        "Document" => noteJson,
+                        "Markdown" => parsed.Markdown,
+                        "RecordingManifest" => manifestJson,
+                        _ => null,
+                    }))
+                .ToArray());
+
+        return new LocalNoteServerRestorePackage(
+            parsed.NoteId,
+            parsed.VersionId,
+            parsed.Title,
+            parsed.Markdown,
+            materials,
+            serverSource);
+    }
+
+    private static Guid[] CreateLegacyChunkIds(IReadOnlyList<Guid> stableIds)
+    {
+        var result = stableIds
+            .Select((_, index) => Guid.Parse($"70000000-0000-4000-8000-{index + 1:x12}"))
+            .ToArray();
+        if (result.Intersect(stableIds).Any())
+        {
+            throw new InvalidOperationException("旧版录音测试标识与稳定标识发生碰撞。");
+        }
+
+        return result;
+    }
+
+    private static async Task<RestoreFixture> CreateRecordingAnchorFixtureAsync()
+    {
+        var noteId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var versionId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        var recordingId = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc");
+        var markdown = string.Join(
+            "\n\n",
+            "开头",
+            NativeNoteDocumentLayout.CreateMarker(recordingId),
+            "旧录音锚点",
+            NativeNoteDocumentLayout.CreateMarker(recordingId),
+            "末尾");
+        var noteJson = new JsonObject
+        {
+            ["schemaVersion"] = 1,
+            ["id"] = noteId.ToString("D"),
+            ["revision"] = 7,
+            ["createdAtMillis"] = 7,
+            ["title"] = "旧版多分片录音",
+            ["blocks"] = new JsonArray(
+                new JsonObject
+                {
+                    ["id"] = "11111111-1111-4111-8111-111111111111",
+                    ["kind"] = "markdown",
+                    ["text"] = markdown,
+                }),
+        }.ToJsonString();
+        var recordingJson = new JsonObject
+        {
+            ["id"] = recordingId.ToString("D"),
+            ["createdAtMillis"] = 7,
+            ["phase"] = "Completed",
+            ["currentSegment"] = 2,
+            ["chunks"] = new JsonArray(
+                new JsonObject { ["segment"] = 1, ["index"] = 1, ["samples"] = 5 },
+                new JsonObject { ["segment"] = 1, ["index"] = 2, ["samples"] = 7 },
+                new JsonObject { ["segment"] = 2, ["index"] = 1, ["samples"] = 11 }),
+            ["problem"] = null,
+            ["schemaVersion"] = 1,
+            ["noteId"] = noteId.ToString("D"),
+        }.ToJsonString();
+        var inputJson = new JsonObject
+        {
+            ["schemaVersion"] = 1,
+            ["id"] = versionId.ToString("D"),
+            ["createdAtMillis"] = 7,
+            ["note"] = JsonNode.Parse(noteJson),
+            ["recordings"] = new JsonArray(JsonNode.Parse(recordingJson)),
+        }.ToJsonString();
+        var files = new List<RestoreFile>
+        {
+            new("note.json", "Document", Encoding.UTF8.GetBytes(noteJson), null),
+            new("document.md", "Markdown", Encoding.UTF8.GetBytes(markdown), null),
+            new(
+                $"recordings/{recordingId:D}/manifest.json",
+                "RecordingManifest",
+                Encoding.UTF8.GetBytes(recordingJson),
+                null,
+                recordingId.ToString("D")),
+        };
+        files.AddRange(new[] { 5L, 7L, 11L }.Select((samples, index) =>
+        {
+            var segment = index == 2 ? 2 : 1;
+            var chunk = index == 1 ? 2 : 1;
+            return new RestoreFile(
+                $"recordings/{recordingId:D}/s{segment:D4}-c{chunk:D6}.wav",
+                "AudioChunk",
+                SyntheticWave(samples),
+                null,
+                recordingId.ToString("D"),
+                segment,
+                chunk,
+                samples);
+        }));
+        var manifestJson = new JsonObject
+        {
+            ["schemaVersion"] = 1,
+            ["versionId"] = versionId.ToString("D"),
+            ["noteId"] = noteId.ToString("D"),
+            ["revision"] = 7,
+            ["inputSha256"] = Hash(Encoding.UTF8.GetBytes(inputJson)),
+            ["files"] = new JsonArray(files.Select(file => (JsonNode)new JsonObject
+            {
+                ["path"] = file.Path,
+                ["kind"] = file.Kind,
+                ["sha256"] = Hash(file.Bytes),
+                ["sizeBytes"] = file.Bytes.Length,
+                ["blockId"] = file.BlockId,
+                ["recordingId"] = file.RecordingId,
+                ["segment"] = file.Segment,
+                ["chunkIndex"] = file.ChunkIndex,
+                ["samples"] = file.Samples,
+            }).ToArray()),
+        }.ToJsonString();
+        var upload = new NoteMaterialUploadDto
+        {
+            BaseVersionId = null,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CurrentVersionId = versionId.ToString("D"),
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(1),
+            Files = files.Select((file, index) => new NoteMaterialUploadFileDto
+            {
+                Index = index,
+                Kind = file.Kind,
+                PartCount = 0,
+                Path = file.Path,
+                Sha256 = Hash(file.Bytes),
+                SizeBytes = file.Bytes.Length,
+                UploadedParts = [],
+            }).ToList(),
+            HasConflict = false,
+            IsCurrent = true,
+            Limits = new NoteMaterialUploadLimitsDto
+            {
+                PartSizeBytes = 1_048_576,
+                MaxMetadataCharacters = 8_388_608,
+                MaxVersionBytes = 10_000_000,
+                MaxUserReservedBytes = 10_000_000,
+                MaxFiles = 20,
+                MaxPendingVersions = 5,
+                MaxVersionsPerUser = 100,
+                UploadExpiryHours = 24,
+            },
+            NoteId = noteId.ToString("D"),
+            Phase = "Uploaded",
+            VersionId = versionId.ToString("D"),
+        };
+        var response = new NoteMaterialVersionDto
+        {
+            InputJson = inputJson,
+            ManifestJson = manifestJson,
+            Upload = upload,
+        };
+        return await Task.FromResult(new RestoreFixture(
+            noteId,
+            versionId,
+            [],
+            markdown,
+            inputJson,
+            manifestJson,
+            response,
+            files));
+    }
+
+    private static async Task<RestoreFixture> CreateFixtureFromBundleAsync(
+        ServerNoteMaterialBundle bundle)
+    {
+        var files = new List<RestoreFile>(bundle.Files.Count);
+        foreach (var file in bundle.Files)
+        {
+            await using var stream = file.OpenRead();
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            files.Add(new RestoreFile(
+                file.Path,
+                file.Kind,
+                buffer.ToArray(),
+                file.BlockId,
+                file.RecordingId,
+                file.Segment,
+                file.ChunkIndex,
+                file.Samples));
+        }
+
+        var markdown = Encoding.UTF8.GetString(
+            files.Single(file => file.Path == "document.md").Bytes);
+        using var input = JsonDocument.Parse(bundle.InputJson);
+        var noteId = Guid.Parse(
+            input.RootElement.GetProperty("note").GetProperty("id").GetString()!);
+        var upload = new NoteMaterialUploadDto
+        {
+            BaseVersionId = null,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CurrentVersionId = bundle.VersionId.ToString("D"),
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(1),
+            Files = files.Select((file, index) => new NoteMaterialUploadFileDto
+            {
+                Index = index,
+                Kind = file.Kind,
+                PartCount = file.Bytes.Length == 0 ? 0 : 1,
+                Path = file.Path,
+                Sha256 = Hash(file.Bytes),
+                SizeBytes = file.Bytes.Length,
+                UploadedParts = [],
+            }).ToList(),
+            HasConflict = false,
+            IsCurrent = true,
+            Limits = new NoteMaterialUploadLimitsDto
+            {
+                PartSizeBytes = 1_048_576,
+                MaxMetadataCharacters = 8_388_608,
+                MaxVersionBytes = 64L * 1024 * 1024 * 1024,
+                MaxUserReservedBytes = 64L * 1024 * 1024 * 1024,
+                MaxFiles = 100_000,
+                MaxPendingVersions = 20,
+                MaxVersionsPerUser = 10_000,
+                UploadExpiryHours = 24,
+            },
+            NoteId = noteId.ToString("D"),
+            Phase = "Uploaded",
+            VersionId = bundle.VersionId.ToString("D"),
+        };
+        var response = new NoteMaterialVersionDto
+        {
+            InputJson = bundle.InputJson,
+            ManifestJson = bundle.ManifestJson,
+            Upload = upload,
+        };
+        return new RestoreFixture(
+            noteId,
+            bundle.VersionId,
+            files.FirstOrDefault(file => file.Kind == "Photo")?.Bytes ?? [],
+            markdown,
+            bundle.InputJson,
+            bundle.ManifestJson,
+            response,
+            files);
+    }
+
     private static async Task<RestoreFixture> CreateFixtureAsync()
     {
         var noteId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
@@ -723,7 +1445,8 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 .GetProperty("futurePoint").GetInt32());
     }
 
-    private static async Task<RestoreFixture> CreateMixedRecordingFixtureAsync()
+    private static async Task<RestoreFixture> CreateMixedRecordingFixtureAsync(
+        (int Segment, int ChunkIndex)? opusChunk = null)
     {
         var noteId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
         var versionId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
@@ -764,11 +1487,39 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         var photoPath = $"assets/{photoAssetId:D}.png";
         var inkPath = $"assets/{inkBlockId:D}-{inkHash}.png";
         var markdown = $"开头\n\n![照片]({photoPath})\n\n照片之后\n\n![手写卡片]({inkPath})\n<!-- 可编辑笔迹、身份和尺寸保存在同包 note.json 中 -->\n\n末尾";
-        var recordingJson = $$"""
-            {"id":"{{recordingId:D}}","createdAtMillis":7,"phase":"Completed","currentSegment":2,
-             "chunks":[{"segment":1,"index":1,"samples":5},{"segment":1,"index":2,"samples":7},{"segment":2,"index":1,"samples":11}],
-             "problem":null,"schemaVersion":1,"noteId":"{{noteId:D}}"}
-            """;
+        var chunks = new (long Samples, int Segment, int Chunk)[]
+        {
+            (5, 1, 1),
+            (7, 1, 2),
+            (11, 2, 1),
+        };
+        var recordingJson = new JsonObject
+        {
+            ["id"] = recordingId.ToString("D"),
+            ["createdAtMillis"] = 7,
+            ["phase"] = "Completed",
+            ["currentSegment"] = 2,
+            ["chunks"] = new JsonArray(chunks.Select(chunk =>
+            {
+                var isOpus = opusChunk == (chunk.Segment, chunk.Chunk);
+                var item = new JsonObject
+                {
+                    ["segment"] = chunk.Segment,
+                    ["index"] = chunk.Chunk,
+                    ["samples"] = isOpus ? 1600 : chunk.Samples,
+                };
+                if (isOpus)
+                {
+                    item["format"] = "opus";
+                    item["mimeType"] = "audio/ogg";
+                }
+
+                return (JsonNode)item;
+            }).ToArray()),
+            ["problem"] = null,
+            ["schemaVersion"] = 1,
+            ["noteId"] = noteId.ToString("D"),
+        }.ToJsonString();
         var input = $$"""
             {"schemaVersion":1,"id":"{{versionId:D}}","createdAtMillis":7,
              "note":{{noteJson}},"recordings":[{{recordingJson}}]}
@@ -786,19 +1537,18 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 null,
                 recordingId.ToString("D")),
         };
-        files.AddRange(new[] { 5L, 7L, 11L }.Select((samples, index) =>
+        files.AddRange(chunks.Select(chunk =>
         {
-            var segment = index == 2 ? 2 : 1;
-            var chunk = index == 1 ? 2 : 1;
-            var wav = SyntheticWave(samples);
+            var samples = opusChunk == (chunk.Segment, chunk.Chunk) ? 1600 : chunk.Samples;
+            var isOpus = opusChunk == (chunk.Segment, chunk.Chunk);
             return new RestoreFile(
-                $"recordings/{recordingId:D}/s{segment:D4}-c{chunk:D6}.wav",
+                $"recordings/{recordingId:D}/s{chunk.Segment:D4}-c{chunk.Chunk:D6}.{(isOpus ? "opus" : "wav")}",
                 "AudioChunk",
-                wav,
+                isOpus ? SyntheticOpus() : SyntheticWave(samples),
                 null,
                 recordingId.ToString("D"),
-                segment,
-                chunk,
+                chunk.Segment,
+                chunk.Chunk,
                 samples);
         }));
         var manifest = JsonSerializer.Serialize(new
@@ -924,6 +1674,9 @@ public sealed class NoteMaterialRestoreTests : IDisposable
         return wave;
     }
 
+    private static byte[] SyntheticOpus() => Convert.FromBase64String(
+        "T2dnUwACAAAAAAAAAAD3WTvRAAAAALaS03IBE09wdXNIZWFkAQE4AYA+AAAAAABPZ2dTAAAAAAAAAAAAAPdZO9EBAAAAymKEcwE9T3B1c1RhZ3MMAAAATGF2ZjYyLjMuMTAwAQAAAB0AAABlbmNvZGVyPUxhdmM2Mi4xMS4xMDAgbGlib3B1c09nZ1MABPgTAAAAAAAA91k70QIAAAC8/jk5BlgsNDAyHUiBpvLzsXG9AAACAawTWRg+ZP9rYrq27r4PgIGySHntw3HAMzw+4Lq3gqoGy5yUXZK+KTRPCk79dJc5puC04dhrz1VXUtfo+gRq5gEzgyuwxrFRMQV5R6tInNZB5/yVTU6qGAOfCY8CGpOpsivqsqn3IPjcjREgsKc2cUKEV3tyaOknaEiZwl9zLdIzOkXZqNtXjU5TFYlQeWjabWDvCunj8JEhdpsOa4eEvMQ7u7IjyTp0wWsILyBImZ1ysJO6ioODsnzV0ZDnEngGehIa1xNwwmd25QUrHqhBoRTnNbik07INHVVVAkZImUofcy3SMQ7YBziRnHv/ofyN3Rgg3m1Z+H/fHXc2+9+Uhuw6nImqJMAREvhGiD3YP0gFjIXwEebjMnv5p2Wc22oURcy0X+x1X9RwbPlg");
+
     private CloudNoteMaterialService CreateService(
         ApiClient api,
         LocalNoteStore store,
@@ -1024,7 +1777,12 @@ public sealed class NoteMaterialRestoreTests : IDisposable
                 }
                 var content = new ByteArrayContent(body);
                 content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
-                    "application/octet-stream");
+                    Path.GetExtension(file.Path).ToLowerInvariant() switch
+                    {
+                        ".wav" => "audio/wav",
+                        ".opus" => "audio/ogg",
+                        _ => "application/octet-stream",
+                    });
                 content.Headers.ContentDisposition = new System.Net.Http.Headers.ContentDispositionHeaderValue("attachment")
                 {
                     FileName = WrongFileName ? "wrong-name.bin" : Path.GetFileName(file.Path),

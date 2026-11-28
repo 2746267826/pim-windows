@@ -1,203 +1,435 @@
 <Window x:Class="Pim.Client.App.NativeNotesWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="笔记库" Height="920" Width="1440" MinHeight="840" MinWidth="1120"
+        Title="{Binding WindowTitle}" Height="840" Width="1480" MinHeight="640" MinWidth="720"
         WindowStartupLocation="CenterOwner" Background="{StaticResource PimMutedSurfaceBrush}"
-        Loaded="OnLoaded" Closing="OnClosing" Closed="OnClosed">
-    <Grid Margin="18">
+        Loaded="OnLoaded" Closing="OnClosing" Closed="OnClosed"
+        SizeChanged="OnWindowSizeChanged">
+    <Grid x:Name="RootLayoutGrid" Margin="18">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="300" />
-            <ColumnDefinition Width="16" />
-            <ColumnDefinition Width="*" />
+            <ColumnDefinition x:Name="LibraryColumn" Width="296" />
+            <ColumnDefinition x:Name="LibraryGapColumn" Width="16" />
+            <ColumnDefinition x:Name="MainColumn" Width="*" />
         </Grid.ColumnDefinitions>
-        <Border Grid.Column="0" Background="{StaticResource PimSurfaceBrush}" BorderBrush="{StaticResource PimBorderBrush}"
-                BorderThickness="1" CornerRadius="12" Padding="14">
+
+        <Border x:Name="NoteLibraryPanel" Grid.Column="0" Background="{StaticResource PimSurfaceBrush}"
+                BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
+                CornerRadius="12" Padding="14" Width="296" HorizontalAlignment="Left">
             <DockPanel>
                 <StackPanel DockPanel.Dock="Top">
-                    <TextBlock Text="我的笔记" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PimTextBrush}" />
-                    <TextBlock Text="内容优先 · 离线保存 · 固定材料版本" Margin="0,4,0,12" FontSize="12" Foreground="{StaticResource PimMutedTextBrush}" />
-                    <TextBox x:Name="SearchBox" Height="34" Padding="9,5" VerticalContentAlignment="Center"
-                             TextChanged="OnSearchChanged" ToolTip="搜索标题和正文" />
-                    <Button Content="＋ 新建笔记" Style="{StaticResource PimPrimaryButton}" Margin="0,10,0,12" Height="38" Click="OnNewNote" />
+                    <TextBlock Text="我的笔记" FontSize="22" FontWeight="SemiBold"
+                               Foreground="{StaticResource PimTextBrush}" />
+                    <TextBlock Text="内容优先 · 离线保存 · 固定材料版本" Margin="0,4,0,12"
+                               FontSize="12" Foreground="{StaticResource PimMutedTextBrush}" />
+                    <TextBox x:Name="SearchBox" Height="34" Padding="9,5"
+                             VerticalContentAlignment="Center" TextChanged="OnSearchChanged"
+                             ToolTip="搜索标题和正文" />
+                    <Button x:Name="NewNoteButton" Content="＋ 新建笔记" Style="{StaticResource PimPrimaryButton}"
+                            Margin="0,10,0,10" Height="38" Click="OnNewNote" />
+                    <ProgressBar x:Name="NotesRefreshBar" Height="3" IsIndeterminate="True"
+                                 Margin="0,0,0,6" Visibility="Collapsed" />
                 </StackPanel>
-                <ListBox x:Name="NotesList" BorderThickness="0" Background="Transparent"
-                         SelectionChanged="OnNoteSelected" DisplayMemberPath="Title" />
+
+                <Border x:Name="NotesInlineErrorPanel" DockPanel.Dock="Bottom"
+                        Margin="0,8,0,0" Padding="10,8" CornerRadius="8"
+                        Background="{StaticResource PimMutedSurfaceBrush}"
+                        BorderBrush="{StaticResource PimDangerBrush}"
+                        BorderThickness="1" Visibility="Collapsed">
+                    <DockPanel>
+                        <Button x:Name="NotesInlineRetryButton" DockPanel.Dock="Right"
+                                Content="重试" Style="{StaticResource PimSecondaryButton}"
+                                Padding="9,4" Margin="8,0,0,0" Click="OnRetryNotes" />
+                        <TextBlock x:Name="NotesInlineErrorText" Text="" FontSize="12"
+                                   TextWrapping="Wrap" VerticalAlignment="Center"
+                                   Foreground="{StaticResource PimDangerBrush}" />
+                    </DockPanel>
+                </Border>
+
+                <Grid>
+                    <ListBox x:Name="NotesList" BorderThickness="0" Background="Transparent"
+                             SelectionChanged="OnNoteSelected" DisplayMemberPath="Title"
+                             ScrollViewer.CanContentScroll="True"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             VirtualizingPanel.ScrollUnit="Pixel" />
+                    <Border x:Name="NotesStatePanel" Background="{StaticResource PimSurfaceBrush}"
+                            BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
+                            CornerRadius="9" Padding="18" Visibility="Visible">
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock x:Name="NotesStateIconText" Text="✎" FontSize="34"
+                                       HorizontalAlignment="Center"
+                                       Foreground="{StaticResource PimPrimaryBrush}" />
+                            <TextBlock x:Name="NotesStateTitleText" Text="正在读取本机笔记…"
+                                       Margin="0,8,0,0" FontSize="16" FontWeight="SemiBold"
+                                       TextAlignment="Center" TextWrapping="Wrap"
+                                       Foreground="{StaticResource PimTextBrush}" />
+                            <TextBlock x:Name="NotesStateDetailText"
+                                       Text="笔记与原始材料只保存在这台电脑上。"
+                                       Margin="0,6,0,0" FontSize="12" TextAlignment="Center"
+                                       TextWrapping="Wrap"
+                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                            <ProgressBar x:Name="NotesLoadingBar" IsIndeterminate="True"
+                                         Height="4" Margin="0,16,0,0" Visibility="Visible" />
+                            <Button x:Name="NotesStateCreateButton" Content="＋ 新建笔记"
+                                    Style="{StaticResource PimPrimaryButton}" Margin="0,16,0,0"
+                                    HorizontalAlignment="Center" Visibility="Collapsed"
+                                    Click="OnNewNote" />
+                            <Button x:Name="NotesStateClearSearchButton" Content="清空搜索"
+                                    Style="{StaticResource PimSecondaryButton}" Margin="0,16,0,0"
+                                    HorizontalAlignment="Center" Visibility="Collapsed"
+                                    Click="OnClearSearch" />
+                            <Button x:Name="NotesStateRetryButton" Content="重试读取"
+                                    Style="{StaticResource PimSecondaryButton}" Margin="0,16,0,0"
+                                    HorizontalAlignment="Center" Visibility="Collapsed"
+                                    Click="OnRetryNotes" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
             </DockPanel>
         </Border>
-        <Border Grid.Column="2" Background="{StaticResource PimSurfaceBrush}" BorderBrush="{StaticResource PimBorderBrush}"
-                BorderThickness="1" CornerRadius="12" Padding="22">
+
+        <Border Grid.Column="2" Background="{StaticResource PimSurfaceBrush}"
+                BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
+                CornerRadius="12" Padding="22">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="16" />
-                    <ColumnDefinition Width="340" />
-                </Grid.ColumnDefinitions>
-                <Grid Grid.Column="0">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
-                <RowDefinition Height="130" />
-                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <DockPanel Grid.Row="0" LastChildFill="True">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                        <Button x:Name="RecordButton" Content="● 开始录音" Style="{StaticResource PimPrimaryButton}" Margin="4,0" Click="OnToggleRecording" />
-                        <Button x:Name="AddPhotoButton" Content="添加照片" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnAddPhoto" />
-                        <Button x:Name="AddHandwritingButton" Content="手写" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnAddHandwriting" />
-                        <Button x:Name="AddRecordingButton" Content="添加音频" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnAddRecording" />
-                        <Button Content="导入笔记包" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnImportPackage" />
-                        <Button Content="导出固定版本" Style="{StaticResource PimSecondaryButton}" Margin="4,0" Click="OnExport" />
+
+                <Grid Grid.Row="0" Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="EditorContextText" Text="{Binding EditorContext}"
+                                   FontSize="12" Foreground="{StaticResource PimMutedTextBrush}" />
+                        <WrapPanel Margin="0,4,0,0">
+                            <TextBlock x:Name="SaveStateText" Text=""
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                            <TextBlock x:Name="RecordingStatusText" Text="" Margin="14,0,0,0"
+                                       VerticalAlignment="Center" TextWrapping="Wrap"
+                                       Foreground="{StaticResource PimActivityBrush}" />
+                        </WrapPanel>
                     </StackPanel>
-                    <TextBox x:Name="TitleBox" FontSize="25" FontWeight="SemiBold" BorderThickness="0"
-                             Padding="0,0,8,8" TextChanged="OnEditorChanged" />
-                </DockPanel>
-                <TextBlock Grid.Row="1" Text="Markdown 正文" FontSize="12" Foreground="{StaticResource PimMutedTextBrush}"
-                           Margin="0,0,0,8" />
-                <TextBox x:Name="MarkdownBox" Grid.Row="2" AcceptsReturn="True" AcceptsTab="True"
-                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                         FontFamily="Consolas" FontSize="15" Padding="16" BorderBrush="{StaticResource PimBorderBrush}"
-                         TextChanged="OnEditorChanged" />
-                <DockPanel Grid.Row="3" Margin="0,10,0,0">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Vertical" Margin="6,0,0,4">
-                        <Button Content="编辑所选笔迹"
-                                Style="{StaticResource PimSecondaryButton}" Margin="0,0,0,4"
-                                Click="OnEditHandwriting" />
-                        <Button x:Name="DeleteHandwritingButton" Content="删除所选手写"
-                                Style="{StaticResource PimSecondaryButton}" IsEnabled="False"
-                                ToolTip="选择手写预览（.png）后，删除它和唯一配对的笔迹源；不会删除照片、录音或历史版本"
-                                Click="OnDeleteHandwriting" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                        <Button x:Name="LibraryToggleButton" Content="笔记列表"
+                                Style="{StaticResource PimSecondaryButton}" Height="36"
+                                Margin="0,0,8,0" Click="OnToggleLibrary" />
+                        <Button x:Name="CloudPanelToggleButton" Content="版本与云端"
+                                Style="{StaticResource PimSecondaryButton}" Height="36"
+                                Margin="0,0,8,0" IsEnabled="False"
+                                Click="OnToggleCloudPanel" />
+                        <Button x:Name="FinishButton" Content="结束"
+                                Style="{StaticResource PimPrimaryButton}" MinWidth="82"
+                                Height="36" FontWeight="SemiBold" IsEnabled="False"
+                                Click="OnFinishNote">
+                            <Button.Effect>
+                                <DropShadowEffect Color="#000000" Opacity="0.18"
+                                                  BlurRadius="12" ShadowDepth="2"
+                                                  Direction="270" />
+                            </Button.Effect>
+                        </Button>
                     </StackPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="当前固定版本中的材料（双击照片预览或音频回放）" FontSize="12"
-                               Foreground="{StaticResource PimMutedTextBrush}" Margin="0,0,0,4" />
-                    <ListBox x:Name="MaterialsList" BorderBrush="{StaticResource PimBorderBrush}"
-                             DisplayMemberPath="DisplayName" MouseDoubleClick="OnMaterialDoubleClick" />
-                </DockPanel>
-                <DockPanel Grid.Row="4" Margin="0,10,0,0">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock x:Name="MaterialsText" Text="固定材料版本 · 尚无材料" VerticalAlignment="Center"
-                               Foreground="{StaticResource PimMutedTextBrush}" />
-                        <TextBlock x:Name="RecordingStatusText" Margin="14,0,0,0" Text="" VerticalAlignment="Center"
-                                   Foreground="{StaticResource PimActivityBrush}" />
-                    </StackPanel>
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                        <ComboBox x:Name="VersionsBox" Width="220" Margin="0,0,6,0"
-                                  DisplayMemberPath="Label" ToolTip="选择要查看或恢复的固定版本" />
-                        <Button Content="恢复所选版本" Style="{StaticResource PimSecondaryButton}"
-                                Margin="0,0,8,0" Click="OnRestoreVersion" />
-                        <TextBlock x:Name="SaveStateText" Text="本机保存就绪" VerticalAlignment="Center"
-                                   Foreground="{StaticResource PimMutedTextBrush}" />
-                    </StackPanel>
-                </DockPanel>
                 </Grid>
-                <Border Grid.Column="2" Background="{StaticResource PimMutedSurfaceBrush}"
-                        BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
-                        CornerRadius="10" Padding="14">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="150" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="90" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <TextBlock Text="云端固定版本与结果" FontSize="18" FontWeight="SemiBold"
-                                   Foreground="{StaticResource PimTextBrush}" />
-                        <TextBlock x:Name="CloudStatusText" Grid.Row="1" Margin="0,5,0,10"
-                                   Text="登录后可上传固定版本并读取云端结果。"
-                                   TextWrapping="Wrap" FontSize="12"
-                                   Foreground="{StaticResource PimMutedTextBrush}" />
-                        <WrapPanel Grid.Row="2" Margin="0,0,0,8">
-                            <Button Content="上传当前版本" Style="{StaticResource PimPrimaryButton}"
-                                    Margin="0,0,6,6" Click="OnUploadCloudVersion" />
-                            <Button Content="刷新云端" Style="{StaticResource PimSecondaryButton}"
-                                    Margin="0,0,6,6" Click="OnRefreshCloud" />
-                            <Button Content="服务器目录" Style="{StaticResource PimSecondaryButton}"
-                                    Margin="0,0,6,6" Click="OnOpenCloudSources" />
-                        </WrapPanel>
-                        <DockPanel Grid.Row="3">
-                            <TextBlock DockPanel.Dock="Top" Text="服务器固定材料版本"
-                                       Foreground="{StaticResource PimMutedTextBrush}" FontSize="12"
-                                       Margin="0,0,0,4" />
-                            <ListBox x:Name="CloudVersionsList" BorderBrush="{StaticResource PimBorderBrush}"
-                                     DisplayMemberPath="Label" SelectionChanged="OnCloudVersionSelected" />
-                        </DockPanel>
-                        <Button x:Name="PromoteCloudVersionButton" Grid.Row="4" Content="设为云端当前版本"
-                                Style="{StaticResource PimSecondaryButton}" Margin="0,8,0,10"
-                                Click="OnPromoteCloudVersion" />
-                        <Border Grid.Row="5" Background="{StaticResource PimSurfaceBrush}"
-                                BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
-                                CornerRadius="8" Padding="10" Margin="0,0,0,10">
-                            <StackPanel>
-                                <DockPanel Margin="0,0,0,4">
-                                    <Button x:Name="RefreshProcessingStatusButton" DockPanel.Dock="Right"
-                                            Content="刷新状态" Style="{StaticResource PimSecondaryButton}"
-                                            Padding="9,3" Click="OnRefreshProcessingStatus" />
-                                    <TextBlock Text="服务端处理状态" FontWeight="SemiBold"
-                                               Foreground="{StaticResource PimTextBrush}" />
-                                </DockPanel>
-                                <TextBlock x:Name="ProcessingTargetText" FontSize="11"
-                                           TextWrapping="Wrap" Margin="0,0,0,3"
-                                           Foreground="{StaticResource PimMutedTextBrush}" />
-                                <TextBlock x:Name="ProcessingOverallText" FontSize="12"
-                                           TextWrapping="Wrap" Text="未选择笔记"
-                                           Foreground="{StaticResource PimTextBrush}" />
-                                <TextBlock x:Name="ProcessingAsrText" FontSize="12"
-                                           TextWrapping="Wrap" Margin="0,2,0,0"
-                                           Foreground="{StaticResource PimMutedTextBrush}" />
-                                <TextBlock x:Name="ProcessingDerivedText" FontSize="12"
-                                           TextWrapping="Wrap" Margin="0,2,0,0"
-                                           Foreground="{StaticResource PimMutedTextBrush}" />
-                                <TextBlock x:Name="ProcessingArtifactsText" FontSize="12"
-                                           TextWrapping="Wrap" Margin="0,2,0,0"
-                                           Foreground="{StaticResource PimMutedTextBrush}" />
-                                <TextBlock x:Name="ProcessingHintText" FontSize="11"
-                                           TextWrapping="Wrap" Margin="0,5,0,0"
-                                           Foreground="{StaticResource PimMutedTextBrush}" />
-                                <TextBlock x:Name="ProcessingIssuesText" FontSize="11"
-                                           TextWrapping="Wrap" Margin="0,4,0,0"
-                                           Visibility="Collapsed"
-                                           Foreground="{StaticResource PimActivityBrush}" />
-                                <TextBlock x:Name="ProcessingUpdatedText" FontSize="11"
-                                           TextWrapping="Wrap" Margin="0,4,0,0"
-                                           Foreground="{StaticResource PimMutedTextBrush}" />
+
+                <Border x:Name="EditorNoticePanel" Grid.Row="1" Margin="0,0,0,10"
+                        Padding="12,9" CornerRadius="8"
+                        Background="{StaticResource PimMutedSurfaceBrush}"
+                        BorderBrush="{StaticResource PimDangerBrush}"
+                        BorderThickness="1" Visibility="Collapsed">
+                    <StackPanel>
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button x:Name="RetryNoticeButton" Content="重试"
+                                        Style="{StaticResource PimSecondaryButton}"
+                                        Padding="10,5" Margin="0,0,6,0" Visibility="Collapsed"
+                                        Click="OnRetryNotice" />
+                                <Button x:Name="NoticeDismissButton" Content="关闭"
+                                        Style="{StaticResource PimSecondaryButton}"
+                                        Padding="10,5" Click="OnDismissNotice" />
                             </StackPanel>
-                        </Border>
-                        <DockPanel Grid.Row="6">
-                            <TextBlock DockPanel.Dock="Left" Text="云端记录与分析"
-                                       Foreground="{StaticResource PimTextBrush}" FontWeight="SemiBold" />
-                            <Button DockPanel.Dock="Right" Content="刷新结果"
-                                    Style="{StaticResource PimSecondaryButton}"
-                                    Padding="9,3" Click="OnRefreshCloudResults" />
+                            <TextBlock x:Name="EditorNoticeText" Text="" VerticalAlignment="Center"
+                                       TextWrapping="Wrap" Foreground="{StaticResource PimDangerBrush}" />
                         </DockPanel>
-                        <ListBox x:Name="CloudArtifactsList" Grid.Row="7" Margin="0,6,0,8"
-                                 BorderBrush="{StaticResource PimBorderBrush}"
-                                 DisplayMemberPath="Label" SelectionChanged="OnCloudArtifactSelected" />
-                        <WrapPanel Grid.Row="8" Margin="0,0,0,6">
-                            <Button Content="保存人工修订" Style="{StaticResource PimSecondaryButton}"
-                                    Margin="0,0,6,6" Click="OnSaveCloudRevision" />
-                            <Button Content="设为结果当前版本" Style="{StaticResource PimSecondaryButton}"
-                                    Margin="0,0,6,6" Click="OnSelectCloudResultVersion" />
-                            <Button Content="从此版本提取任务与日程建议" Style="{StaticResource PimPrimaryButton}"
-                                    Margin="0,0,6,6" Click="OnOpenTaskSuggestions" />
-                        </WrapPanel>
-                        <TextBox x:Name="CloudResultBox" Grid.Row="9" AcceptsReturn="True"
-                                 TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                                 FontFamily="Consolas" FontSize="13" Padding="10"
-                                 BorderBrush="{StaticResource PimBorderBrush}"
-                                 TextChanged="OnCloudResultEdited"
-                                 Text="云端结果会显示在这里。只读预览不会启动新的 ASR 或模型任务。" />
-                        <TextBlock x:Name="CloudResultStateText" Grid.Row="10" Margin="0,6,0,0"
-                                   Text="未选择结果版本" TextWrapping="Wrap" FontSize="12"
-                                   Foreground="{StaticResource PimMutedTextBrush}" />
-                    </Grid>
+                        <Expander x:Name="NoticeDetailsExpander" Header="错误详情"
+                                  Margin="0,6,0,0" Visibility="Collapsed">
+                            <TextBox x:Name="NoticeDetailsText" Text="" IsReadOnly="True"
+                                     TextWrapping="Wrap" AcceptsReturn="True"
+                                     MaxHeight="160" VerticalScrollBarVisibility="Auto"
+                                     FontFamily="Consolas, Microsoft YaHei UI"
+                                     FontSize="11" Padding="8"
+                                     BorderBrush="{StaticResource PimBorderBrush}" />
+                        </Expander>
+                    </StackPanel>
                 </Border>
+
+                <Grid x:Name="WorkspaceGrid" Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition x:Name="CloudColumn" Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Grid Grid.Column="0">
+                        <ScrollViewer x:Name="DocumentScroll" Visibility="Collapsed"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      Padding="0,0,10,0">
+                            <StackPanel Margin="26,8,18,44">
+                                <TextBox x:Name="TitleBox" FontFamily="Microsoft YaHei UI, Segoe UI"
+                                         FontSize="30" FontWeight="SemiBold" BorderThickness="0"
+                                         Background="Transparent" Padding="0,0,8,10"
+                                         TextChanged="OnEditorChanged" />
+
+                                <WrapPanel Margin="0,0,0,18">
+                                    <Button x:Name="RecordButton" Content="● 开始录音"
+                                            Style="{StaticResource PimPrimaryButton}"
+                                            Margin="0,0,6,6" Click="OnToggleRecording" />
+                                    <Button x:Name="AddPhotoButton" Content="添加照片"
+                                            Style="{StaticResource PimSecondaryButton}"
+                                            Margin="0,0,6,6" Click="OnAddPhoto" />
+                                    <Button x:Name="AddHandwritingButton" Content="手写"
+                                            Style="{StaticResource PimSecondaryButton}"
+                                            Margin="0,0,6,6" Click="OnAddHandwriting" />
+                                    <Button x:Name="AddRecordingButton" Content="添加音频"
+                                            Style="{StaticResource PimSecondaryButton}"
+                                            Margin="0,0,6,6" Click="OnAddRecording" />
+                                    <Button x:Name="ImportPackageButton" Content="导入笔记包"
+                                            Style="{StaticResource PimSecondaryButton}"
+                                            Margin="0,0,6,6" Click="OnImportPackage" />
+                                    <Button x:Name="ExportButton" Content="导出固定版本"
+                                            Style="{StaticResource PimSecondaryButton}"
+                                            Margin="0,0,6,6" Click="OnExport" />
+                                </WrapPanel>
+
+                                <Border BorderBrush="{StaticResource PimBorderBrush}"
+                                        BorderThickness="0,1,0,0" Padding="0,16,0,0" />
+                                <TextBlock Text="正文"
+                                           FontSize="12"
+                                           Foreground="{StaticResource PimMutedTextBrush}"
+                                           Margin="0,0,0,8" />
+                                <TextBlock Text="文字可直接编辑；照片、手写和录音按顺序夹在正文中。插入材料会使用当前文字段落的光标位置。"
+                                           FontSize="12"
+                                           Foreground="{StaticResource PimMutedTextBrush}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,10" />
+                                <StackPanel x:Name="DocumentFlowPanel" />
+
+                                <Expander Header="材料索引（独立文件与操作）"
+                                          IsExpanded="False"
+                                          Margin="0,24,0,0">
+                                    <Grid Margin="0,8,0,0">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="MaterialsText"
+                                                       Text="固定材料版本 · 尚无材料"
+                                                       Foreground="{StaticResource PimMutedTextBrush}"
+                                                       TextWrapping="Wrap" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                        Margin="8,0,0,0">
+                                                <Button Content="编辑所选笔迹"
+                                                        Style="{StaticResource PimSecondaryButton}"
+                                                        ToolTip="在正文内定位并编辑所选笔迹；不会打开独立窗口"
+                                                        Click="OnEditHandwriting" />
+                                                <Button x:Name="DeleteHandwritingButton"
+                                                        Content="删除所选手写"
+                                                        Style="{StaticResource PimSecondaryButton}"
+                                                        Margin="6,0,0,0" IsEnabled="False"
+                                                        ToolTip="选择手写预览（.png）后，删除它和唯一配对的笔迹源；不会删除照片、录音或历史版本"
+                                                        Click="OnDeleteHandwriting" />
+                                            </StackPanel>
+                                        </Grid>
+                                        <ListBox x:Name="MaterialsList" Grid.Row="1" Height="140"
+                                                 Margin="0,8,0,0"
+                                                 BorderBrush="{StaticResource PimBorderBrush}"
+                                                 DisplayMemberPath="DisplayName"
+                                                 ToolTip="双击照片预览或音频回放"
+                                                 MouseDoubleClick="OnMaterialDoubleClick" />
+                                    </Grid>
+                                </Expander>
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <StackPanel x:Name="EditorStatePanel" VerticalAlignment="Center"
+                                    HorizontalAlignment="Center" MaxWidth="420"
+                                    Visibility="Visible">
+                            <ProgressBar x:Name="EditorStateProgress" IsIndeterminate="True"
+                                         Width="220" Height="4" Margin="0,0,0,18"
+                                         Visibility="Visible" />
+                            <TextBlock x:Name="EditorStateTitleText" Text="正在准备笔记库…"
+                                       FontSize="22" FontWeight="SemiBold"
+                                       TextAlignment="Center" TextWrapping="Wrap"
+                                       Foreground="{StaticResource PimTextBrush}" />
+                            <TextBlock x:Name="EditorStateDetailText"
+                                       Text="正文、照片、手写和录音先保存在本机。"
+                                       Margin="0,8,0,0" FontSize="13" TextAlignment="Center"
+                                       TextWrapping="Wrap"
+                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                            <Button x:Name="EditorStateCreateButton" Content="＋ 新建笔记"
+                                    Style="{StaticResource PimPrimaryButton}" Margin="0,18,0,0"
+                                    HorizontalAlignment="Center" Visibility="Collapsed"
+                                    Click="OnNewNote" />
+                            <Button x:Name="EditorStateRetryButton" Content="重试"
+                                    Style="{StaticResource PimSecondaryButton}" Margin="0,18,0,0"
+                                    HorizontalAlignment="Center" Visibility="Collapsed"
+                                    Click="OnRetryEditorState" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border x:Name="CloudPanel" Grid.Column="1" Width="360" Margin="16,0,0,0"
+                            Background="{StaticResource PimMutedSurfaceBrush}"
+                            BorderBrush="{StaticResource PimBorderBrush}" BorderThickness="1"
+                            CornerRadius="10" Padding="14" Visibility="Collapsed">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                                <Button DockPanel.Dock="Right" Content="收起"
+                                        Style="{StaticResource PimSecondaryButton}"
+                                        Padding="9,4" Click="OnToggleCloudPanel" />
+                                <TextBlock Text="版本与云端" FontSize="18" FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource PimTextBrush}" />
+                            </DockPanel>
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel>
+                                    <TextBlock Text="本机固定版本" FontWeight="SemiBold"
+                                               Foreground="{StaticResource PimTextBrush}" />
+                                    <ComboBox x:Name="VersionsBox" Margin="0,7,0,7"
+                                              DisplayMemberPath="Label"
+                                              ToolTip="选择要查看或恢复的固定版本" />
+                                    <Button Content="恢复所选版本"
+                                            Style="{StaticResource PimSecondaryButton}"
+                                            HorizontalAlignment="Left"
+                                            Click="OnRestoreVersion" />
+
+                                    <Border BorderBrush="{StaticResource PimBorderBrush}"
+                                            BorderThickness="0,1,0,0" Margin="0,14,0,12" />
+
+                                    <TextBlock Text="云端固定版本与结果" FontSize="18"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource PimTextBrush}" />
+                                    <TextBlock x:Name="CloudStatusText" Margin="0,5,0,10"
+                                               Text="登录后可上传固定版本并读取云端结果。"
+                                               TextWrapping="Wrap" FontSize="12"
+                                               Foreground="{StaticResource PimMutedTextBrush}" />
+                                    <WrapPanel Margin="0,0,0,8">
+                                        <Button Content="上传当前版本"
+                                                Style="{StaticResource PimPrimaryButton}"
+                                                Margin="0,0,6,6" Click="OnUploadCloudVersion" />
+                                        <Button Content="刷新云端"
+                                                Style="{StaticResource PimSecondaryButton}"
+                                                Margin="0,0,6,6" Click="OnRefreshCloud" />
+                                        <Button Content="服务器目录"
+                                                Style="{StaticResource PimSecondaryButton}"
+                                                Margin="0,0,6,6" Click="OnOpenCloudSources" />
+                                    </WrapPanel>
+                                    <TextBlock Text="服务器固定材料版本"
+                                               Foreground="{StaticResource PimMutedTextBrush}"
+                                               FontSize="12" Margin="0,0,0,4" />
+                                    <ListBox x:Name="CloudVersionsList" Height="150"
+                                             BorderBrush="{StaticResource PimBorderBrush}"
+                                             DisplayMemberPath="Label"
+                                             SelectionChanged="OnCloudVersionSelected" />
+                                    <Button x:Name="PromoteCloudVersionButton"
+                                            Content="设为云端当前版本"
+                                            Style="{StaticResource PimSecondaryButton}"
+                                            Margin="0,8,0,10"
+                                            Click="OnPromoteCloudVersion" />
+                                    <Border Background="{StaticResource PimSurfaceBrush}"
+                                            BorderBrush="{StaticResource PimBorderBrush}"
+                                            BorderThickness="1" CornerRadius="8"
+                                            Padding="10" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <DockPanel Margin="0,0,0,4">
+                                                <Button x:Name="RefreshProcessingStatusButton"
+                                                        DockPanel.Dock="Right" Content="刷新状态"
+                                                        Style="{StaticResource PimSecondaryButton}"
+                                                        Padding="9,3"
+                                                        Click="OnRefreshProcessingStatus" />
+                                                <TextBlock Text="服务端处理状态" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource PimTextBrush}" />
+                                            </DockPanel>
+                                            <TextBlock x:Name="ProcessingTargetText" FontSize="11"
+                                                       TextWrapping="Wrap" Margin="0,0,0,3"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                            <TextBlock x:Name="ProcessingOverallText" FontSize="12"
+                                                       TextWrapping="Wrap" Text="未选择笔记"
+                                                       Foreground="{StaticResource PimTextBrush}" />
+                                            <TextBlock x:Name="ProcessingAsrText" FontSize="12"
+                                                       TextWrapping="Wrap" Margin="0,2,0,0"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                            <TextBlock x:Name="ProcessingDerivedText" FontSize="12"
+                                                       TextWrapping="Wrap" Margin="0,2,0,0"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                            <TextBlock x:Name="ProcessingArtifactsText" FontSize="12"
+                                                       TextWrapping="Wrap" Margin="0,2,0,0"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                            <TextBlock x:Name="ProcessingHintText" FontSize="11"
+                                                       TextWrapping="Wrap" Margin="0,5,0,0"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                            <TextBlock x:Name="ProcessingIssuesText" FontSize="11"
+                                                       TextWrapping="Wrap" Margin="0,4,0,0"
+                                                       Visibility="Collapsed"
+                                                       Foreground="{StaticResource PimActivityBrush}" />
+                                            <TextBlock x:Name="ProcessingUpdatedText" FontSize="11"
+                                                       TextWrapping="Wrap" Margin="0,4,0,0"
+                                                       Foreground="{StaticResource PimMutedTextBrush}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <DockPanel Margin="0,4,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="云端记录与分析"
+                                                   Foreground="{StaticResource PimTextBrush}"
+                                                   FontWeight="SemiBold" />
+                                        <Button DockPanel.Dock="Right" Content="刷新结果"
+                                                Style="{StaticResource PimSecondaryButton}"
+                                                Padding="9,3"
+                                                Click="OnRefreshCloudResults" />
+                                    </DockPanel>
+                                    <ListBox x:Name="CloudArtifactsList" Height="130"
+                                             Margin="0,6,0,8"
+                                             BorderBrush="{StaticResource PimBorderBrush}"
+                                             DisplayMemberPath="Label"
+                                             SelectionChanged="OnCloudArtifactSelected" />
+                                    <WrapPanel Margin="0,0,0,6">
+                                        <Button Content="保存人工修订"
+                                                Style="{StaticResource PimSecondaryButton}"
+                                                Margin="0,0,6,6"
+                                                Click="OnSaveCloudRevision" />
+                                        <Button Content="设为结果当前版本"
+                                                Style="{StaticResource PimSecondaryButton}"
+                                                Margin="0,0,6,6"
+                                                Click="OnSelectCloudResultVersion" />
+                                        <Button Content="从此版本提取任务与日程建议"
+                                                Style="{StaticResource PimPrimaryButton}"
+                                                Margin="0,0,6,6"
+                                                Click="OnOpenTaskSuggestions" />
+                                    </WrapPanel>
+                                    <TextBox x:Name="CloudResultBox" Height="180"
+                                             AcceptsReturn="True" TextWrapping="Wrap"
+                                             VerticalScrollBarVisibility="Auto"
+                                             FontFamily="Microsoft YaHei UI, Segoe UI"
+                                             FontSize="13" Padding="10"
+                                             BorderBrush="{StaticResource PimBorderBrush}"
+                                             TextChanged="OnCloudResultEdited"
+                                             Text="云端结果会显示在这里。只读预览不会启动新的 ASR 或模型任务。" />
+                                    <TextBlock x:Name="CloudResultStateText"
+                                               Margin="0,6,0,0" Text="未选择结果版本"
+                                               TextWrapping="Wrap" FontSize="12"
+                                               Foreground="{StaticResource PimMutedTextBrush}" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </DockPanel>
+                    </Border>
+                </Grid>
             </Grid>
         </Border>
     </Grid>

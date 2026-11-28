@@ -174,8 +174,14 @@ public sealed class LocalNoteStore
                 throw new LocalNoteStoreException("该服务器混合材料版本在当前编辑器中只读；修改纯文本会丢失原始块顺序和身份。");
             }
 
+            var normalizedMaterials = OrderMaterialsForNote(
+                note,
+                normalizedMarkdown,
+                note.Materials);
             if (string.Equals(note.Title, normalizedTitle, StringComparison.Ordinal)
-                && string.Equals(note.Markdown, normalizedMarkdown, StringComparison.Ordinal))
+                && string.Equals(note.Markdown, normalizedMarkdown, StringComparison.Ordinal)
+                && note.Materials.Select(material => material.MaterialId)
+                    .SequenceEqual(normalizedMaterials.Select(material => material.MaterialId)))
             {
                 return note;
             }
@@ -184,8 +190,45 @@ public sealed class LocalNoteStore
                 note,
                 normalizedTitle,
                 normalizedMarkdown,
-                note.Materials,
+                normalizedMaterials,
                 LocalNoteCheckpointReason.ManualSave,
+                cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<LocalNoteDocument> FinalizeAsync(
+        Guid noteId,
+        string title,
+        string markdown,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var note = await LoadNoteLockedAsync(noteId, cancellationToken);
+            var normalizedTitle = NormalizeTitle(title);
+            var normalizedMarkdown = markdown ?? string.Empty;
+            if (note.IsServerSourceReadOnly
+                && (!string.Equals(note.Title, normalizedTitle, StringComparison.Ordinal)
+                    || !string.Equals(note.Markdown, normalizedMarkdown, StringComparison.Ordinal)))
+            {
+                throw new LocalNoteStoreException("该服务器混合材料版本在当前编辑器中只读；修改纯文本会丢失原始块顺序和身份。");
+            }
+
+            var normalizedMaterials = OrderMaterialsForNote(
+                note,
+                normalizedMarkdown,
+                note.Materials);
+            return await CreateCheckpointLockedAsync(
+                note,
+                normalizedTitle,
+                normalizedMarkdown,
+                normalizedMaterials,
+                LocalNoteCheckpointReason.Finished,
                 cancellationToken);
         }
         finally
@@ -199,6 +242,32 @@ public sealed class LocalNoteStore
         IReadOnlyList<LocalNoteMaterialInput> inputs,
         CancellationToken cancellationToken = default,
         Guid? expectedCurrentVersionId = null)
+        => await AddMaterialsWithCheckpointAsync(
+            noteId,
+            inputs,
+            LocalNoteCheckpointReason.MaterialAdded,
+            cancellationToken,
+            expectedCurrentVersionId);
+
+    public async Task<LocalNoteDocument> AddMaterialsAsync(
+        Guid noteId,
+        IReadOnlyList<LocalNoteMaterialInput> inputs,
+        LocalNoteCheckpointReason checkpointReason,
+        CancellationToken cancellationToken = default,
+        Guid? expectedCurrentVersionId = null)
+        => await AddMaterialsWithCheckpointAsync(
+            noteId,
+            inputs,
+            checkpointReason,
+            cancellationToken,
+            expectedCurrentVersionId);
+
+    private async Task<LocalNoteDocument> AddMaterialsWithCheckpointAsync(
+        Guid noteId,
+        IReadOnlyList<LocalNoteMaterialInput> inputs,
+        LocalNoteCheckpointReason checkpointReason,
+        CancellationToken cancellationToken,
+        Guid? expectedCurrentVersionId)
     {
         if (inputs.Count == 0)
         {
@@ -227,9 +296,10 @@ public sealed class LocalNoteStore
                 materials.Add(await AddMaterialLockedAsync(input, cancellationToken));
             }
 
-            var reason = inputs.Any(input => input.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
-                ? LocalNoteCheckpointReason.RecordingAdded
-                : LocalNoteCheckpointReason.MaterialAdded;
+            var reason = checkpointReason == LocalNoteCheckpointReason.MaterialAdded
+                && inputs.Any(input => input.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
+                    ? LocalNoteCheckpointReason.RecordingAdded
+                    : checkpointReason;
             return await CreateCheckpointLockedAsync(
                 note,
                 note.Title,
@@ -376,13 +446,16 @@ public sealed class LocalNoteStore
             {
                 // Restoring a read-only server-backed note copies the saved
                 // source rather than creating a new editable projection.
+                var orderedMaterials = NativeNoteDocumentLayout.OrderServerSourceMaterials(
+                    source.ServerSource,
+                    restoredMaterials);
                 var restored = note with
                 {
                     UpdatedAt = DateTimeOffset.UtcNow,
                     CurrentVersionId = source.VersionId,
                     Title = source.Title,
                     Markdown = source.Markdown,
-                    Materials = restoredMaterials.ToList(),
+                    Materials = orderedMaterials.ToList(),
                     ServerSource = source.ServerSource,
                 };
                 await WriteNoteLockedAsync(restored, cancellationToken);
@@ -903,6 +976,11 @@ public sealed class LocalNoteStore
             var noteId = Guid.NewGuid();
             importingNoteId = noteId;
             var versionId = Guid.NewGuid();
+            var orderedMaterials = version.ServerSource is { } importSource
+                ? NativeNoteDocumentLayout.OrderServerSourceMaterials(
+                    importSource,
+                    importedMaterials)
+                : importedMaterials;
             var note = new LocalNoteDocument
             {
                 NoteId = noteId,
@@ -911,7 +989,7 @@ public sealed class LocalNoteStore
                 CurrentVersionId = versionId,
                 Title = NormalizeTitle(version.Title),
                 Markdown = version.Markdown ?? string.Empty,
-                Materials = importedMaterials,
+                Materials = orderedMaterials.ToList(),
                 ServerSource = version.ServerSource,
             };
             if (note.ServerSource is { } serverSource)
@@ -925,7 +1003,7 @@ public sealed class LocalNoteStore
                 parentVersionId: null,
                 now,
                 LocalNoteCheckpointReason.ImportedPackage,
-                importedMaterials);
+                orderedMaterials);
             await WriteVersionLockedAsync(noteId, importedVersion, cancellationToken);
             await WriteNoteLockedAsync(note, cancellationToken);
             importCommitted = true;
@@ -1121,12 +1199,22 @@ public sealed class LocalNoteStore
                 }
                 else if (input.Kind is LocalNoteMaterialKind.Recording or LocalNoteMaterialKind.RecordingSegment)
                 {
-                    var samples = await ServerNoteMaterialBundleBuilder.ValidatePcm16WaveAsync(
-                        targetPath,
-                        cancellationToken);
-                    if (input.ExpectedSamples is { } expectedSamples && samples != expectedSamples)
+                    if (string.Equals(input.MediaType, "audio/wav", StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new LocalNoteStoreException("服务器录音 WAV 样本数与 manifest 不一致。");
+                        var samples = await ServerNoteMaterialBundleBuilder.ValidatePcm16WaveAsync(
+                            targetPath,
+                            cancellationToken);
+                        if (input.ExpectedSamples is { } expectedSamples && samples != expectedSamples)
+                        {
+                            throw new LocalNoteStoreException("服务器录音 WAV 样本数与 manifest 不一致。");
+                        }
+                    }
+                    else if (!string.Equals(
+                            input.MediaType,
+                            "audio/ogg",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new LocalNoteStoreException("服务器录音分片格式不受支持。");
                     }
                 }
 
@@ -1158,6 +1246,9 @@ public sealed class LocalNoteStore
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            var orderedMaterials = NativeNoteDocumentLayout.OrderServerSourceMaterials(
+                package.ServerSource,
+                materials);
             var now = DateTimeOffset.UtcNow;
             var noteId = Guid.NewGuid();
             importingNoteId = noteId;
@@ -1170,7 +1261,7 @@ public sealed class LocalNoteStore
                 CurrentVersionId = versionId,
                 Title = title,
                 Markdown = markdown,
-                Materials = materials,
+                Materials = orderedMaterials.ToList(),
                 ServerSource = package.ServerSource,
             };
             ServerNoteSourceIntegrity.Validate(package.ServerSource, note.Title, note.Markdown, materials);
@@ -1181,7 +1272,7 @@ public sealed class LocalNoteStore
                 parentVersionId: null,
                 now,
                 LocalNoteCheckpointReason.ImportedPackage,
-                materials);
+                orderedMaterials);
             await WriteVersionLockedAsync(noteId, version, cancellationToken);
             await WriteNoteLockedAsync(note, cancellationToken);
             importCommitted = true;
@@ -1386,6 +1477,9 @@ public sealed class LocalNoteStore
                 Width = input.Width,
                 Height = input.Height,
                 DurationMilliseconds = input.DurationMilliseconds,
+                RecordingId = input.RecordingId,
+                RecordingSegment = input.RecordingSegment,
+                RecordingChunkIndex = input.RecordingChunkIndex,
             };
         }
         finally
@@ -1428,13 +1522,27 @@ public sealed class LocalNoteStore
 
         await LoadVersionLockedAsync(noteId, note.CurrentVersionId, cancellationToken);
 
+        var materials = note.Materials ?? [];
+        var orderedMaterials = OrderMaterialsForNote(
+            note,
+            note.Markdown ?? string.Empty,
+            materials)
+            .ToList();
         return note with
         {
             Title = note.Title ?? string.Empty,
             Markdown = note.Markdown ?? string.Empty,
-            Materials = note.Materials ?? [],
+            Materials = orderedMaterials,
         };
     }
+
+    private static IReadOnlyList<LocalNoteMaterial> OrderMaterialsForNote(
+        LocalNoteDocument note,
+        string markdown,
+        IReadOnlyList<LocalNoteMaterial> materials)
+        => note.ServerSource is { } serverSource
+            ? NativeNoteDocumentLayout.OrderServerSourceMaterials(serverSource, materials)
+            : NativeNoteDocumentLayout.OrderMaterials(markdown, materials);
 
     private async Task<List<LocalNoteCloudBinding>> ReadCloudBindingsLockedAsync(
         CancellationToken cancellationToken)
@@ -2059,7 +2167,9 @@ public sealed class LocalNoteStore
         {
             "image/png" => ".png",
             "image/jpeg" => ".jpg",
+            "image/webp" => ".webp",
             "audio/wav" or "audio/x-wav" => ".wav",
+            "audio/ogg" => ".opus",
             "application/vnd.pim.ink+json" => ".ink.json",
             _ => ".bin",
         };
@@ -2069,7 +2179,9 @@ public sealed class LocalNoteStore
     {
         ".png" => "image/png",
         ".jpg" or ".jpeg" => "image/jpeg",
+        ".webp" => "image/webp",
         ".wav" => "audio/wav",
+        ".opus" => "audio/ogg",
         ".json" or ".ink.json" => "application/json",
         _ => "application/octet-stream",
     };

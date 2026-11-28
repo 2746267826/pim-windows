@@ -93,7 +93,7 @@
                             <StackPanel>
                                 <TextBlock Text="新建日程" FontSize="18" FontWeight="SemiBold"
                                            Foreground="{StaticResource PimTextBrush}" />
-                                <TextBlock Text="写入所选日历；不会调用 Outlook 或其它外部写回。"
+                                <TextBlock Text="写入所选日历；Outlook 绑定的日历会通过受控写回同步到 Outlook。"
                                            Margin="0,4,0,14" TextWrapping="Wrap" FontSize="12"
                                            Foreground="{StaticResource PimMutedTextBrush}" />
 

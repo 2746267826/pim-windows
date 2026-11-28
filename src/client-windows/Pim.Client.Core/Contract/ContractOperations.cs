@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 本文件由工具生成，请勿手工修改 / GENERATED FILE — DO NOT EDIT BY HAND.
 //
-//   契约快照      : contract/openapi.json (sha256 5f5bffc67f26d70a15507d093d526c62c27270f4627a5feaba97b79be6eb73e7)
+//   契约快照      : contract/openapi.json (sha256 6fed0a41ff1c1451553fa62be850d5f79336f039d51db0690b0f73b498d5cdf6)
 //   operation 清单: scripts/contract/client-operations.json
 //   生成器        : scripts/contract/generate-csharp.py
 //   重新生成      : bash scripts/ci/generate-contract-csharp.sh
@@ -34,7 +34,7 @@ public sealed class ContractOperation
         System.Collections.Generic.IReadOnlyList<ContractQueryParameter> queryParameters,
         System.Collections.Generic.IReadOnlyList<ContractHeader> requestHeaders,
         string? requestMediaType,
-        string responseMediaType,
+        System.Collections.Generic.IReadOnlyList<string> responseMediaTypes,
         System.Collections.Generic.IReadOnlyList<ContractHeader> responseHeaders)
     {
         HttpMethod = httpMethod;
@@ -45,7 +45,7 @@ public sealed class ContractOperation
         QueryParameters = queryParameters;
         RequestHeaders = requestHeaders;
         RequestMediaType = requestMediaType;
-        ResponseMediaType = responseMediaType;
+        ResponseMediaTypes = responseMediaTypes;
         ResponseHeaders = responseHeaders;
     }
 
@@ -73,8 +73,8 @@ public sealed class ContractOperation
     /// <summary>契约声明的请求体媒体类型；无请求体时为 null。</summary>
     public string? RequestMediaType { get; }
 
-    /// <summary>2xx 响应的媒体类型；非 JSON（如 audio/wav）由客户端按流处理。</summary>
-    public string ResponseMediaType { get; }
+    /// <summary>契约声明的 200 响应媒体类型；非 JSON（如 audio/wav）由客户端按流处理。</summary>
+    public System.Collections.Generic.IReadOnlyList<string> ResponseMediaTypes { get; }
 
     /// <summary>契约声明的响应 header（用于下载流的身份/完整性绑定）。</summary>
     public System.Collections.Generic.IReadOnlyList<ContractHeader> ResponseHeaders { get; }
@@ -336,7 +336,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation Register =
         new("POST", "/api/v1/auth/register", "auth/register",
@@ -344,7 +344,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation RefreshToken =
         new("POST", "/api/v1/auth/refresh", "auth/refresh",
@@ -352,7 +352,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation ReportDaemonHeartbeat =
         new("POST", "/api/v1/daemon/heartbeat", "daemon/heartbeat",
@@ -360,7 +360,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation ReportPlannedOffline =
         new("POST", "/api/v1/daemon/planned-offline", "daemon/planned-offline",
@@ -368,7 +368,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetEndpointStatuses =
         new("GET", "/api/v1/endpoints", "endpoints",
@@ -376,7 +376,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetEndpointCollectionQuality =
         new("GET", "/api/v1/endpoints/{deviceId}/collection-quality", "endpoints/{deviceId}/collection-quality",
@@ -384,7 +384,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetCalendars =
         new("GET", "/api/v1/calendar/calendars", "calendar/calendars",
@@ -392,7 +392,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("kind", "plain-string", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetCalendarEvents =
         new("GET", "/api/v1/calendar/events", "calendar/events",
@@ -400,15 +400,15 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("start", "date-time", true), new("end", "date-time", true), new("search", "plain-string", false), new("calendarId", "uuid", false), new("page", "int32", false), new("pageSize", "int32", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation CreateCalendarEvent =
         new("POST", "/api/v1/calendar/events", "calendar/events",
             new ContractHeader[] {  },
-            new ContractQueryParameter[] {  },
+            new ContractQueryParameter[] { new("clientOperationId", "uuid", false) },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetTaskBooks =
         new("GET", "/api/v1/calendar/task-books", "calendar/task-books",
@@ -416,7 +416,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetTasks =
         new("GET", "/api/v1/calendar/tasks", "calendar/tasks",
@@ -424,7 +424,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("inbox", "boolean", false), new("search", "plain-string", false), new("calendarId", "uuid", false), new("status", "enum-array", false, new string[] { "NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED" }), new("priority", "int32", false), new("plannedFrom", "date-time", false), new("plannedTo", "date-time", false), new("dueFrom", "date-time", false), new("dueTo", "date-time", false), new("page", "int32", false), new("pageSize", "int32", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation CreateTask =
         new("POST", "/api/v1/calendar/tasks", "calendar/tasks",
@@ -432,7 +432,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation UpdateTask =
         new("PUT", "/api/v1/calendar/tasks/{id}", "calendar/tasks/{id}",
@@ -440,7 +440,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation ReportEndpointHeartbeat =
         new("POST", "/api/v1/endpoints/{deviceId}/heartbeat", "endpoints/{deviceId}/heartbeat",
@@ -448,7 +448,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation SendEndpointNotificationAction =
         new("POST", "/api/v1/endpoints/{deviceId}/notification-actions", "endpoints/{deviceId}/notification-actions",
@@ -456,7 +456,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation UploadTrackerEvents =
         new("POST", "/api/v1/pc/tracker/upload", "pc/tracker/upload",
@@ -464,7 +464,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetPcDetail =
         new("GET", "/api/v1/pc/detail", "pc/detail",
@@ -472,7 +472,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("dateFrom", "plain-string", false), new("dateTo", "plain-string", false), new("dimension", "plain-string", false), new("deviceId", "plain-string", false), new("appName", "plain-string", false), new("categoryName", "plain-string", false), new("keyName", "plain-string", false), new("eventType", "plain-string", false), new("sortBy", "plain-string", false), new("sortDir", "plain-string", false), new("domain", "plain-string", false), new("title", "plain-string", false), new("url", "plain-string", false), new("view", "plain-string", false), new("page", "int32", false), new("pageSize", "int32", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation UploadSiteEvents =
         new("POST", "/api/v1/pc/browser-tt/upload", "pc/browser-tt/upload",
@@ -480,7 +480,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation ReportTrackerHealth =
         new("POST", "/api/v1/pc/tracker/health", "pc/tracker/health",
@@ -488,7 +488,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation UploadKeystatsSample =
         new("POST", "/api/v1/pc/keystats/samples", "pc/keystats/samples",
@@ -496,7 +496,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation UploadKeystatsSnapshot =
         new("POST", "/api/v1/pc/keystats/upload", "pc/keystats/upload",
@@ -504,7 +504,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetClientShellLatest =
         new("GET", "/api/client/shell/latest", "../client/shell/latest",
@@ -512,7 +512,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetPcCategoryTree =
         new("GET", "/api/v1/pc/categories/tree", "pc/categories/tree",
@@ -520,7 +520,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation SavePcCategory =
         new("POST", "/api/v1/pc/categories", "pc/categories",
@@ -528,7 +528,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation DeletePcCategory =
         new("DELETE", "/api/v1/pc/categories/{id}", "pc/categories/{id}",
@@ -536,7 +536,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation SearchAppKnowledgeApps =
         new("GET", "/api/v1/pc/app-knowledge/apps", "pc/app-knowledge/apps",
@@ -544,7 +544,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("search", "plain-string", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetAppKnowledgeContexts =
         new("GET", "/api/v1/pc/app-knowledge/apps/{appId}/contexts", "pc/app-knowledge/apps/{appId}/contexts",
@@ -552,7 +552,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation SaveAppKnowledgeContext =
         new("POST", "/api/v1/pc/app-knowledge/contexts", "pc/app-knowledge/contexts",
@@ -560,7 +560,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation DeleteAppKnowledgeContext =
         new("DELETE", "/api/v1/pc/app-knowledge/contexts/{id}", "pc/app-knowledge/contexts/{id}",
@@ -568,7 +568,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation RegisterNativeAsrNode =
         new("POST", "/api/v1/native-notes/asr-routing/nodes/register", "native-notes/asr-routing/nodes/register",
@@ -576,7 +576,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation HeartbeatNativeAsrNode =
         new("POST", "/api/v1/native-notes/asr-routing/nodes/{nodeId}/heartbeat", "native-notes/asr-routing/nodes/{nodeId}/heartbeat",
@@ -584,7 +584,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation WithdrawNativeAsrNode =
         new("POST", "/api/v1/native-notes/asr-routing/nodes/{nodeId}/withdraw", "native-notes/asr-routing/nodes/{nodeId}/withdraw",
@@ -592,7 +592,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation ClaimNativeAsrLease =
         new("POST", "/api/v1/native-notes/asr-routing/leases/claim", "native-notes/asr-routing/leases/claim",
@@ -600,7 +600,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation RenewNativeAsrLease =
         new("POST", "/api/v1/native-notes/asr-routing/leases/{leaseId}/renew", "native-notes/asr-routing/leases/{leaseId}/renew",
@@ -608,7 +608,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNativeAsrSegmentContent =
         new("GET", "/api/v1/native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content", "native-notes/asr-routing/leases/{leaseId}/segments/{segmentIndex}/content",
@@ -616,7 +616,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] { new("X-Pim-Lease-Token", "uuid"), new("X-Pim-Fencing-Token", "int64") },
             null,
-            "audio/wav",
+            new string[] { "audio/wav" },
             new ContractHeader[] { new("X-Content-SHA256", "plain-string"), new("X-Pim-Attempt-Id", "plain-string"), new("X-Pim-Fencing-Token", "int64"), new("X-Pim-Lease-Id", "plain-string"), new("X-Pim-Node-Id", "plain-string"), new("X-Pim-Owner-Id", "plain-string"), new("X-Pim-Samples", "int64"), new("X-Pim-Segment-Index", "int32"), new("X-Pim-Source-File-Index", "int32"), new("X-Pim-Source-Offset-Samples", "int64"), new("X-Pim-Source-SHA256", "plain-string"), new("X-Pim-Version-Id", "plain-string") });
     public static readonly ContractOperation AckNativeAsrAttempt =
         new("POST", "/api/v1/native-notes/asr-routing/leases/{attemptId}/ack", "native-notes/asr-routing/leases/{attemptId}/ack",
@@ -624,7 +624,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation BeginNoteMaterialUpload =
         new("POST", "/api/v1/native-notes/versions", "native-notes/versions",
@@ -632,7 +632,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteMaterialVersions =
         new("GET", "/api/v1/native-notes/{noteId}/versions", "native-notes/{noteId}/versions",
@@ -640,7 +640,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteMaterialVersion =
         new("GET", "/api/v1/native-notes/versions/{versionId}", "native-notes/versions/{versionId}",
@@ -648,7 +648,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation CompleteNoteMaterialUpload =
         new("POST", "/api/v1/native-notes/versions/{versionId}/complete", "native-notes/versions/{versionId}/complete",
@@ -656,7 +656,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation UploadNoteMaterialPart =
         new("PUT", "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}", "native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}",
@@ -664,7 +664,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("sha256", "plain-string", true) },
             new ContractHeader[] {  },
             "application/octet-stream",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation DownloadNoteMaterialFile =
         new("GET", "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}", "native-notes/versions/{versionId}/files/{fileIndex}",
@@ -672,7 +672,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/octet-stream",
+            new string[] { "application/json", "application/octet-stream", "audio/ogg", "audio/wav", "image/jpeg", "image/png", "image/webp", "text/markdown; charset=utf-8" },
             new ContractHeader[] { new("Cache-Control", "plain-string"), new("Content-Disposition", "plain-string"), new("X-Content-SHA256", "sha256"), new("X-Content-Type-Options", "plain-string") });
     public static readonly ContractOperation DeleteNoteMaterialPart =
         new("DELETE", "/api/v1/native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}", "native-notes/versions/{versionId}/files/{fileIndex}/parts/{partIndex}",
@@ -680,7 +680,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation PromoteNoteMaterialVersion =
         new("POST", "/api/v1/native-notes/versions/{versionId}/promote", "native-notes/versions/{versionId}/promote",
@@ -688,7 +688,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteAsrSources =
         new("GET", "/api/v1/native-notes/asr-tasks/sources", "native-notes/asr-tasks/sources",
@@ -696,7 +696,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("offset", "int32", false), new("limit", "int32", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation StartNoteAsrTask =
         new("POST", "/api/v1/native-notes/asr-tasks", "native-notes/asr-tasks",
@@ -704,7 +704,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteAsrTasks =
         new("GET", "/api/v1/native-notes/asr-tasks", "native-notes/asr-tasks",
@@ -712,7 +712,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteAsrTask =
         new("GET", "/api/v1/native-notes/asr-tasks/{taskId}", "native-notes/asr-tasks/{taskId}",
@@ -720,7 +720,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteAsrTaskSegments =
         new("GET", "/api/v1/native-notes/asr-tasks/{taskId}/segments", "native-notes/asr-tasks/{taskId}/segments",
@@ -728,7 +728,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("offset", "int32", false), new("limit", "int32", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteDerivedSources =
         new("GET", "/api/v1/native-notes/derived-tasks/sources", "native-notes/derived-tasks/sources",
@@ -736,7 +736,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("offset", "int32", false), new("limit", "int32", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteDerivedTasks =
         new("GET", "/api/v1/native-notes/derived-tasks", "native-notes/derived-tasks",
@@ -744,7 +744,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("noteId", "uuid", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation StartNoteDerivedTask =
         new("POST", "/api/v1/native-notes/derived-tasks", "native-notes/derived-tasks",
@@ -752,7 +752,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteDerivedTask =
         new("GET", "/api/v1/native-notes/derived-tasks/{taskId}", "native-notes/derived-tasks/{taskId}",
@@ -760,7 +760,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteDerivedTaskSteps =
         new("GET", "/api/v1/native-notes/derived-tasks/{taskId}/steps", "native-notes/derived-tasks/{taskId}/steps",
@@ -768,7 +768,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("offset", "int32", false), new("limit", "int32", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation RetryNoteDerivedTask =
         new("POST", "/api/v1/native-notes/derived-tasks/{taskId}/retry", "native-notes/derived-tasks/{taskId}/retry",
@@ -776,7 +776,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation StopNoteDerivedTask =
         new("POST", "/api/v1/native-notes/derived-tasks/{taskId}/stop", "native-notes/derived-tasks/{taskId}/stop",
@@ -784,7 +784,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteDerivedArtifacts =
         new("GET", "/api/v1/native-notes/derived-artifacts", "native-notes/derived-artifacts",
@@ -792,7 +792,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("noteId", "uuid", true) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteDerivedArtifact =
         new("GET", "/api/v1/native-notes/derived-artifacts/{artifactId}", "native-notes/derived-artifacts/{artifactId}",
@@ -800,7 +800,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteDerivedArtifactVersion =
         new("GET", "/api/v1/native-notes/derived-artifacts/{artifactId}/versions/{versionId}", "native-notes/derived-artifacts/{artifactId}/versions/{versionId}",
@@ -808,7 +808,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation SaveNoteDerivedManualRevision =
         new("POST", "/api/v1/native-notes/derived-artifacts/{artifactId}/manual-revisions", "native-notes/derived-artifacts/{artifactId}/manual-revisions",
@@ -816,7 +816,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation SelectNoteDerivedArtifactVersion =
         new("POST", "/api/v1/native-notes/derived-artifacts/{artifactId}/select", "native-notes/derived-artifacts/{artifactId}/select",
@@ -824,15 +824,15 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteDerivedDestinations =
         new("GET", "/api/v1/native-notes/derived-tasks/destinations", "native-notes/derived-tasks/destinations",
             new ContractHeader[] {  },
-            new ContractQueryParameter[] {  },
+            new ContractQueryParameter[] { new("purpose", "plain-string", false) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation StartNoteTaskSuggestionExtraction =
         new("POST", "/api/v1/native-notes/task-suggestions/extractions", "native-notes/task-suggestions/extractions",
@@ -840,7 +840,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteTaskSuggestionExtraction =
         new("GET", "/api/v1/native-notes/task-suggestions/extractions/{id}", "native-notes/task-suggestions/extractions/{id}",
@@ -848,7 +848,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteTaskSuggestions =
         new("GET", "/api/v1/native-notes/task-suggestions", "native-notes/task-suggestions",
@@ -856,7 +856,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("noteId", "uuid", false), new("status", "enum", false, new string[] { "Draft", "Confirmed", "Dismissed" }) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteTaskSuggestion =
         new("GET", "/api/v1/native-notes/task-suggestions/{id}", "native-notes/task-suggestions/{id}",
@@ -864,7 +864,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation UpdateNoteTaskSuggestion =
         new("PUT", "/api/v1/native-notes/task-suggestions/{id}", "native-notes/task-suggestions/{id}",
@@ -872,7 +872,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation ConfirmNoteTaskSuggestion =
         new("POST", "/api/v1/native-notes/task-suggestions/{id}/confirm", "native-notes/task-suggestions/{id}/confirm",
@@ -880,7 +880,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation DismissNoteTaskSuggestion =
         new("POST", "/api/v1/native-notes/task-suggestions/{id}/dismiss", "native-notes/task-suggestions/{id}/dismiss",
@@ -888,7 +888,7 @@ public sealed class ContractOperation
             new ContractQueryParameter[] {  },
             new ContractHeader[] {  },
             "application/json",
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
     public static readonly ContractOperation GetNoteProcessingStatus =
         new("GET", "/api/v1/native-notes/processing", "native-notes/processing",
@@ -896,6 +896,6 @@ public sealed class ContractOperation
             new ContractQueryParameter[] { new("noteId", "uuid", true), new("versionId", "uuid", true) },
             new ContractHeader[] {  },
             null,
-            "application/json",
+            new string[] { "application/json" },
             new ContractHeader[] {  });
 }

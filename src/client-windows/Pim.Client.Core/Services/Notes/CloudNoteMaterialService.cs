@@ -955,8 +955,8 @@ public sealed class CloudNoteMaterialService
                 .ConfigureAwait(false);
             var inkBytes = Encoding.UTF8.GetBytes(localInk);
             var inkSha = Convert.ToHexString(SHA256.HashData(inkBytes)).ToLowerInvariant();
-            var sourceMaterialId = Guid.NewGuid();
-            var previewMaterialId = Guid.NewGuid();
+            var sourceMaterialId = ServerNoteMaterialStableId.Create("server-ink-source", block.Id);
+            var previewMaterialId = ServerNoteMaterialStableId.Create("server-ink-preview", block.Id);
             materials.Add(new LocalNoteServerMaterialInput(
                 sourceMaterialId,
                 LocalNoteMaterialKind.HandwritingSource,
@@ -1067,19 +1067,30 @@ public sealed class CloudNoteMaterialService
                 }
 
                 var materialFile = matches[0];
-                var materialId = Guid.NewGuid();
+                var materialId = ServerNoteMaterialStableId.ForRecordingChunk(
+                    recordingId,
+                    segment,
+                    chunkIndex,
+                    samples);
                 if (!ids.Add(materialId))
                 {
                     throw new InvalidDataException("服务器录音分片材料标识重复。");
                 }
 
+                var extension = Path.GetExtension(materialFile.Path).ToLowerInvariant();
+                var mediaType = extension switch
+                {
+                    ".wav" => "audio/wav",
+                    ".opus" => "audio/ogg",
+                    _ => throw new InvalidDataException("服务器录音分片格式不受支持。"),
+                };
                 chunkNumber++;
                 materials.Add(new LocalNoteServerMaterialInput(
                     materialId,
                     LocalNoteMaterialKind.RecordingSegment,
-                    $"录音-{materials.Count + 1:D3}-s{segment:D4}-c{chunkIndex:D6}.wav",
+                    $"录音-{materials.Count + 1:D3}-s{segment:D4}-c{chunkIndex:D6}{extension}",
                     materialFile.Sha256,
-                    "audio/wav",
+                    mediaType,
                     materialFile.SizeBytes,
                     stagedFiles[materialFile.Path],
                     ExpectedSamples: samples,

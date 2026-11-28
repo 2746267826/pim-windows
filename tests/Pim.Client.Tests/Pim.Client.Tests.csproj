@@ -47,6 +47,7 @@
     <Compile Include="../ClientWindows/ControlledProcessRunnerCoreTests.cs" />
     <Compile Include="../ClientWindows/CpuLoadSamplerTests.cs" />
     <Compile Include="../ClientWindows/CalendarTaskServiceTests.cs" />
+    <Compile Include="../ClientWindows/CalendarEventDraftKeyTests.cs" />
     <Compile Include="../ClientWindows/DeviceCenterServiceTests.cs" />
     <Compile Include="../ClientWindows/RemoteComputerHistoryServiceTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeCatalogTests.cs" />
@@ -55,6 +56,11 @@
     <Compile Include="../ClientWindows/LocalAsrApiTransportTests.cs" />
     <Compile Include="../ClientWindows/LocalRuntimeResourceBackoffTests.cs" />
     <Compile Include="../ClientWindows/LocalNoteStoreTests.cs" />
+    <Compile Include="../ClientWindows/NativeNoteFlowDocumentTests.cs" />
+    <Compile Include="../ClientWindows/NativeNoteFailureTests.cs" />
+    <Compile Include="../ClientWindows/NativeNoteReviewGapTests.cs" />
+    <Compile Include="../ClientWindows/NativeNotePresentationTests.cs" />
+    <Compile Include="../ClientWindows/NativeNoteInteractionStateTests.cs" />
     <Compile Include="../ClientWindows/LocalInkEditorTests.cs" />
     <Compile Include="../ClientWindows/LocalInkDocumentCodecTests.cs" />
     <Compile Include="../ClientWindows/LocalInkPreferenceStoreTests.cs" />
